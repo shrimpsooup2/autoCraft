@@ -1,4 +1,16 @@
 {
   "key.category.autocraft.main": "autoCraft",
-  "key.autocraft.open_panel": "Open autoCraft panel"
+  "key.autocraft.open_panel": "Open autoCraft panel",
+  "key.autocraft.placement.move_forward": "Placement: move away from you",
+  "key.autocraft.placement.move_back": "Placement: move toward you",
+  "key.autocraft.placement.move_left": "Placement: move left",
+  "key.autocraft.placement.move_right": "Placement: move right",
+  "key.autocraft.placement.move_up": "Placement: move up",
+  "key.autocraft.placement.move_down": "Placement: move down",
+  "key.autocraft.placement.nudge_modifier": "Placement: hold + mouse wheel to nudge",
+  "key.autocraft.placement.rotate": "Placement: rotate (sneak: other way)",
+  "key.autocraft.placement.mirror": "Placement: mirror",
+  "key.autocraft.placement.move_to_crosshair": "Placement: move to crosshair",
+  "key.autocraft.placement.confirm": "Placement: build it",
+  "key.autocraft.placement.cancel": "Placement: cancel"
 }

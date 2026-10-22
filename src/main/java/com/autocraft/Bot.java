@@ -20,6 +20,7 @@ import com.autocraft.behavior.MendingBehavior;
 import com.autocraft.behavior.PortalBehavior;
 import com.autocraft.behavior.StorageBehavior;
 import com.autocraft.build.BuildOrder;
+import com.autocraft.build.BuildPlan;
 import com.autocraft.control.Controls;
 import com.autocraft.craft.RecipeBook;
 import com.autocraft.goal.Job;
@@ -42,6 +43,7 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.Mirror;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -77,6 +79,7 @@ public final class Bot {
 	private final Set<Item> buildMaterials = new HashSet<>();
 	/** Ingredients (a few recipe levels deep) of the job's crafted items: kept, not junked or used as scaffolding. */
 	private final Set<Item> jobMaterials = new HashSet<>();
+	private @Nullable BuildPlan buildPlan;
 	private int buildPlaced;
 	private int buildTotal;
 
@@ -198,25 +201,29 @@ public final class Bot {
 		if (!running || job == null) begin(null, null);
 		build = order;
 		Chat.info("Building " + order.schematic().name() + " at " + order.origin().toShortString()
-				+ (order.rotation().ordinal() == 0 ? "" : " rotated " + order.rotation().ordinal() * 90 + "°") + ".");
+				+ (order.rotation().ordinal() == 0 ? "" : " rotated " + order.rotation().ordinal() * 90 + "°")
+				+ (order.mirror() == Mirror.NONE ? "" : ", mirrored") + ".");
 	}
 
 	/** The current build order is finished or abandoned. */
 	public void finishBuild() {
-		build = null;
-		buildMaterials.clear();
-		buildPlaced = buildTotal = 0;
+		clearBuild();
 		needs.remove(NeedOwner.BUILD);
 		nav.stop();
+	}
+
+	private void clearBuild() {
+		build = null;
+		buildPlan = null;
+		buildMaterials.clear();
+		buildPlaced = buildTotal = 0;
 	}
 
 	private void begin(@Nullable Job newJob, @Nullable Goal newGoto) {
 		job = newJob;
 		gotoGoal = newGoto;
-		build = null;
-		buildMaterials.clear();
+		clearBuild();
 		jobMaterials.clear();
-		buildPlaced = buildTotal = 0;
 		needs.clear();
 		fruitlessLegs.clear();
 		resetBehaviors();
@@ -230,8 +237,7 @@ public final class Bot {
 		running = false;
 		paused = false;
 		gotoGoal = null;
-		build = null;
-		buildMaterials.clear();
+		clearBuild();
 		jobMaterials.clear();
 		needs.clear();
 		resetBehaviors();
@@ -252,7 +258,7 @@ public final class Bot {
 		running = false;
 		paused = false;
 		job = null;
-		build = null;
+		clearBuild();
 		gotoGoal = null;
 		needs.clear();
 		resetBehaviors();
@@ -397,6 +403,10 @@ public final class Bot {
 
 	public boolean logoffWhenDone() { return logoffWhenDone; }
 	public void setLogoffWhenDone(boolean v) { logoffWhenDone = v; }
+
+	/** The plan being built (rotated, wood-swapped world positions), for the ghost overlay; null when not building. */
+	public @Nullable BuildPlan buildPlan() { return buildPlan; }
+	public void setBuildPlan(@Nullable BuildPlan plan) { buildPlan = plan; }
 
 	/** Blocks placed / total of the current build (0/0 when not building). */
 	public int buildPlaced() { return buildPlaced; }

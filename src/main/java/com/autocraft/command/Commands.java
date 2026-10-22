@@ -12,10 +12,12 @@ import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
 import com.autocraft.schematic.Schematic;
 import com.autocraft.schematic.SchematicLibrary;
+import com.autocraft.ui.Placements;
 import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.block.Mirror;
 import net.minecraft.world.level.block.Rotation;
 import org.jspecify.annotations.Nullable;
 
@@ -71,6 +73,7 @@ public final class Commands {
 			case "resources" -> Chat.info("Named: " + Resources.describe() + ". Any natural block's item id works, and any craftable or smeltable item"
 					+ " (torch, glass, piston, iron_ingot...).");
 			case "build" -> build(bot, args);
+			case "place" -> place(args);
 			case "schematics" -> schematics();
 			case "farm" -> farm(bot, args);
 			case "built", "farms" -> built();
@@ -106,7 +109,15 @@ public final class Commands {
 		Rotation rotation = rotation(args.length > (here ? 3 : 5) ? args[here ? 3 : 5] : "0");
 		Chat.info(String.format("%s is %dx%dx%d (x/y/z), %d blocks; origin = its corner at %s.", s.name(), s.size().getX(), s.size().getY(),
 				s.size().getZ(), s.nonAirCount(), origin.toShortString()));
-		bot.startBuild(new BuildOrder(s, origin, rotation, BuildOrder.Purpose.USER));
+		bot.startBuild(new BuildOrder(s, origin, rotation, Mirror.NONE, BuildOrder.Purpose.USER));
+	}
+
+	/** {@code !ac place <name>}: show it as a ghost at the crosshair and position it with the placement keys. */
+	private static void place(String[] args) {
+		if (args.length < 2) throw new IllegalArgumentException("usage: !ac place <schematic>");
+		Schematic s = SchematicLibrary.get(args[1]);
+		if (s == null) throw new IllegalArgumentException("no schematic '" + args[1] + "' (see !ac schematics)");
+		Placements.start(s);
 	}
 
 	/** {@code !ac farm <resource> [x y z | here] [rotation]}: build a farm for a resource (site picked if no position). */
@@ -190,7 +201,8 @@ public final class Commands {
 	}
 
 	private static void help() {
-		Chat.info("Press K for the control panel. Commands: !ac collect <item> <amount> ... (mined or crafted) | build <schematic> <x y z|here> [rot]"
-				+ " | farm <resource> [x y z|here] | schematics | built | stop | pause | resume | status | base | logoff on|off | goto x y z | resources");
+		Chat.info("Press K for the control panel. Commands: !ac collect <item> <amount> ... (mined or crafted) | place <schematic> (ghost preview,"
+				+ " then position it) | build <schematic> <x y z|here> [rot] | farm <resource> [x y z|here] | schematics | built | stop | pause"
+				+ " | resume | status | base | logoff on|off | goto x y z | resources");
 	}
 }

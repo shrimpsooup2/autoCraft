@@ -14,17 +14,36 @@ there, builds farms or your own schematics, stores loot and logs off when the go
   amount in the box (right-click adds a stack), scroll over a job line to change it, × / right-click removes;
   Enter adds the typed name (also groups like `log`). *Start job* (or *Replace job*).
 - **Build**: schematic list (built-ins + `config/autocraft/schematics/`, *Open folder*, *Reload*), size and
-  material preview, X/Y/Z (*Here* = your feet), rotation, *Build* or *Find a spot*.
+  material preview; *Place in world* (ghost at the crosshair) or *Find a spot* (bot-picked ground, then
+  adjust). While placing, the tab becomes placement settings: X/Y/Z with −/+ (shift: 8), rotation, mirror,
+  *Move to me*, *To crosshair*, *Cancel*, *In world*, *Build*.
 - **Bot**: live state, job progress bars, build progress, current prerequisite, health/food/position;
   *Pause/Resume*, *Stop*, *Set base here*, log-off and status-overlay toggles, list of built structures.
 - A small status overlay (top left) shows activity and progress bars while the bot runs.
 - The bot keeps working while the panel is open (it isn't a pause screen).
 
+## Placing schematics (Litematica-style)
+The schematic shows in the world as translucent blocks plus a cyan bounding box while you position it; once
+confirmed the box turns green and the ghost keeps showing what's left to build. Blocks already correct are
+hidden, blocks in the way get red outlines, water/lava and chest-like blocks get colored outlines.
+
+| Key (rebindable) | While placing |
+|---|---|
+| ↑ ↓ ← → | move away from / toward you, left / right (sneak: 8 blocks) |
+| Page Up / Page Down | move up / down |
+| Left Alt + mouse wheel | nudge toward / away from where you look |
+| R (sneak: other way) | rotate 90° |
+| M | mirror: none → left-right → front-back |
+| G | move it to the block you look at (footprint centered) |
+| Enter | build it |
+| Backspace | cancel |
+
 ## Commands (typed in chat, never sent to the server)
 | Command | Effect |
 |---|---|
 | `!ac collect <item> <amount> [<item> <amount> ...]` | start a job (`diamond 10 iron 32 torch 64 piston 8`); crafted items are planned through the recipe book |
-| `!ac build <schematic> <x> <y> <z> [0\|90\|180\|270]` | build a schematic with its corner at x y z (`~` = relative), optionally rotated |
+| `!ac place <schematic>` | show it as a ghost at the crosshair and position it with the keys above |
+| `!ac build <schematic> <x> <y> <z> [0\|90\|180\|270]` | build right away with its corner at x y z (`~` = relative), optionally rotated |
 | `!ac build <schematic> here [rotation]` | same, corner at your feet |
 | `!ac farm <resource> [<x> <y> <z> \| here] [rotation]` | build a farm for a resource (site chosen automatically without a position) |
 | `!ac schematics` | list built-in and user schematics, show the schematic folder |
@@ -77,9 +96,10 @@ flowchart TD
 | `ai` | `ThreatNet` MLP + online training, persisted to `config/autocraft/threatnet.json` |
 | `craft` | `RecipeBook` (all vanilla crafting/smelting recipes from the game data), cost-based `Planner`, `Gatherable`, `Workshop` (crafter + smelter + station pickup) |
 | `schematic` | `.litematic` / `.schem` / `.nbt` loading, built-in designs, `SchematicLibrary` (built-ins + user folder) |
-| `build` | `BuildPlan` (rotation, wood swap, ordering, bill of materials), `PlacementSolver` (orientation), `Builder`, `SiteFinder`, `FluidFill`, `BaseWithdraw`, `StructureRegistry` (built + protected areas) |
+| `build` | `BuildPlan` (mirror, rotation, wood swap, ordering, bill of materials), `Placement` (a schematic being positioned), `PlacementSolver` (orientation), `Builder`, `SiteFinder`, `FluidFill`, `BaseWithdraw`, `StructureRegistry` (built + protected areas) |
 | `travel` | boats over water/ice, elytra flights, nether portals (find, build, light, enter, return) |
-| `ui` | `AutoCraftScreen` control panel, `HudOverlay` status overlay, `ItemCatalog` (what jobs can ask for) |
+| `ui` | `AutoCraftScreen` control panel, `HudOverlay` status overlay, `ItemCatalog` (what jobs can ask for), `Placements` (placement keys), `GhostRenderer` (in-world schematic preview) |
+| `mixin` | keep the bot's block breaking alive; Alt + wheel nudges a placement instead of switching hotbar slots |
 
 ### Neural net (ThreatNet)
 Inputs: own health, armor, best weapon damage, shield, food, hostile count, nearest distance, summed
@@ -90,7 +110,7 @@ else → 0; ~10 consistent outcomes flip a decision) and saved.
 
 ### Schematics
 - Put `.litematic` (Litematica), `.schem` (Sponge/WorldEdit) or `.nbt` (structure block) files in
-  `config/autocraft/schematics/`, then `!ac build <file name> <x> <y> <z> [rotation]`.
+  `config/autocraft/schematics/`, then place them from the panel (K → Build) or with `!ac place <file name>`.
 - The builder clears the space, then places full blocks bottom-up, then partial/attached blocks, water,
   lava and finally plants. Orientation (stairs, logs, hoppers, observers, doors...) is solved by asking
   the block's own placement logic which view angle and clicked face give the wanted state.
@@ -119,7 +139,8 @@ else → 0; ~10 consistent outcomes flip a decision) and saved.
 | 9 | **Biomes & mending** — biome-directed exploration; mending gear repaired in the offhand | code complete |
 | 10 | **Schematics & farms** — user schematics, built-in starter base and farms, farm operation and auto-build | code complete |
 | 11 | **Crafted jobs & UI** — any craftable/smeltable item as a job target (unobtainable ones skipped); control panel (K) and status overlay | code complete |
-| 12 | **Hardening** — in-game testing, stuck recovery, tuning thresholds from logs | next |
+| 12 | **Litematica-style placement** — ghost preview in the world, keyboard/mouse positioning, rotate + mirror, build progress overlay | code complete |
+| 13 | **Hardening** — in-game testing, stuck recovery, tuning thresholds from logs | next |
 
 "Code complete" = compiles against the real 26.3 client jar; not yet run in-game (see Build).
 

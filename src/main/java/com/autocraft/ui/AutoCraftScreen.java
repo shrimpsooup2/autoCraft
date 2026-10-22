@@ -2,14 +2,13 @@ package com.autocraft.ui;
 
 import com.autocraft.Bot;
 import com.autocraft.Chat;
-import com.autocraft.build.BuildOrder;
 import com.autocraft.build.BuildPlan;
+import com.autocraft.build.Placement;
 import com.autocraft.build.SiteFinder;
 import com.autocraft.build.StructureRegistry;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
 import com.autocraft.goal.Resources;
-import com.autocraft.path.Navigator;
 import com.autocraft.schematic.Schematic;
 import com.autocraft.schematic.SchematicLibrary;
 import com.mojang.blaze3d.Blaze3D;
@@ -29,13 +28,14 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.Item;
-import net.minecraft.world.level.block.Rotation;
+import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import org.jspecify.annotations.Nullable;
 
 /**
  * The bot's control panel (default key K). Collect: search any minable or craftable item, add it with an amount,
- * start the job. Build: pick a schematic (built-in or from the folder), set position and rotation, build it or let
- * the bot find a spot. Bot: live status, pause/stop, base, log-off and HUD toggles.
+ * start the job. Build: pick a schematic (built-in or from the folder) and place it in the world as a ghost,
+ * Litematica-style — exact coordinates, nudges, rotation, mirror — then build it. Bot: live status, pause/stop,
+ * base, log-off and HUD toggles.
  */
 public final class AutoCraftScreen extends Screen {
 	private enum Tab {
@@ -60,7 +60,6 @@ public final class AutoCraftScreen extends Screen {
 	private static String searchText = "";
 	private static String amountText = "64";
 	private static @Nullable String selectedSchematic;
-	private static int rotation;
 
 	private int left;
 	private int top;
@@ -94,7 +93,7 @@ public final class AutoCraftScreen extends Screen {
 	private @Nullable EditBox posX;
 	private @Nullable EditBox posY;
 	private @Nullable EditBox posZ;
-	private @Nullable Button buildButton;
+	private @Nullable Button placeButton;
 	private @Nullable Button siteButton;
 
 	// bot tab
@@ -399,48 +398,115 @@ public final class AutoCraftScreen extends Screen {
 				.bounds(left + 8, bottomY, 76, 18).build());
 		addRenderableWidget(Button.builder(Component.literal("Reload"), b -> rebuildWidgets()).bounds(left + 88, bottomY, 50, 18).build());
 
-		int fy = bottomY - 46;
-		int boxW = (colW - 42 - 3 * 10) / 3;
-		BlockPos start = minecraft.player == null ? BlockPos.ZERO : Navigator.feet(minecraft.player);
-		posX = coordBox(rightX + 10, fy, boxW, start.getX());
-		posY = coordBox(rightX + 20 + boxW, fy, boxW, start.getY());
-		posZ = coordBox(rightX + 30 + 2 * boxW, fy, boxW, start.getZ());
-		addRenderableWidget(Button.builder(Component.literal("Here"), b -> {
-			if (minecraft.player == null) return;
-			BlockPos feet = Navigator.feet(minecraft.player);
-			posX.setValue(Integer.toString(feet.getX()));
-			posY.setValue(Integer.toString(feet.getY()));
-			posZ.setValue(Integer.toString(feet.getZ()));
-		}).tooltip(Tooltip.create(Component.literal("The schematic's corner goes at your feet"))).bounds(rightX + colW - 38, fy, 38, 16).build());
-		addRenderableWidget(Button.builder(rotationLabel(), b -> {
-			rotation = (rotation + 1) % 4;
-			b.setMessage(rotationLabel());
-		}).bounds(rightX, fy + 20, colW, 18).build());
-		siteButton = addRenderableWidget(Button.builder(Component.literal("Find a spot"), b -> buildAtFoundSite())
-				.tooltip(Tooltip.create(Component.literal("Let the bot pick flat, clear ground nearby (unrotated)")))
-				.bounds(rightX, bottomY, colW / 2 - 2, 18).build());
-		buildButton = addRenderableWidget(Button.builder(Component.literal("Build"), b -> buildAtPosition())
-				.bounds(rightX + colW / 2 + 2, bottomY, colW / 2 - 2, 18).build());
-		if (selectedSchematic != null && !schematics.contains(selectedSchematic)) selectedSchematic = null;
+		Placement placing = Placements.active();
+		if (placing != null) selectedSchematic = placing.schematic().name();
+		if (selectedSchematic != null && !schematics.contains(selectedSchematic) && placing == null) selectedSchematic = null;
 		if (selectedSchematic == null && !schematics.isEmpty()) selectedSchematic = schematics.getFirst();
 		if (selectedSchematic != null) select(selectedSchematic);
+		if (placing != null) initPlacementControls(placing);
+		else initPreviewButtons();
+	}
+
+	private void initPreviewButtons() {
+		int half = colW / 2 - 2;
+		siteButton = addRenderableWidget(Button.builder(Component.literal("Find a spot"), b -> findSpot())
+				.tooltip(Tooltip.create(Component.literal("Let the bot pick flat, clear ground nearby; then adjust it or build")))
+				.bounds(rightX, bottomY, half, 18).build());
+		placeButton = addRenderableWidget(Button.builder(Component.literal("Place in world"), b -> place())
+				.tooltip(Tooltip.create(Component.literal("Show it as a ghost where you look and position it (like Litematica)")))
+				.bounds(rightX + half + 4, bottomY, half, 18).build());
 		updateBuildButtons();
 	}
 
-	private EditBox coordBox(int x, int y, int w, int value) {
-		EditBox box = addRenderableWidget(new EditBox(font, x, y, w, 16, Component.literal("coordinate")));
+	/** Placement settings: exact coordinates with ± nudges, rotation, mirror, quick moves; the ghost updates live. */
+	private void initPlacementControls(Placement p) {
+		int rowY = contentY + 24;
+		posX = coordRow(p, rowY, 0);
+		posY = coordRow(p, rowY + 20, 1);
+		posZ = coordRow(p, rowY + 40, 2);
+		int half = colW / 2 - 2;
+		addRenderableWidget(Button.builder(rotationLabel(p), b -> {
+			p.rotate(!minecraft.hasShiftDown());
+			b.setMessage(rotationLabel(p));
+		}).tooltip(Tooltip.create(Component.literal("Clockwise; shift-click for counter-clockwise"))).bounds(rightX, rowY + 62, half, 18).build());
+		addRenderableWidget(Button.builder(mirrorLabel(p), b -> {
+			p.cycleMirror();
+			b.setMessage(mirrorLabel(p));
+		}).bounds(rightX + half + 4, rowY + 62, half, 18).build());
+		addRenderableWidget(Button.builder(Component.literal("Move to me"), b -> {
+			Placements.moveToPlayer();
+			syncCoordinates(p);
+		}).tooltip(Tooltip.create(Component.literal("Its 0,0,0 corner goes where you stand"))).bounds(rightX, rowY + 84, half, 18).build());
+		addRenderableWidget(Button.builder(Component.literal("To crosshair"), b -> {
+			Placements.moveToCrosshair();
+			syncCoordinates(p);
+		}).tooltip(Tooltip.create(Component.literal("Centered on the block you're looking at"))).bounds(rightX + half + 4, rowY + 84, half, 18).build());
+		int third = (colW - 8) / 3;
+		addRenderableWidget(Button.builder(Component.literal("Cancel"), b -> {
+			Placements.cancel();
+			rebuildWidgets();
+		}).bounds(rightX, bottomY, third, 18).build());
+		addRenderableWidget(Button.builder(Component.literal("In world"), b -> onClose())
+				.tooltip(Tooltip.create(Component.literal("Close the panel and move it with the keys: arrows, Page Up/Down, Alt+wheel, R, M, G;"
+						+ " Enter builds")))
+				.bounds(rightX + third + 4, bottomY, third, 18).build());
+		addRenderableWidget(Button.builder(Component.literal("Build"), b -> {
+			Placements.confirm();
+			onClose();
+		}).bounds(rightX + 2 * (third + 4), bottomY, third, 18).build());
+	}
+
+	private EditBox coordRow(Placement p, int y, int axis) {
+		addRenderableWidget(Button.builder(Component.literal("-"), b -> nudge(p, axis, -step())).bounds(rightX + 10, y, 18, 16).build());
+		EditBox box = addRenderableWidget(new EditBox(font, rightX + 30, y, colW - 52, 16, Component.literal("coordinate")));
 		box.setMaxLength(9);
-		box.setValue(Integer.toString(value));
+		box.setValue(Integer.toString(coordinate(p.origin(), axis)));
+		box.setResponder(s -> {
+			try {
+				int v = Integer.parseInt(s.trim());
+				BlockPos o = p.origin();
+				p.setOrigin(new BlockPos(axis == 0 ? v : o.getX(), axis == 1 ? v : o.getY(), axis == 2 ? v : o.getZ()));
+			} catch (NumberFormatException ignored) {
+				// half-typed number: keep the last valid position
+			}
+		});
+		addRenderableWidget(Button.builder(Component.literal("+"), b -> nudge(p, axis, step())).bounds(rightX + colW - 18, y, 18, 16).build());
 		return box;
 	}
 
-	private static Component rotationLabel() {
-		return Component.literal("Rotation: " + rotation * 90 + "°");
+	private int step() {
+		return minecraft.hasShiftDown() ? 8 : 1;
+	}
+
+	private void nudge(Placement p, int axis, int d) {
+		p.move(axis == 0 ? d : 0, axis == 1 ? d : 0, axis == 2 ? d : 0);
+		syncCoordinates(p);
+	}
+
+	private void syncCoordinates(Placement p) {
+		EditBox[] boxes = {posX, posY, posZ};
+		for (int axis = 0; axis < 3; axis++) {
+			String value = Integer.toString(coordinate(p.origin(), axis));
+			if (boxes[axis] != null && !boxes[axis].getValue().trim().equals(value)) boxes[axis].setValue(value);
+		}
+	}
+
+	private static int coordinate(BlockPos pos, int axis) {
+		return axis == 0 ? pos.getX() : axis == 1 ? pos.getY() : pos.getZ();
+	}
+
+	private static Component rotationLabel(Placement p) {
+		return Component.literal("Rotation: " + Placement.describe(p.rotation()));
+	}
+
+	private static Component mirrorLabel(Placement p) {
+		return Component.literal("Mirror: " + Placement.describe(p.mirror()));
 	}
 
 	private void select(String name) {
 		selectedSchematic = name;
-		preview = SchematicLibrary.get(name);
+		Placement placing = Placements.active();
+		preview = placing != null && placing.schematic().name().equals(name) ? placing.schematic() : SchematicLibrary.get(name);
 		Map<Item, Integer> bill = new HashMap<>();
 		if (preview != null) {
 			for (Schematic.Cell c : preview.cells()) {
@@ -453,103 +519,98 @@ public final class AutoCraftScreen extends Screen {
 		previewBill = sorted;
 	}
 
-	private @Nullable BlockPos typedPosition() {
-		try {
-			return new BlockPos(Integer.parseInt(posX.getValue().trim()), Integer.parseInt(posY.getValue().trim()),
-					Integer.parseInt(posZ.getValue().trim()));
-		} catch (NumberFormatException | NullPointerException e) {
-			return null;
-		}
-	}
-
-	private void buildAtPosition() {
-		BlockPos pos = typedPosition();
-		if (preview == null || pos == null) return;
-		Bot.get().startBuild(new BuildOrder(preview, pos, Rotation.values()[rotation], purposeOf(preview)));
+	private void place() {
+		if (preview == null || minecraft.player == null) return;
+		Placements.start(preview);
 		onClose();
 	}
 
-	private void buildAtFoundSite() {
+	private void findSpot() {
 		if (preview == null || minecraft.player == null) return;
 		BlockPos site = SiteFinder.find(Bot.get(), preview);
 		if (site == null) {
-			Chat.warn("No flat, clear spot for " + preview.name() + " nearby; give a position instead.");
+			Chat.warn("No flat, clear spot for " + preview.name() + " nearby; place it yourself instead.");
 			return;
 		}
-		Bot.get().startBuild(new BuildOrder(preview, site, Rotation.NONE, purposeOf(preview)));
+		Placements.start(preview).setOrigin(site);
 		onClose();
 	}
 
-	private static BuildOrder.Purpose purposeOf(Schematic s) {
-		return s.farm() != null ? BuildOrder.Purpose.FARM : BuildOrder.Purpose.USER;
-	}
-
 	private void updateBuildButtons() {
-		if (buildButton == null || siteButton == null) return;
-		boolean ok = preview != null && minecraft.player != null;
-		buildButton.active = ok && typedPosition() != null;
+		if (placeButton == null || siteButton == null) return;
+		boolean ok = preview != null && minecraft.player != null && Placements.active() == null;
+		placeButton.active = ok;
 		siteButton.active = ok;
 	}
 
 	private int schematicAt(double mx, double my) {
-		if (!inside(mx, my, left + 8, listY, colW, listRows * LINE)) return -1;
+		if (Placements.active() != null || !inside(mx, my, left + 8, listY, colW, listRows * LINE)) return -1; // locked while placing
 		int i = listScroll + (int) (my - listY) / LINE;
 		return i < schematics.size() ? i : -1;
 	}
 
 	private void extractBuild(GuiGraphicsExtractor g, int mouseX, int mouseY) {
 		int x = left + 8;
+		Placement placing = Placements.active();
 		g.text(font, "Schematics (" + schematics.size() + ")", x, contentY + 2, Widgets.WHITE);
 		for (int k = 0; k < listRows && listScroll + k < schematics.size(); k++) {
 			String name = schematics.get(listScroll + k);
 			int y = listY + k * LINE;
 			boolean sel = name.equals(selectedSchematic);
 			if (sel) g.fill(x, y, x + colW, y + LINE, 0x50FFFFFF);
-			else if (inside(mouseX, mouseY, x, y, colW, LINE)) g.fill(x, y, x + colW, y + LINE, 0x25FFFFFF);
-			g.text(font, font.plainSubstrByWidth(name, colW - 4), x + 2, y + 2, sel ? Widgets.WHITE : 0xFFD0D0D0);
+			else if (placing == null && inside(mouseX, mouseY, x, y, colW, LINE)) g.fill(x, y, x + colW, y + LINE, 0x25FFFFFF);
+			g.text(font, font.plainSubstrByWidth(name, colW - 4), x + 2, y + 2, sel ? Widgets.WHITE : placing == null ? 0xFFD0D0D0 : Widgets.GRAY);
 		}
 		if (schematics.size() > listRows) g.text(font, "scroll for more", x + colW - font.width("scroll for more"), contentY + 2, Widgets.GRAY);
 
 		int y = contentY + 2;
+		if (placing != null) {
+			Schematic s = placing.schematic();
+			BoundingBox box = placing.box();
+			g.text(font, font.plainSubstrByWidth("Placing " + s.name(), colW), rightX, y, 0xFF7FE0FF);
+			g.text(font, box.getXSpan() + "×" + box.getYSpan() + "×" + box.getZSpan() + " · " + s.nonAirCount() + " blocks", rightX, y + LINE,
+					Widgets.GRAY);
+			int rowY = contentY + 24;
+			g.text(font, "X", rightX + 1, rowY + 4, Widgets.GRAY);
+			g.text(font, "Y", rightX + 1, rowY + 24, Widgets.GRAY);
+			g.text(font, "Z", rightX + 1, rowY + 44, Widgets.GRAY);
+			g.text(font, font.plainSubstrByWidth("Shift: steps of 8. The ghost in the world updates live.", colW), rightX, rowY + 108, Widgets.GRAY);
+			return;
+		}
 		if (preview == null) {
 			g.textWithWordWrap(font, Component.literal(selectedSchematic == null ? "Add schematic files to the folder, then Reload."
 					: "Couldn't read " + selectedSchematic + " (see the log)."), rightX, y, colW, Widgets.GRAY);
-		} else {
-			Schematic s = preview;
-			g.text(font, font.plainSubstrByWidth(s.name() + (s.builtIn() ? " (built-in)" : ""), colW), rightX, y, Widgets.WHITE);
-			y += LINE;
-			g.text(font, s.size().getX() + "×" + s.size().getY() + "×" + s.size().getZ() + " (x·y·z), " + s.nonAirCount() + " blocks", rightX, y,
-					Widgets.GRAY);
-			y += LINE;
-			if (s.farm() != null) {
-				g.text(font, "Farm for " + s.farm().provides(), rightX, y, 0xFF9CE29C);
-				y += LINE;
-			}
-			if (s.baseSpot() != null) {
-				g.text(font, "Becomes your storage base", rightX, y, 0xFF9CE29C);
-				y += LINE;
-			}
-			y += 2;
-			int perRow = 2;
-			int cellW = colW / perRow;
-			int maxRows = Math.max(0, (bottomY - 50 - y) / 12);
-			for (int i = 0; i < previewBill.size() && i < maxRows * perRow; i++) {
-				Map.Entry<Item, Integer> e = previewBill.get(i);
-				int cx = rightX + (i % perRow) * cellW;
-				int cy = y + (i / perRow) * 12;
-				Widgets.smallItem(g, e.getKey(), cx, cy);
-				String label = e.getValue() + " " + e.getKey().getDefaultInstance().getHoverName().getString();
-				g.text(font, font.plainSubstrByWidth(label, cellW - 14), cx + 12, cy + 1, 0xFFD0D0D0);
-			}
-			if (previewBill.size() > maxRows * perRow && maxRows > 0) {
-				g.text(font, "+" + (previewBill.size() - maxRows * perRow) + " more kinds", rightX, y + maxRows * 12, Widgets.GRAY);
-			}
+			return;
 		}
-		int fy = bottomY - 46;
-		g.text(font, "X", rightX + 2, fy + 4, Widgets.GRAY);
-		int boxW = (colW - 42 - 3 * 10) / 3;
-		g.text(font, "Y", rightX + 12 + boxW, fy + 4, Widgets.GRAY);
-		g.text(font, "Z", rightX + 22 + 2 * boxW, fy + 4, Widgets.GRAY);
+		Schematic s = preview;
+		g.text(font, font.plainSubstrByWidth(s.name() + (s.builtIn() ? " (built-in)" : ""), colW), rightX, y, Widgets.WHITE);
+		y += LINE;
+		g.text(font, s.size().getX() + "×" + s.size().getY() + "×" + s.size().getZ() + " (x·y·z), " + s.nonAirCount() + " blocks", rightX, y,
+				Widgets.GRAY);
+		y += LINE;
+		if (s.farm() != null) {
+			g.text(font, "Farm for " + s.farm().provides(), rightX, y, 0xFF9CE29C);
+			y += LINE;
+		}
+		if (s.baseSpot() != null) {
+			g.text(font, "Becomes your storage base", rightX, y, 0xFF9CE29C);
+			y += LINE;
+		}
+		y += 2;
+		int perRow = 2;
+		int cellW = colW / perRow;
+		int maxRows = Math.max(0, (bottomY - 16 - y) / 12);
+		for (int i = 0; i < previewBill.size() && i < maxRows * perRow; i++) {
+			Map.Entry<Item, Integer> e = previewBill.get(i);
+			int cx = rightX + (i % perRow) * cellW;
+			int cy = y + (i / perRow) * 12;
+			Widgets.smallItem(g, e.getKey(), cx, cy);
+			String label = e.getValue() + " " + e.getKey().getDefaultInstance().getHoverName().getString();
+			g.text(font, font.plainSubstrByWidth(label, cellW - 14), cx + 12, cy + 1, 0xFFD0D0D0);
+		}
+		if (previewBill.size() > maxRows * perRow && maxRows > 0) {
+			g.text(font, "+" + (previewBill.size() - maxRows * perRow) + " more kinds", rightX, y + maxRows * 12, Widgets.GRAY);
+		}
 	}
 
 	// ---- bot ------------------------------------------------------------------------------------

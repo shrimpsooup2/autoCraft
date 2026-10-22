@@ -3,7 +3,8 @@
 	"package": "com.autocraft.mixin",
 	"compatibilityLevel": "JAVA_25",
 	"client": [
-		"MinecraftMixin"
+		"MinecraftMixin",
+		"MouseHandlerMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

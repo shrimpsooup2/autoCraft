@@ -35,6 +35,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.CactusBlock;
 import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.CropBlock;
+import net.minecraft.world.level.block.Mirror;
 import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.block.SaplingBlock;
 import net.minecraft.world.level.block.SugarCaneBlock;
@@ -92,7 +93,7 @@ public final class FarmBehavior implements Behavior {
 		for (Schematic s : SchematicLibrary.farmsFor(resource)) {
 			BlockPos site = origin != null ? origin : SiteFinder.find(bot, s);
 			if (site == null) continue;
-			bot.startBuild(new BuildOrder(s, site, rotation, BuildOrder.Purpose.FARM));
+			bot.startBuild(new BuildOrder(s, site, rotation, Mirror.NONE, BuildOrder.Purpose.FARM));
 			return true;
 		}
 		return false;
@@ -124,7 +125,7 @@ public final class FarmBehavior implements Behavior {
 	private boolean operate(Bot bot, StructureRegistry.Entry farm, Requirement target) {
 		Schematic s = SchematicLibrary.get(farm.schematic());
 		if (s == null || s.farm() == null) return false;
-		BuildPlan plan = geometry.computeIfAbsent(farm, e -> new BuildPlan(s, e.origin(), e.rotationValue(), null));
+		BuildPlan plan = geometry.computeIfAbsent(farm, e -> new BuildPlan(s, e.origin(), e.rotationValue(), e.mirrorValue(), null));
 		if (harvest != null) {
 			if (harvest.tick(bot) == Harvest.Status.RUNNING) {
 				bot.setStatus("harvesting " + s.name());

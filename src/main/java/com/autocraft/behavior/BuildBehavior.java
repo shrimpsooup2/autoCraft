@@ -112,8 +112,9 @@ public final class BuildBehavior implements Behavior {
 		current = order;
 		Schematic s = order.schematic();
 		String wood = s.builtIn() ? BuildPlan.preferredWood(bot.player()) : null;
-		plan = new BuildPlan(s, order.origin(), order.rotation(), wood);
+		plan = new BuildPlan(s, order.origin(), order.rotation(), order.mirror(), wood);
 		builder = new Builder(plan);
+		bot.setBuildPlan(plan);
 		StructureRegistry.setUnderConstruction(plan.box(), bot.dimension());
 		bot.setBuildMaterials(plan.bill(bot.level(), Integer.MAX_VALUE).keySet());
 		Map<Item, Integer> bill = plan.bill(bot.level(), Integer.MAX_VALUE);
@@ -189,7 +190,8 @@ public final class BuildBehavior implements Behavior {
 		String provides = s.farm() == null ? null : s.farm().provides();
 		StructureRegistry.setUnderConstruction(null, null);
 		StructureRegistry.add(new StructureRegistry.Entry(s.name(), order.origin().getX(), order.origin().getY(), order.origin().getZ(),
-				order.rotation().ordinal(), bot.dimension(), box.minX(), box.minY(), box.minZ(), box.maxX(), box.maxY(), box.maxZ(), provides));
+				order.rotation().ordinal(), order.mirror().ordinal(), bot.dimension(), box.minX(), box.minY(), box.minZ(), box.maxX(), box.maxY(),
+				box.maxZ(), provides));
 		Chat.info("Finished building " + s.name() + " (" + builder.placed() + " placements"
 				+ (builder.skippedItems().isEmpty() ? "" : ", skipped blocks needing " + builder.skippedItems().stream()
 						.map(i -> i.getDefaultInstance().getHoverName().getString()).collect(Collectors.joining(", "))) + ").");
