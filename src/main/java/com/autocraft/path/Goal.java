@@ -78,6 +78,19 @@ public interface Goal {
 		}
 	}
 
+	/** Stand horizontally next to {@code target} at the same height (e.g. to step into a portal). */
+	record Beside(BlockPos target) implements Goal {
+		@Override
+		public boolean isEnd(int x, int y, int z) {
+			return y == target.getY() && Math.abs(x - target.getX()) + Math.abs(z - target.getZ()) == 1;
+		}
+
+		@Override
+		public double heuristic(int x, int y, int z) {
+			return horizontal(x - target.getX(), z - target.getZ()) + Math.abs(y - target.getY()) * VERTICAL;
+		}
+	}
+
 	/** Reach a column at any height. */
 	record XZ(int x, int z) implements Goal {
 		@Override

@@ -66,11 +66,19 @@ public final class BlockUtil {
 				|| s.is(Blocks.BEDROCK);
 	}
 
-	/** Safe to mine: solid, breakable, not protected and won't let lava in. */
+	/**
+	 * Safe to mine: solid, breakable, not protected, not part of a lit portal frame, and no lava beside or
+	 * above that would pour into the gap (lava below can't flow up).
+	 */
 	public static boolean isBreakable(BlockGetter level, BlockPos pos, BlockState s) {
 		if (s.isAir() || s.getDestroySpeed(level, pos) < 0 || isProtected(s)) return false;
 		if (!s.getFluidState().isEmpty() && s.canBeReplaced()) return false;
-		return !touchesLava(level, pos);
+		for (Direction d : Direction.values()) {
+			BlockState n = level.getBlockState(pos.relative(d));
+			if (d != Direction.DOWN && isLava(n)) return false;
+			if (n.is(Blocks.NETHER_PORTAL)) return false;
+		}
+		return true;
 	}
 
 	public static boolean touchesLava(BlockGetter level, BlockPos pos) {

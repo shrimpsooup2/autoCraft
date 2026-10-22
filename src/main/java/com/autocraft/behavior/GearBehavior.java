@@ -198,8 +198,8 @@ public final class GearBehavior implements Behavior {
 			if (tool != null && !canHarvestAny(p, target)) wants.add(Want.required(tool));
 			boolean deep = target.strategy() == Requirement.Strategy.UNDERGROUND || target.dimension() == Requirement.Dim.NETHER;
 			if (deep && !InvUtil.canHarvest(p, Blocks.IRON_ORE.defaultBlockState())) wants.add(Want.required(Items.STONE_PICKAXE));
-			if (target.dimension() == Requirement.Dim.NETHER && bot.dimension() == Requirement.Dim.OVERWORLD) addNetherKit(wants, p);
 		}
+		if (netherTripAhead(bot, p)) addNetherKit(wants, p);
 		double weapon = Features.bestWeaponDamage(p);
 		if (weapon < 5) wants.add(Want.optional(Items.STONE_SWORD));
 		if (weapon < 6) wants.add(Want.optional(Items.IRON_SWORD));
@@ -254,6 +254,12 @@ public final class GearBehavior implements Behavior {
 		return false;
 	}
 
+	/** The job's next requirement is in the Nether and we're still in the Overworld. */
+	private static boolean netherTripAhead(Bot bot, LocalPlayer p) {
+		Requirement next = bot.job() == null ? null : bot.job().nextUnmet(p);
+		return next != null && next.dimension() == Requirement.Dim.NETHER && bot.dimension() == Requirement.Dim.OVERWORLD;
+	}
+
 	// ---- equipping ------------------------------------------------------------------------------
 
 	/** Shield to the offhand, better armor on (gold stays on for the Nether). One action per tick. */
@@ -266,8 +272,7 @@ public final class GearBehavior implements Behavior {
 				return true;
 			}
 		}
-		Requirement target = bot.targetForGear();
-		boolean nether = bot.dimension() == Requirement.Dim.NETHER || target != null && target.dimension() == Requirement.Dim.NETHER;
+		boolean nether = bot.dimension() == Requirement.Dim.NETHER || netherTripAhead(bot, p);
 		for (int i = 0; i < InvUtil.MAIN_SIZE; i++) {
 			ItemStack s = p.getInventory().getItem(i);
 			Equippable eq = s.get(DataComponents.EQUIPPABLE);
