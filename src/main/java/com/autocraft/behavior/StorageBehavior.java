@@ -4,6 +4,7 @@ import com.autocraft.Bot;
 import com.autocraft.Chat;
 import com.autocraft.control.ContainerOpener;
 import com.autocraft.control.InvUtil;
+import com.autocraft.control.Placement;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
 import com.autocraft.path.Goal;
@@ -11,7 +12,6 @@ import com.autocraft.path.Navigator;
 import java.util.Set;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.world.inventory.ContainerInput;
@@ -25,7 +25,6 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.ItemContainerContents;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.ShulkerBoxBlock;
-import net.minecraft.world.level.block.state.BlockState;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -236,9 +235,11 @@ public final class StorageBehavior implements Behavior {
 					shulkerPhase = ShulkerPhase.OPEN;
 					return true;
 				}
-				if (shulkerPos == null || modeTicks % 10 == 0) {
-					shulkerPos = placeShulker(bot);
-					if (shulkerPos == null || modeTicks > 60) return abandonShulker(bot);
+				if (shulkerPos == null) {
+					shulkerPos = Placement.besideFeet(bot, StorageBehavior::shulkerWithSpace);
+					if (shulkerPos == null) return abandonShulker();
+				} else if (modeTicks > 20) {
+					return abandonShulker(); // placement never showed up
 				}
 			}
 			case OPEN -> {
@@ -264,25 +265,11 @@ public final class StorageBehavior implements Behavior {
 		return true;
 	}
 
-	private boolean abandonShulker(Bot bot) {
+	private boolean abandonShulker() {
 		shulkerRetryAt = tick + RETRY_COOLDOWN;
 		mode = Mode.IDLE;
 		shulkerPos = null;
 		return true;
-	}
-
-	/** Place a carried shulker on the floor next to us (facing up so it can open). */
-	private static @Nullable BlockPos placeShulker(Bot bot) {
-		LocalPlayer p = bot.player();
-		BlockPos feet = Navigator.feet(p);
-		for (Direction d : Direction.Plane.HORIZONTAL) {
-			BlockPos spot = feet.relative(d);
-			BlockState at = bot.mc().level.getBlockState(spot);
-			if (!at.canBeReplaced() || !at.getFluidState().isEmpty()) continue;
-			if (!bot.mc().level.getBlockState(spot.above()).isAir()) continue;
-			if (bot.controls().place(spot, StorageBehavior::shulkerWithSpace)) return spot;
-		}
-		return null;
 	}
 
 	private static boolean moveOneInto(LocalPlayer p, ShulkerBoxMenu menu, Job job) {
