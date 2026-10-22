@@ -57,7 +57,7 @@ public final class FoodBehavior implements Behavior {
 		LocalPlayer p = bot.player();
 		if (lootTicks >= 0) return loot(bot);
 		if (prey == null) {
-			if (foodPoints(p) >= LOW_STOCK || ++sinceLook < LOOK_EVERY) return false;
+			if (foodPoints(p) >= wantedStock(bot) || ++sinceLook < LOOK_EVERY) return false;
 			sinceLook = 0;
 			prey = nearestPrey(bot);
 			if (prey == null) return false;
@@ -90,6 +90,12 @@ public final class FoodBehavior implements Behavior {
 			bot.nav().stop();
 		}
 		return true;
+	}
+
+	/** No animals to hunt in the Nether: take twice the usual supply when the next requirement is there. */
+	private static int wantedStock(Bot bot) {
+		Requirement next = bot.job() == null ? null : bot.job().nextUnmet(bot.player());
+		return next != null && next.dimension() == Requirement.Dim.NETHER ? LOW_STOCK * 2 : LOW_STOCK;
 	}
 
 	/** Walk over the meat the kill dropped. */

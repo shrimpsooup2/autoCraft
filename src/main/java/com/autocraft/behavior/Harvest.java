@@ -3,6 +3,7 @@ package com.autocraft.behavior;
 import com.autocraft.Bot;
 import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
+import com.autocraft.world.BlockUtil;
 import java.util.List;
 import java.util.function.Predicate;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -10,6 +11,7 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.state.BlockState;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -86,13 +88,21 @@ public final class Harvest {
 		return Status.RUNNING;
 	}
 
-	/** In reach and either standing next to it or its face toward us is open (logs above head, exposed ore). */
+	/**
+	 * In reach and either standing next to it or its face toward us is open (logs above head, exposed ore).
+	 * Never the block we stand on unless what's under it is safe to land on (lava pockets under netherrack).
+	 */
 	private boolean canMineFromHere(Bot bot) {
 		LocalPlayer p = bot.player();
 		if (!Navigator.settled(p) || !p.isWithinBlockInteractionRange(target, -0.5)) return false;
 		BlockPos feet = Navigator.feet(p);
-		if (new Goal.Adjacent(target).isEnd(feet.getX(), feet.getY(), feet.getZ())) return true;
 		ClientLevel level = bot.mc().level;
+		if (target.getX() == feet.getX() && target.getZ() == feet.getZ() && target.getY() < feet.getY()) {
+			BlockPos under = target.below();
+			BlockState floor = level.getBlockState(under);
+			if (!BlockUtil.canStandOn(level, under, floor) && !BlockUtil.isWater(floor)) return false;
+		}
+		if (new Goal.Adjacent(target).isEnd(feet.getX(), feet.getY(), feet.getZ())) return true;
 		BlockPos front = target.relative(bot.controls().faceToward(target));
 		return level.getBlockState(front).getCollisionShape(level, front).isEmpty();
 	}
