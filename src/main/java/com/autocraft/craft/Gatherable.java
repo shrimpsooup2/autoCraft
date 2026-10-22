@@ -11,6 +11,7 @@ import net.minecraft.tags.ItemTags;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.AbstractSkullBlock;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import org.jspecify.annotations.Nullable;
@@ -21,14 +22,16 @@ import org.jspecify.annotations.Nullable;
  * isn't on the "needs silk touch / drops something else" list.
  */
 public final class Gatherable {
-	/** Mining these gives something else (or nothing) without silk touch. */
+	/** Mining these gives something else (or nothing) without silk touch, or they can't be reached (End, loot-only). */
 	private static final Set<Block> NOT_SELF_DROPPING = Set.of(
 			Blocks.GLASS, Blocks.GLASS_PANE, Blocks.ICE, Blocks.PACKED_ICE, Blocks.BLUE_ICE, Blocks.STONE, Blocks.DEEPSLATE,
 			Blocks.GRASS_BLOCK, Blocks.MYCELIUM, Blocks.PODZOL, Blocks.GLOWSTONE, Blocks.SEA_LANTERN, Blocks.BOOKSHELF,
 			Blocks.CLAY, Blocks.SNOW_BLOCK, Blocks.SNOW, Blocks.MELON, Blocks.TURTLE_EGG, Blocks.BEE_NEST, Blocks.BEEHIVE,
 			Blocks.SPAWNER, Blocks.BUDDING_AMETHYST, Blocks.AMETHYST_CLUSTER, Blocks.SHORT_GRASS, Blocks.TALL_GRASS, Blocks.FERN,
 			Blocks.LARGE_FERN, Blocks.DEAD_BUSH, Blocks.SEAGRASS, Blocks.COBWEB, Blocks.GILDED_BLACKSTONE, Blocks.SCULK_SENSOR,
-			Blocks.REINFORCED_DEEPSLATE, Blocks.FARMLAND, Blocks.DIRT_PATH, Blocks.INFESTED_STONE, Blocks.INFESTED_DEEPSLATE);
+			Blocks.REINFORCED_DEEPSLATE, Blocks.FARMLAND, Blocks.DIRT_PATH, Blocks.INFESTED_STONE, Blocks.INFESTED_DEEPSLATE,
+			Blocks.STRUCTURE_VOID, Blocks.PETRIFIED_OAK_SLAB, Blocks.SUSPICIOUS_SAND, Blocks.SUSPICIOUS_GRAVEL, Blocks.FROGSPAWN,
+			Blocks.END_STONE, Blocks.CHORUS_PLANT, Blocks.CHORUS_FLOWER, Blocks.DRAGON_EGG);
 	/** Gather a little extra of cheap staples so one trip covers several recipes. */
 	private static final Map<Item, Integer> MIN_BATCH = Map.of(
 			Items.COBBLESTONE, 16, Items.RAW_IRON, 5, Items.RAW_GOLD, 5, Items.RAW_COPPER, 5, Items.COAL, 4, Items.SAND, 8);
@@ -64,7 +67,7 @@ public final class Gatherable {
 
 	/** A block found in the world that drops itself when mined. */
 	public static boolean isNatural(Block block, Item item) {
-		if (NOT_SELF_DROPPING.contains(block) || block.defaultBlockState().is(BlockTags.LEAVES)) return false;
+		if (NOT_SELF_DROPPING.contains(block) || block instanceof AbstractSkullBlock || block.defaultBlockState().is(BlockTags.LEAVES)) return false;
 		if (BuiltInRegistries.BLOCK.getKey(block).getPath().contains("_ore")) return false; // ores drop raw items: named resources
 		return !RecipeBook.get().isMade(item);
 	}

@@ -15,11 +15,13 @@ import com.autocraft.behavior.FoodBehavior;
 import com.autocraft.behavior.GearBehavior;
 import com.autocraft.behavior.GotoBehavior;
 import com.autocraft.behavior.LavaReflex;
+import com.autocraft.behavior.MakeBehavior;
 import com.autocraft.behavior.MendingBehavior;
 import com.autocraft.behavior.PortalBehavior;
 import com.autocraft.behavior.StorageBehavior;
 import com.autocraft.build.BuildOrder;
 import com.autocraft.control.Controls;
+import com.autocraft.craft.RecipeBook;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
 import com.autocraft.goal.Requirement.Dim;
@@ -32,6 +34,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -52,6 +55,8 @@ public final class Bot {
 		GEAR,
 		/** Materials for the structure being built. */
 		BUILD,
+		/** Raw materials for crafted/smelted job items. */
+		MAKE,
 		/** Portal materials (obsidian). */
 		TRAVEL
 	}
@@ -70,6 +75,10 @@ public final class Bot {
 	private final Map<NeedOwner, Requirement> needs = new EnumMap<>(NeedOwner.class);
 	private final Map<String, Integer> fruitlessLegs = new HashMap<>();
 	private final Set<Item> buildMaterials = new HashSet<>();
+	/** Ingredients (a few recipe levels deep) of the job's crafted items: kept, not junked or used as scaffolding. */
+	private final Set<Item> jobMaterials = new HashSet<>();
+	private int buildPlaced;
+	private int buildTotal;
 
 	private @Nullable Job job;
 	private @Nullable BuildOrder build;
@@ -106,6 +115,7 @@ public final class Bot {
 				new StorageBehavior(),
 				new BuildBehavior(),
 				new FarmBehavior(),
+				new MakeBehavior(),
 				new PortalBehavior(),
 				new CollectBehavior());
 	}
@@ -169,6 +179,8 @@ public final class Bot {
 
 	public void start(Job newJob) {
 		begin(newJob, null);
+		List<Item> products = newJob.requirements().stream().map(Requirement::product).filter(Objects::nonNull).toList();
+		if (!products.isEmpty()) jobMaterials.addAll(RecipeBook.get().ingredientTree(products, 3));
 		Chat.info("Job started: " + newJob.requirements());
 	}
 
@@ -193,6 +205,7 @@ public final class Bot {
 	public void finishBuild() {
 		build = null;
 		buildMaterials.clear();
+		buildPlaced = buildTotal = 0;
 		needs.remove(NeedOwner.BUILD);
 		nav.stop();
 	}
@@ -202,6 +215,8 @@ public final class Bot {
 		gotoGoal = newGoto;
 		build = null;
 		buildMaterials.clear();
+		jobMaterials.clear();
+		buildPlaced = buildTotal = 0;
 		needs.clear();
 		fruitlessLegs.clear();
 		resetBehaviors();
@@ -217,6 +232,7 @@ public final class Bot {
 		gotoGoal = null;
 		build = null;
 		buildMaterials.clear();
+		jobMaterials.clear();
 		needs.clear();
 		resetBehaviors();
 		controls.releaseAll();
@@ -271,20 +287,58 @@ public final class Bot {
 		return null;
 	}
 
-	/** What the collector works on: the active need, else the job's next unmet requirement. */
+	/**
+	 * What the collector works on: the highest-priority need that can be gathered in this dimension (else the
+	 * highest-priority need, which the portal behavior travels for), else the job's next unmet requirement.
+	 */
 	public @Nullable Requirement currentTarget() {
-		Requirement need = activeNeed();
+		Requirement need = needHereFirst();
 		if (need != null) return need;
 		return job == null || mc.player == null ? null : job.nextUnmet(mc.player);
 	}
 
-	/** What the gear planner must equip for: build/travel needs first, else the job's next unmet requirement. */
+	/** What the gear planner must equip for: build/make/travel needs first, else the job's next unmet requirement. */
 	public @Nullable Requirement targetForGear() {
-		Requirement build = needs.get(NeedOwner.BUILD);
-		if (build != null) return build;
-		Requirement travel = needs.get(NeedOwner.TRAVEL);
-		if (travel != null) return travel;
+		Requirement need = needHereFirst(NeedOwner.GEAR);
+		if (need != null) return need;
 		return job == null || mc.player == null ? null : job.nextUnmet(mc.player);
+	}
+
+	/** Highest-priority need gatherable in this dimension, else the highest-priority need; {@code skip} owners ignored. */
+	private @Nullable Requirement needHereFirst(NeedOwner... skip) {
+		Dim here = dimension();
+		Requirement elsewhere = null;
+		for (NeedOwner o : NeedOwner.values()) {
+			Requirement r = needs.get(o);
+			if (r == null || List.of(skip).contains(o)) continue;
+			if (r.dimension() == here) return r;
+			if (elsewhere == null) elsewhere = r;
+		}
+		return elsewhere;
+	}
+
+	/** Gear/build/make need (materials a planner waits for; portal obsidian excluded), this dimension first. */
+	public @Nullable Requirement materialNeed() {
+		return needHereFirst(NeedOwner.TRAVEL);
+	}
+
+	/** Dimension the next gathering happens in (a material need, else the job's next mined requirement), or null. */
+	public @Nullable Dim nextDimension() {
+		return dimensionOf(materialNeed());
+	}
+
+	/**
+	 * Like {@link #nextDimension()} but ignoring gear needs: what the gear planner prepares for (asking where its
+	 * own materials are would make it chase its tail).
+	 */
+	public @Nullable Dim workDimension() {
+		return dimensionOf(needHereFirst(NeedOwner.GEAR, NeedOwner.TRAVEL));
+	}
+
+	private @Nullable Dim dimensionOf(@Nullable Requirement need) {
+		if (need != null) return need.dimension();
+		Requirement next = job == null || mc.player == null ? null : job.nextUnmet(mc.player);
+		return next == null || next.isCrafted() ? null : next.dimension();
 	}
 
 	/** An exploration leg for {@code requirement} ended without finding any source. */
@@ -321,9 +375,9 @@ public final class Bot {
 		return job != null || build != null;
 	}
 
-	/** Counts toward the current job (never junk, never used as scaffolding while alternatives exist). */
+	/** Counts toward the current job or goes into it (never junk, never used as scaffolding while alternatives exist). */
 	public boolean isJobItem(ItemStack s) {
-		return job != null && !job.matching(s).isEmpty() || buildMaterials.contains(s.getItem());
+		return job != null && !job.matching(s).isEmpty() || buildMaterials.contains(s.getItem()) || jobMaterials.contains(s.getItem());
 	}
 
 	/** Items the current build still needs (kept out of the junk pile). */
@@ -343,6 +397,14 @@ public final class Bot {
 
 	public boolean logoffWhenDone() { return logoffWhenDone; }
 	public void setLogoffWhenDone(boolean v) { logoffWhenDone = v; }
+
+	/** Blocks placed / total of the current build (0/0 when not building). */
+	public int buildPlaced() { return buildPlaced; }
+	public int buildTotal() { return buildTotal; }
+	public void setBuildProgress(int placed, int total) {
+		buildPlaced = placed;
+		buildTotal = total;
+	}
 
 	public String activeBehavior() { return activeBehavior; }
 	public String status() { return status; }

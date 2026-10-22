@@ -140,10 +140,9 @@ public final class StorageBehavior implements Behavior {
 
 	// ---- junk -----------------------------------------------------------------------------------
 
-	/** Worth carrying: job/need items, gear, food, containers, crafting and portal materials. */
+	/** Worth carrying: job/need items and their ingredients, gear, food, containers, crafting and portal materials. */
 	public static boolean isKeeper(Bot bot, ItemStack s) {
-		Job job = bot.job();
-		if (job != null && !job.matching(s).isEmpty()) return true;
+		if (bot.isJobItem(s)) return true;
 		for (Bot.NeedOwner owner : Bot.NeedOwner.values()) {
 			Requirement need = bot.need(owner);
 			if (need != null && need.counts().test(s)) return true;

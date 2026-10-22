@@ -1,6 +1,7 @@
 package com.autocraft.goal;
 
 import com.autocraft.craft.Gatherable;
+import com.autocraft.craft.RecipeBook;
 import com.autocraft.goal.Requirement.Dim;
 import com.autocraft.goal.Requirement.Strategy;
 import java.util.HashMap;
@@ -20,6 +21,7 @@ import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.biome.Biomes;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Named resources the bot knows how to find. Anything else falls back to "mine the block with the same id
@@ -66,7 +68,6 @@ public final class Resources {
 		simple("warped_stem", Items.WARPED_STEM, Strategy.ANYWHERE, Dim.NETHER, Blocks.WARPED_STEM);
 
 		alias("wood", "log");
-		alias("stone", "cobblestone");
 		alias("raw_iron", "iron");
 		alias("raw_gold", "gold");
 		alias("raw_copper", "copper");
@@ -111,24 +112,42 @@ public final class Resources {
 		return KNOWN.containsKey(name.toLowerCase().replace("minecraft:", ""));
 	}
 
-	/** Requirement for {@code amount} of {@code name}, or null if nothing can produce it. */
-	public static Requirement get(String name, int amount) {
+	/**
+	 * What a job asks for: a mined resource if the name is one, else any item a crafting or smelting recipe
+	 * makes (torches, glass, pistons, iron ingots...). Null if neither.
+	 */
+	public static @Nullable Requirement forJob(String name, int amount) {
+		Requirement mined = get(name, amount);
+		if (mined != null) return mined;
+		Item item = item(name);
+		if (item == null || !RecipeBook.get().isMade(item)) return null;
+		return Requirement.crafted(BuiltInRegistries.ITEM.getKey(item).getPath(), item, amount);
+	}
+
+	/** Requirement for mining {@code amount} of {@code name}, or null if no block in the world drops it. */
+	public static @Nullable Requirement get(String name, int amount) {
 		String key = name.toLowerCase().replace("minecraft:", "");
 		Supplier<Requirement> known = KNOWN.get(key);
 		Requirement r;
 		if (known != null) {
 			r = known.get().withAmount(amount);
 		} else {
-			Identifier id = Identifier.tryParse(name.contains(":") ? name : "minecraft:" + key);
-			if (id == null) return null;
-			Item item = BuiltInRegistries.ITEM.getOptional(id).orElse(null);
-			Block block = BuiltInRegistries.BLOCK.getOptional(id).orElse(null);
-			if (item == null || item == Items.AIR || block == null || block == Blocks.AIR) return null;
+			Item item = item(name);
+			Block block = item == null ? null : Block.byItem(item);
+			if (item == null || block == null || block == Blocks.AIR || block.defaultDestroyTime() < 0) return null;
 			if (!Gatherable.isNatural(block, item)) return null; // made by recipes, or doesn't drop itself
 			r = new Requirement(key, s -> s.is(item), Set.of(block), amount, Strategy.ANYWHERE, 0, Dim.OVERWORLD);
 		}
 		Set<ResourceKey<Biome>> biomes = BIOMES.get(r.name());
 		return biomes == null ? r : r.withBiomes(biomes);
+	}
+
+	private static @Nullable Item item(String name) {
+		String key = name.toLowerCase().replace("minecraft:", "");
+		Identifier id = Identifier.tryParse(name.contains(":") ? name.toLowerCase() : "minecraft:" + key);
+		if (id == null) return null;
+		Item item = BuiltInRegistries.ITEM.getOptional(id).orElse(null);
+		return item == Items.AIR ? null : item;
 	}
 
 	@SafeVarargs

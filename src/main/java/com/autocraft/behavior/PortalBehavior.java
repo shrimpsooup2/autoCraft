@@ -66,11 +66,11 @@ public final class PortalBehavior implements Behavior {
 		if (lastDim != null && now != lastDim) arrived(bot, lastDim, now);
 		lastDim = now;
 
-		// gear/build needs (e.g. iron for a new pickaxe, quartz for observers) decide first: go where they're found
-		Requirement gearNeed = bot.need(Bot.NeedOwner.GEAR) != null ? bot.need(Bot.NeedOwner.GEAR) : bot.need(Bot.NeedOwner.BUILD);
-		Dim want = gearNeed != null ? gearNeed.dimension() : desiredDimension(bot);
+		// material needs (iron for a new pickaxe, quartz for observers or comparators) decide first: go where they're found
+		Requirement materialNeed = bot.materialNeed();
+		Dim want = materialNeed != null ? materialNeed.dimension() : desiredDimension(bot);
 		if (want == null || want == now) {
-			if (gearNeed == null) bot.setNeed(Bot.NeedOwner.TRAVEL, null);
+			if (materialNeed == null) bot.setNeed(Bot.NeedOwner.TRAVEL, null);
 			return false;
 		}
 
@@ -87,12 +87,12 @@ public final class PortalBehavior implements Behavior {
 		return build(bot);
 	}
 
+	/** Where the job's next mined requirement is; with the job done, the base (to deposit). */
 	private static @Nullable Dim desiredDimension(Bot bot) {
+		Dim next = bot.nextDimension();
+		if (next != null) return next;
 		Job job = bot.job();
-		if (job == null) return null;
-		Requirement next = job.nextUnmet(bot.player());
-		if (next != null) return next.dimension();
-		return bot.base() != null ? bot.baseDimension() : null;
+		return job != null && job.isComplete(bot.player()) && bot.base() != null ? bot.baseDimension() : null;
 	}
 
 	private void arrived(Bot bot, Dim from, Dim to) {

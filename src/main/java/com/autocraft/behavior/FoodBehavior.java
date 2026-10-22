@@ -92,10 +92,9 @@ public final class FoodBehavior implements Behavior {
 		return true;
 	}
 
-	/** No animals to hunt in the Nether: take twice the usual supply when the next requirement is there. */
+	/** No animals to hunt in the Nether: take twice the usual supply when the next work is there. */
 	private static int wantedStock(Bot bot) {
-		Requirement next = bot.job() == null ? null : bot.job().nextUnmet(bot.player());
-		return next != null && next.dimension() == Requirement.Dim.NETHER ? LOW_STOCK * 2 : LOW_STOCK;
+		return bot.workDimension() == Requirement.Dim.NETHER ? LOW_STOCK * 2 : LOW_STOCK;
 	}
 
 	/** Walk over the meat the kill dropped. */

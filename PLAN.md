@@ -1,18 +1,29 @@
 # autoCraft — build plan
 
-Client-side Fabric mod. You give it resources + amounts; it survives, paths, mines, crafts tools,
-travels to the Nether when a resource lives there, builds farms or your own schematics, stores loot and
-logs off when the goal is met.
+Client-side Fabric mod. You give it items + amounts — mined resources or anything craftable/smeltable; it
+survives, paths, mines, crafts tools and the requested items, travels to the Nether when a resource lives
+there, builds farms or your own schematics, stores loot and logs off when the goal is met.
 
 ## Stack
 - Minecraft **26.3**, Fabric Loader 0.19.5, Fabric API, Java 25, Loom (`./gradlew build`, `./gradlew runClient`).
 - Mojang names (26.x is unobfuscated — no mappings).
 - No external AI libs: the neural net is a tiny MLP in plain Java. Recipes come from the game jar's own data.
 
+## Control panel (key **K**, rebindable under Controls → autoCraft)
+- **Collect**: search every item the bot can mine or craft (blue corner = crafted/smelted), click to add with the
+  amount in the box (right-click adds a stack), scroll over a job line to change it, × / right-click removes;
+  Enter adds the typed name (also groups like `log`). *Start job* (or *Replace job*).
+- **Build**: schematic list (built-ins + `config/autocraft/schematics/`, *Open folder*, *Reload*), size and
+  material preview, X/Y/Z (*Here* = your feet), rotation, *Build* or *Find a spot*.
+- **Bot**: live state, job progress bars, build progress, current prerequisite, health/food/position;
+  *Pause/Resume*, *Stop*, *Set base here*, log-off and status-overlay toggles, list of built structures.
+- A small status overlay (top left) shows activity and progress bars while the bot runs.
+- The bot keeps working while the panel is open (it isn't a pause screen).
+
 ## Commands (typed in chat, never sent to the server)
 | Command | Effect |
 |---|---|
-| `!ac collect <resource> <amount> [<resource> <amount> ...]` | start a job (`diamond 10 iron 32 quartz 64`) |
+| `!ac collect <item> <amount> [<item> <amount> ...]` | start a job (`diamond 10 iron 32 torch 64 piston 8`); crafted items are planned through the recipe book |
 | `!ac build <schematic> <x> <y> <z> [0\|90\|180\|270]` | build a schematic with its corner at x y z (`~` = relative), optionally rotated |
 | `!ac build <schematic> here [rotation]` | same, corner at your feet |
 | `!ac farm <resource> [<x> <y> <z> \| here] [rotation]` | build a farm for a resource (site chosen automatically without a position) |
@@ -23,14 +34,15 @@ logs off when the goal is met.
 | `!ac base` | mark current position as the storage base (chests near it are used) |
 | `!ac logoff on\|off` | disconnect when the job is done (default on) |
 | `!ac goto <x> <y> <z>` | debug: pathfind to a block |
-| `!ac resources` | list known resource names (any natural block's item id also works) |
+| `!ac resources` | list named resources (any natural block's item id and any craftable/smeltable item also work) |
 
 ## Architecture
 One client-tick loop. Every tick the `Bot` releases all inputs, then asks behaviors **in priority
 order**; the first that returns `true` owns the tick (subsumption). Lower behaviors keep their state
-and resume when higher ones let go. Planners that need materials (tools, build materials, portal
-obsidian) post a **need** on the bot; the collector serves needs before the job. Elytra flights take
-over the loop (only the lava/fall reflexes can interrupt) until landing.
+and resume when higher ones let go. Planners that need materials (tools, build materials, crafted job items,
+portal obsidian) post a **need** on the bot; the collector serves needs gatherable in the current dimension
+first, the portal behavior travels for the rest. Elytra flights take over the loop (only the lava/fall
+reflexes can interrupt) until landing.
 
 ```mermaid
 flowchart TD
@@ -48,7 +60,8 @@ flowchart TD
   FO --> ST[Storage: junk drop, bundles, shulkers, base chests]
   ST --> B[Build: schematic orders, materials, placement]
   B --> FA[Farm: harvest registered farms, auto-build one when searching fails]
-  FA --> P[Portal: find/build/light portal, change dimension]
+  FA --> MK[Make: craft/smelt requested items, ask for raw materials]
+  MK --> P[Portal: find/build/light portal, change dimension]
   P --> CO[Collect: scan -> path -> mine -> pick up, else explore by biome / boat / elytra]
 ```
 
@@ -56,7 +69,7 @@ flowchart TD
 |---|---|
 | `com.autocraft` | entrypoint, `Bot` (job, build order, needs, behavior loop, flights), chat logging |
 | `command` | `!ac` chat command parser |
-| `goal` | `Job`, `Requirement` (items, sources, strategy, Y level, dimension, biomes), `Resources` registry |
+| `goal` | `Job` (+ skipped requirements), `Requirement` (mined: items, sources, strategy, Y level, dimension, biomes; or crafted product), `Resources` registry |
 | `world` | `WorldScanner` (nearest-ring, section-skipping block scan; entities), `BlockUtil`, `BiomeFinder` |
 | `control` | `Controls` (keys, rotation, mine/attack/place/use), `InvUtil`, `ContainerOpener`, `Placement` |
 | `path` | incremental A* `Pathfinder` (walk, diagonal, jump-up, staircase, safe fall, dig-down, pillar, bridge, mine-through, swim), goals, executor, `Navigator` |
@@ -66,6 +79,7 @@ flowchart TD
 | `schematic` | `.litematic` / `.schem` / `.nbt` loading, built-in designs, `SchematicLibrary` (built-ins + user folder) |
 | `build` | `BuildPlan` (rotation, wood swap, ordering, bill of materials), `PlacementSolver` (orientation), `Builder`, `SiteFinder`, `FluidFill`, `BaseWithdraw`, `StructureRegistry` (built + protected areas) |
 | `travel` | boats over water/ice, elytra flights, nether portals (find, build, light, enter, return) |
+| `ui` | `AutoCraftScreen` control panel, `HudOverlay` status overlay, `ItemCatalog` (what jobs can ask for) |
 
 ### Neural net (ThreatNet)
 Inputs: own health, armor, best weapon damage, shield, food, hostile count, nearest distance, summed
@@ -104,20 +118,22 @@ else → 0; ~10 consistent outcomes flip a decision) and saved.
 | 8 | **Travel** — boats over water/ice; elytra flights with rocket crafting and durability checks | code complete |
 | 9 | **Biomes & mending** — biome-directed exploration; mending gear repaired in the offhand | code complete |
 | 10 | **Schematics & farms** — user schematics, built-in starter base and farms, farm operation and auto-build | code complete |
-| 11 | **Hardening** — in-game testing, stuck recovery, tuning thresholds from logs | next |
+| 11 | **Crafted jobs & UI** — any craftable/smeltable item as a job target (unobtainable ones skipped); control panel (K) and status overlay | code complete |
+| 12 | **Hardening** — in-game testing, stuck recovery, tuning thresholds from logs | next |
 
 "Code complete" = compiles against the real 26.3 client jar; not yet run in-game (see Build).
 
 ## Build & test
 - `./gradlew build` → `build/libs/autocraft-<version>.jar` (drop into `.minecraft/mods` with Fabric API).
-- `./gradlew runClient` starts a dev client; try `!ac goto`, `!ac build starter_base here`,
-  `!ac collect log 16`, `!ac collect iron 8`, `!ac farm cobblestone`.
+- `./gradlew runClient` starts a dev client; press K, or try `!ac goto`, `!ac build starter_base here`,
+  `!ac collect log 16`, `!ac collect iron 8`, `!ac collect torch 32`, `!ac farm cobblestone`.
 - Loom must download Minecraft's libraries from `libraries.minecraft.net`; build on a network that allows it.
 
 ## Known limits
 - Servers with anti-xray or strict anti-cheat will fight the bot (scanning sees hidden ores; rotations snap).
 - End travel, enchanting, villager trading, stonecutter/smithing recipes are out of scope.
-- Job targets are gatherable items; crafted items are produced for tools, kits and builds.
+- Job targets are mined items or items made by vanilla crafting/smelting; things that need mob drops or loot
+  (string, ender pearls, blaze powder...) are skipped with a message unless you carry the ingredients.
 - Lava escape needs solid ground within ~4 blocks (or the last safe spot) or a fire resistance potion; a fall
   into a wide lava lake with no water bucket, no blocks and no solid edge in reach can still be fatal.
 - Builder limits: block entity contents (chest items, sign text) aren't recreated; waterlogging isn't

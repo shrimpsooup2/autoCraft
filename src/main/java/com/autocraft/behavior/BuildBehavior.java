@@ -92,7 +92,9 @@ public final class BuildBehavior implements Behavior {
 			}
 		}
 
-		return switch (builder.tick(bot)) {
+		Builder.Status status = builder.tick(bot);
+		bot.setBuildProgress(builder.placed(), plan.places().size());
+		return switch (status) {
 			case RUNNING -> {
 				bot.setNeed(Bot.NeedOwner.BUILD, null);
 				yield true;

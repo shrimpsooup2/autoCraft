@@ -10,11 +10,14 @@ import java.io.Reader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
 import net.fabricmc.loader.api.FabricLoader;
@@ -122,6 +125,32 @@ public final class RecipeBook {
 	/** Some recipe makes this item (so it isn't a "natural" block to go mining for). */
 	public boolean isMade(Item item) {
 		return crafting.containsKey(item) || smelting.containsKey(item);
+	}
+
+	/**
+	 * Everything that goes into {@code products} up to {@code depth} recipe levels down (all options of every
+	 * ingredient), e.g. piston → planks, cobblestone, iron ingot, redstone → logs, raw iron.
+	 */
+	public Set<Item> ingredientTree(Collection<Item> products, int depth) {
+		Set<Item> out = new HashSet<>();
+		List<Item> frontier = new ArrayList<>(products);
+		for (int d = 0; d < depth && !frontier.isEmpty(); d++) {
+			List<Item> next = new ArrayList<>();
+			for (Item item : frontier) {
+				for (Recipe r : crafting(item)) {
+					for (Ingredient ing : r.key().values()) addOptions(ing, out, next);
+				}
+				for (Recipe r : smelting(item)) addOptions(r.smeltInput(), out, next);
+			}
+			frontier = next;
+		}
+		return out;
+	}
+
+	private static void addOptions(Ingredient ing, Set<Item> seen, List<Item> next) {
+		for (Item o : ing.options()) {
+			if (seen.add(o)) next.add(o);
+		}
 	}
 
 	// ---- loading --------------------------------------------------------------------------------

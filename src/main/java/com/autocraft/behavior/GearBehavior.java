@@ -236,10 +236,9 @@ public final class GearBehavior implements Behavior {
 		return false;
 	}
 
-	/** The job's next requirement is in the Nether and we're still in the Overworld. */
+	/** The next work (job or a build/make need) is in the Nether and we're still in the Overworld. */
 	private static boolean netherTripAhead(Bot bot, LocalPlayer p) {
-		Requirement next = bot.job() == null ? null : bot.job().nextUnmet(p);
-		return next != null && next.dimension() == Requirement.Dim.NETHER && bot.dimension() == Requirement.Dim.OVERWORLD;
+		return bot.workDimension() == Requirement.Dim.NETHER && bot.dimension() == Requirement.Dim.OVERWORLD;
 	}
 
 	/** A bucket counts whether it's empty or already holds water. */

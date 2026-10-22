@@ -68,7 +68,8 @@ public final class Commands {
 				if (args.length < 4) throw new IllegalArgumentException("usage: !ac goto <x> <y> <z>");
 				bot.startGoto(new Goal.Block(position(player, args, 1)));
 			}
-			case "resources" -> Chat.info("Known: " + Resources.describe() + ". Any natural block's item id also works.");
+			case "resources" -> Chat.info("Named: " + Resources.describe() + ". Any natural block's item id works, and any craftable or smeltable item"
+					+ " (torch, glass, piston, iron_ingot...).");
 			case "build" -> build(bot, args);
 			case "schematics" -> schematics();
 			case "farm" -> farm(bot, args);
@@ -85,8 +86,8 @@ public final class Commands {
 		for (int i = 1; i < args.length; i += 2) {
 			int amount = Integer.parseInt(args[i + 1]);
 			if (amount <= 0) throw new IllegalArgumentException("amount must be positive: " + args[i + 1]);
-			Requirement r = Resources.get(args[i], amount);
-			if (r == null) throw new IllegalArgumentException("unknown resource '" + args[i] + "' (try !ac resources)");
+			Requirement r = Resources.forJob(args[i], amount);
+			if (r == null) throw new IllegalArgumentException("can't mine or craft '" + args[i] + "' (try !ac resources)");
 			reqs.add(r);
 		}
 		bot.start(new Job(reqs));
@@ -179,14 +180,17 @@ public final class Commands {
 		Chat.info((bot.isPaused() ? "[paused] " : "") + bot.activeBehavior() + ": " + bot.status());
 		if (job != null) Chat.info("Progress: " + job.progress(p));
 		BuildOrder build = bot.buildOrder();
-		if (build != null) Chat.info("Building " + build.schematic().name() + " at " + build.origin().toShortString());
+		if (build != null) {
+			Chat.info("Building " + build.schematic().name() + " at " + build.origin().toShortString() + ": " + bot.buildPlaced() + "/"
+					+ bot.buildTotal() + " blocks");
+		}
 		Requirement need = bot.activeNeed();
 		if (need != null) Chat.info("Prerequisite: " + need);
 		Chat.info(String.format("HP %.0f/20, food %d, pos %s", p.getHealth(), p.getFoodData().getFoodLevel(), p.blockPosition().toShortString()));
 	}
 
 	private static void help() {
-		Chat.info("!ac collect <resource> <amount> ... | build <schematic> <x y z|here> [rot] | farm <resource> [x y z|here] | "
-				+ "schematics | built | stop | pause | resume | status | base | logoff on|off | goto x y z | resources");
+		Chat.info("Press K for the control panel. Commands: !ac collect <item> <amount> ... (mined or crafted) | build <schematic> <x y z|here> [rot]"
+				+ " | farm <resource> [x y z|here] | schematics | built | stop | pause | resume | status | base | logoff on|off | goto x y z | resources");
 	}
 }

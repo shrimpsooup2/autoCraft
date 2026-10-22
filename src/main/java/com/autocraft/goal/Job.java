@@ -3,15 +3,20 @@ package com.autocraft.goal;
 import com.autocraft.control.InvUtil;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.StringJoiner;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
 
 /** The user's order: a list of requirements plus what has already been deposited at the base. */
 public final class Job {
 	private final List<Requirement> requirements;
 	private final Map<String, Integer> stored = new HashMap<>();
+	/** Requirements given up on (nothing can produce them); the rest of the job continues. */
+	private final Set<String> skipped = new HashSet<>();
 
 	public Job(List<Requirement> requirements) {
 		this.requirements = List.copyOf(requirements);
@@ -34,16 +39,24 @@ public final class Job {
 		return nextUnmet(p) == null;
 	}
 
-	/** First requirement still short, or null when the job is done. */
+	/** First requirement still short (and not skipped), or null when the job is done. */
 	public Requirement nextUnmet(Player p) {
 		for (Requirement r : requirements) {
-			if (missing(p, r) > 0) return r;
+			if (!skipped.contains(r.name()) && missing(p, r) > 0) return r;
 		}
 		return null;
 	}
 
+	public void skip(Requirement r) {
+		skipped.add(r.name());
+	}
+
+	public boolean isSkipped(Requirement r) {
+		return skipped.contains(r.name());
+	}
+
 	/** Requirements that would be counted by an item stack, used when depositing. */
-	public List<Requirement> matching(net.minecraft.world.item.ItemStack stack) {
+	public List<Requirement> matching(ItemStack stack) {
 		List<Requirement> out = new ArrayList<>();
 		for (Requirement r : requirements) {
 			if (r.counts().test(stack)) out.add(r);
@@ -58,7 +71,7 @@ public final class Job {
 	public String progress(Player p) {
 		StringJoiner j = new StringJoiner(", ");
 		for (Requirement r : requirements) {
-			j.add(r.name() + " " + Math.min(have(p, r), r.amount()) + "/" + r.amount());
+			j.add(r.name() + " " + Math.min(have(p, r), r.amount()) + "/" + r.amount() + (skipped.contains(r.name()) ? " (skipped)" : ""));
 		}
 		return j.toString();
 	}
