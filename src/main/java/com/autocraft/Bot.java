@@ -11,6 +11,7 @@ import com.autocraft.behavior.FallReflex;
 import com.autocraft.behavior.FinishBehavior;
 import com.autocraft.behavior.GearBehavior;
 import com.autocraft.behavior.GotoBehavior;
+import com.autocraft.behavior.LavaReflex;
 import com.autocraft.behavior.PortalBehavior;
 import com.autocraft.behavior.StorageBehavior;
 import com.autocraft.control.Controls;
@@ -68,6 +69,7 @@ public final class Bot {
 		this.nav = new Navigator(mc, controls);
 		this.threatNet = ThreatNet.loadOrTrain();
 		this.behaviors = List.of(
+				new LavaReflex(),
 				new FallReflex(),
 				new DefenseReflex(),
 				new EatReflex(),

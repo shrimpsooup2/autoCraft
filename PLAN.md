@@ -27,7 +27,8 @@ and resume when higher ones let go. Planners that need materials (tools, portal 
 
 ```mermaid
 flowchart TD
-  T[client tick] --> R1[1 FallReflex: water-bucket clutch]
+  T[client tick] --> R0[0 LavaReflex: swim out toward solid ground, fire resistance]
+  R0 --> R1[1 FallReflex: water-bucket clutch]
   R1 --> R2[2 DefenseReflex: shield arrows, deflect/dodge ghast fireballs, back off lit creepers]
   R2 --> R3[3 EatReflex]
   R3 --> R4[4 EffectReflex: milk / honey]

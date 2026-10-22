@@ -48,7 +48,6 @@ public final class Planner {
 
 	/** Next step toward carrying {@code count} of {@code want}. */
 	public Step next(Item want, int count) {
-		int missing = count - InvUtil.count(p, s -> s.is(want));
 		int missing = count - InvUtil.count(p, s -> s.is(want) && !InvUtil.nearlyBroken(s));
 		if (want == Items.IRON_INGOT) return ingot(Items.RAW_IRON, "iron", missing);
 		if (want == Items.GOLD_INGOT) return ingot(Items.RAW_GOLD, "gold", missing);
