@@ -28,7 +28,7 @@ and resume when higher ones let go. Planners that need materials (tools, portal 
 ```mermaid
 flowchart TD
   T[client tick] --> R0[0 LavaReflex: swim out toward solid ground, fire resistance]
-  R0 --> R1[1 FallReflex: water-bucket clutch]
+  R0 --> R1[1 FallReflex: lava landing: steer, water/block into the lava, fire resistance; high fall: water clutch]
   R1 --> R2[2 DefenseReflex: shield arrows, deflect/dodge ghast fireballs, back off lit creepers]
   R2 --> R3[3 EatReflex]
   R3 --> R4[4 EffectReflex: milk / honey]
@@ -61,22 +61,25 @@ mob danger, creeper nearby, ranged count, night/nether. Small tanh hidden layer,
 sane on first run, then updated online after every fight (won without losing >50% health → 1,
 else → 0) and saved.
 
-## Phases (each ends with something runnable in-game)
-1. **Skeleton** — Gradle/Loom project, entrypoint, `!ac` commands, `Bot` loop, logging.
-2. **Movement** — `Controls`, `BlockUtil`, A* pathfinder + executor, `!ac goto`.
-3. **Collection** — resource registry, scanner, mine + pick up drops, explore (ore Y level + tunnel; surface walk), progress, log off when done.
-4. **Survival** — fall clutch, eating, milk, shield/back-off, combat with ThreatNet fight/flee.
-5. **Tools & crafting** — pickaxe tier detection, recipe planner, 2x2 + table crafting, smelting, armor/shield, tool replacement.
-6. **Storage** — junk dropping, bundles, shulker boxes, base chests (`!ac base`) with deposited counts toward the goal.
-7. **Nether** — nether resources in the registry; nether kit (gold armor piece, flint and steel, food, blocks);
-   obsidian by mining or water-on-lava casting; build + light portal or reuse a nearby one; enter, remember
-   both portals, come back for base storage. Nether-safe pathing (lava, fire, soul sand, portals never walked
-   into by accident). Nether mobs: deflect or dodge ghast fireballs, never provoke zombified piglins/endermen,
-   piglins respected via gold armor, fight/flee blazes, wither skeletons, hoglins, magma cubes.
-8. **Travel** — boats over water and ice for long exploration legs.
-9. **Hardening** — stuck recovery, unreachable-target blacklist, tuning from logs.
+## Phases
+| # | Phase | Status |
+|---|---|---|
+| 1 | **Skeleton** — Gradle/Loom project, entrypoint, `!ac` commands, `Bot` loop, logging | code complete |
+| 2 | **Movement** — `Controls`, `BlockUtil`, incremental A* + executor, `!ac goto` | code complete |
+| 3 | **Collection** — registry, scanner, mine + pick up, explore (ore Y level + tunnel; surface walk), log off | code complete |
+| 4 | **Survival** — lava escape, fall/lava clutch, eating, milk, shield/back-off, ThreatNet combat | code complete |
+| 5 | **Tools & crafting** — pickaxe tier detection, planner, 2x2 + table crafting, smelting, armor/shield | code complete |
+| 6 | **Storage** — junk dropping, bundles, shulker boxes, base chests with deposited counts | code complete |
+| 7 | **Nether** — kit (gold boots, flint and steel, iron pickaxe, blocks); obsidian mined or cast from lava; build + light or reuse portal; remember portals; go back for gear materials or base storage; nether mob rules | code complete |
+| 8 | **Travel** — boats over water and ice for long exploration legs | code complete |
+| 9 | **Hardening** — in-game testing, stuck recovery, tuning thresholds from logs | next |
 
-Phases 1–8 are the first milestone; 9 is ongoing.
+"Code complete" = compiles against the real 26.3 client jar; not yet run in-game (see Build).
+
+## Build & test
+- `./gradlew build` → `build/libs/autocraft-<version>.jar` (drop into `.minecraft/mods` with Fabric API).
+- `./gradlew runClient` starts a dev client; try `!ac goto`, then `!ac collect log 16`, `!ac collect iron 8`.
+- Loom must download Minecraft's libraries from `libraries.minecraft.net`; build on a network that allows it.
 
 ## Future goals
 - **Elytra travel**: if an elytra is carried, use it for long trips; firework stock management (craft from
@@ -89,3 +92,5 @@ Phases 1–8 are the first milestone; 9 is ongoing.
 - Servers with anti-xray or strict anti-cheat will fight the bot (scanning sees hidden ores; rotations snap).
 - End travel, enchanting, villager trading are out of scope.
 - Job targets are gatherable items; crafted items are produced only as tool/kit prerequisites.
+- Lava escape needs solid ground within ~4 blocks (or the last safe spot) or a fire resistance potion; a fall
+  into a wide lava lake with no water bucket, no blocks and no solid edge in reach can still be fatal.

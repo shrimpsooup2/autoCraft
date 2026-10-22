@@ -25,10 +25,10 @@ import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Changes dimension when the job needs it: the next requirement lives in the other dimension, or the job
- * is done and the base is on the other side. Uses a known or visible portal; otherwise (Overworld only)
- * gets obsidian (mined, or cast from lava with a water bucket), builds a portal and lights it.
- * Portals used are remembered per dimension for the trip back.
+ * Changes dimension when needed: gear materials only found on the other side, the job's next requirement
+ * lives there, or the job is done and the base is on the other side. Uses a known or visible portal;
+ * otherwise (Overworld only) gets obsidian (mined, or cast from lava with a water bucket), builds a portal
+ * and lights it. Portals used are remembered per dimension for the trip back.
  */
 public final class PortalBehavior implements Behavior {
 	private static final int PORTAL_SCAN_CHUNKS = 8;
@@ -66,12 +66,13 @@ public final class PortalBehavior implements Behavior {
 		if (lastDim != null && now != lastDim) arrived(bot, lastDim, now);
 		lastDim = now;
 
-		Dim want = desiredDimension(bot);
+		// a gear need (e.g. iron for a new pickaxe while in the Nether) decides first: go where it can be gathered
+		Requirement gearNeed = bot.need(Bot.NeedOwner.GEAR);
+		Dim want = gearNeed != null ? gearNeed.dimension() : desiredDimension(bot);
 		if (want == null || want == now) {
-			bot.setNeed(Bot.NeedOwner.TRAVEL, null);
+			if (gearNeed == null) bot.setNeed(Bot.NeedOwner.TRAVEL, null);
 			return false;
 		}
-		if (bot.need(Bot.NeedOwner.GEAR) != null) return false; // finish the kit first
 
 		BlockPos portal = findPortal(bot, now);
 		if (portal != null) {
