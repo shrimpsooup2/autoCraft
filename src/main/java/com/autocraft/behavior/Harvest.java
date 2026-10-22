@@ -5,6 +5,8 @@ import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
 import java.util.List;
 import java.util.function.Predicate;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
@@ -17,6 +19,8 @@ import org.jspecify.annotations.Nullable;
 public final class Harvest {
 	public enum Status { RUNNING, DONE, FAILED }
 
+	private enum Phase { WALK, MINE, PICKUP }
+
 	private static final int MINE_TIMEOUT = 20 * 30;
 	private static final int PICKUP_TIMEOUT = 20 * 6;
 
@@ -25,8 +29,6 @@ public final class Harvest {
 	private Phase phase = Phase.WALK;
 	private int phaseTicks;
 	private @Nullable ItemEntity chasing;
-
-	private enum Phase { WALK, MINE, PICKUP }
 
 	public Harvest(BlockPos target, Predicate<ItemStack> drops) {
 		this.target = target.immutable();
@@ -39,22 +41,23 @@ public final class Harvest {
 
 	public Status tick(Bot bot) {
 		phaseTicks++;
+		ClientLevel level = bot.mc().level;
 		switch (phase) {
 			case WALK -> {
-				if (bot.mc().level.getBlockState(target).isAir()) return enter(Phase.PICKUP);
-				if (inReach(bot)) {
+				if (level.getBlockState(target).isAir()) return enter(Phase.PICKUP);
+				if (canMineFromHere(bot)) {
 					bot.nav().stop();
 					return enter(Phase.MINE);
 				}
 				bot.nav().setGoal(new Goal.Adjacent(target));
 				Navigator.Status s = bot.nav().tick();
 				if (s == Navigator.Status.FAILED) return Status.FAILED;
-				if (s == Navigator.Status.ARRIVED && !inReach(bot)) return Status.FAILED;
+				if (s == Navigator.Status.ARRIVED && !canMineFromHere(bot)) return Status.FAILED;
 			}
 			case MINE -> {
-				if (!inReach(bot)) return enter(Phase.WALK);
+				if (!canMineFromHere(bot)) return enter(Phase.WALK);
 				if (bot.controls().mine(target)) {
-					return bot.mc().level.getBlockState(target).isAir() ? enter(Phase.PICKUP) : Status.FAILED;
+					return level.getBlockState(target).isAir() ? enter(Phase.PICKUP) : Status.FAILED;
 				}
 				if (phaseTicks > MINE_TIMEOUT) return Status.FAILED;
 			}
@@ -83,8 +86,14 @@ public final class Harvest {
 		return Status.RUNNING;
 	}
 
-	private boolean inReach(Bot bot) {
-		return bot.player().isWithinBlockInteractionRange(target, 0.0)
-				&& new Goal.Adjacent(target).isEnd(bot.player().getBlockX(), bot.player().getBlockY(), bot.player().getBlockZ());
+	/** In reach and either standing next to it or its face toward us is open (logs above head, exposed ore). */
+	private boolean canMineFromHere(Bot bot) {
+		LocalPlayer p = bot.player();
+		if (!Navigator.settled(p) || !p.isWithinBlockInteractionRange(target, -0.5)) return false;
+		BlockPos feet = Navigator.feet(p);
+		if (new Goal.Adjacent(target).isEnd(feet.getX(), feet.getY(), feet.getZ())) return true;
+		ClientLevel level = bot.mc().level;
+		BlockPos front = target.relative(bot.controls().faceToward(target));
+		return level.getBlockState(front).getCollisionShape(level, front).isEmpty();
 	}
 }

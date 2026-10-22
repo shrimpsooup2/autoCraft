@@ -1,16 +1,211 @@
 package com.autocraft.behavior;
 
 import com.autocraft.Bot;
+import com.autocraft.Chat;
+import com.autocraft.control.InvUtil;
+import com.autocraft.goal.Job;
+import com.autocraft.goal.Requirement;
+import com.autocraft.path.Goal;
+import com.autocraft.path.Navigator;
+import com.autocraft.travel.BoatTravel;
+import com.autocraft.world.BlockUtil;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.util.Mth;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.level.block.Block;
+import org.jspecify.annotations.Nullable;
 
-// TRANSIENT STUB: replaced by its owning slice.
+/**
+ * The actual job: pick up matching drops, mine the nearest good source block, otherwise explore
+ * (ores: go to the best Y level and tunnel; surface resources: keep walking the current heading).
+ */
 public final class CollectBehavior implements Behavior {
+	private static final int SCAN_CHUNKS = 5;
+	private static final int SCAN_MAX = 96;
+	private static final int SCAN_MAX_AGE = 40;
+	private static final double DROP_RADIUS = 12;
+	private static final int BLACKLIST_TICKS = 20 * 60 * 5;
+	private static final int TUNNEL_LEG = 24;
+	private static final int WALK_LEG = 64;
+
+	private final Map<BlockPos, Long> blacklist = new HashMap<>();
+	private final Set<Integer> unreachableDrops = new HashSet<>();
+	private long tick;
+	private @Nullable String lastTarget;
+	private @Nullable Harvest harvest;
+	private @Nullable BoatTravel boat;
+	private @Nullable Goal exploreGoal;
+	private @Nullable Direction heading;
+	private @Nullable ItemEntity chasing;
+
 	@Override
 	public String name() {
 		return "collect";
 	}
 
 	@Override
+	public void reset() {
+		blacklist.clear();
+		unreachableDrops.clear();
+		lastTarget = null;
+		harvest = null;
+		boat = null;
+		exploreGoal = null;
+		chasing = null;
+	}
+
+	@Override
 	public boolean tick(Bot bot) {
-		return false;
+		tick++;
+		Requirement target = bot.currentTarget();
+		if (target == null || target.dimension() != bot.dimension()) return false;
+		LocalPlayer p = bot.player();
+		Set<Block> harvestable = harvestableSources(p, target);
+		if (harvestable.isEmpty()) return false; // gear planner will bring the right tool
+		onTargetChange(bot, target);
+
+		if (boat != null) {
+			BoatTravel.Status s = boat.tick(bot);
+			if (s == BoatTravel.Status.RUNNING) return true;
+			if (s == BoatTravel.Status.FAILED) turn();
+			boat = null;
+			exploreGoal = null;
+		}
+		if (harvest != null) {
+			Harvest.Status s = harvest.tick(bot);
+			if (s == Harvest.Status.RUNNING) {
+				bot.setStatus("mining " + target.name() + " at " + harvest.target().toShortString());
+				return true;
+			}
+			if (s == Harvest.Status.FAILED) blacklist.put(harvest.target(), tick + BLACKLIST_TICKS);
+			bot.scanner().forget(harvest.target());
+			harvest = null;
+		}
+		if (chaseDrops(bot, target)) return true;
+
+		BlockPos source = pickSource(bot, target, harvestable);
+		if (source != null) {
+			exploreGoal = null;
+			harvest = new Harvest(source, target.counts());
+			harvest.tick(bot);
+			bot.setStatus("mining " + target.name() + " at " + source.toShortString());
+			return true;
+		}
+		explore(bot, target);
+		return true;
+	}
+
+	private void onTargetChange(Bot bot, Requirement target) {
+		if (target.name().equals(lastTarget)) return;
+		Job job = bot.job();
+		if (lastTarget != null && job != null) {
+			for (Requirement r : job.requirements()) {
+				if (r.name().equals(lastTarget) && job.missing(bot.player(), r) == 0) Chat.info("Collected " + r.amount() + " " + r.name() + ".");
+			}
+		}
+		lastTarget = target.name();
+		harvest = null;
+		chasing = null;
+		exploreGoal = null;
+		bot.nav().stop();
+	}
+
+	/** Source blocks we can actually get drops from with the tools carried. */
+	private static Set<Block> harvestableSources(LocalPlayer p, Requirement target) {
+		Set<Block> out = new HashSet<>();
+		for (Block b : target.sources()) {
+			if (InvUtil.canHarvest(p, b.defaultBlockState())) out.add(b);
+		}
+		return out;
+	}
+
+	private boolean chaseDrops(Bot bot, Requirement target) {
+		if (chasing == null || !chasing.isAlive()) {
+			chasing = null;
+			List<ItemEntity> drops = bot.scanner().items(DROP_RADIUS, target.counts());
+			drops.removeIf(e -> unreachableDrops.contains(e.getId()));
+			if (drops.isEmpty()) return false;
+			chasing = drops.getFirst();
+		}
+		bot.nav().setGoal(new Goal.Near(chasing.blockPosition(), 0));
+		if (bot.nav().tick() == Navigator.Status.FAILED) {
+			unreachableDrops.add(chasing.getId());
+			chasing = null;
+			bot.nav().stop();
+			return false;
+		}
+		bot.setStatus("picking up " + target.name());
+		return true;
+	}
+
+	/** Nearest safe source block, weighting vertical distance (digging is slower than walking). */
+	private @Nullable BlockPos pickSource(Bot bot, Requirement target, Set<Block> harvestable) {
+		ClientLevel level = bot.mc().level;
+		BlockPos feet = Navigator.feet(bot.player());
+		String key = target.name() + "@" + target.dimension();
+		List<BlockPos> found = bot.scanner().findBlocksCached(key, s -> harvestable.contains(s.getBlock()), SCAN_CHUNKS, SCAN_MAX, SCAN_MAX_AGE);
+		BlockPos best = null;
+		double bestScore = Double.MAX_VALUE;
+		for (BlockPos pos : found) {
+			Long until = blacklist.get(pos);
+			if (until != null && until > tick) continue;
+			if (!BlockUtil.isBreakable(level, pos, level.getBlockState(pos))) continue;
+			double dx = pos.getX() - feet.getX(), dy = pos.getY() - feet.getY(), dz = pos.getZ() - feet.getZ();
+			double score = Math.sqrt(dx * dx + dz * dz) + Math.abs(dy) * 2;
+			if (score < bestScore) {
+				bestScore = score;
+				best = pos;
+			}
+		}
+		return best;
+	}
+
+	private void explore(Bot bot, Requirement target) {
+		LocalPlayer p = bot.player();
+		if (heading == null) heading = Direction.fromYRot(p.getYRot());
+		if (exploreGoal == null) exploreGoal = nextLeg(bot, target, Navigator.feet(p));
+		if (boat == null && target.strategy() != Requirement.Strategy.UNDERGROUND && exploreGoal instanceof Goal.XZ(int x, int z)) {
+			BlockPos dest = new BlockPos(x, p.getBlockY(), z);
+			if (BoatTravel.worthIt(bot, dest)) {
+				boat = new BoatTravel(dest);
+				bot.nav().stop();
+				return;
+			}
+		}
+		bot.nav().setGoal(exploreGoal);
+		Navigator.Status s = bot.nav().tick();
+		if (s == Navigator.Status.FAILED) {
+			turn();
+			exploreGoal = null;
+			bot.nav().stop();
+		} else if (s == Navigator.Status.ARRIVED) {
+			exploreGoal = null;
+			bot.nav().stop();
+		}
+		bot.setStatus("exploring " + heading.getName() + " for " + target.name());
+	}
+
+	private Goal nextLeg(Bot bot, Requirement target, BlockPos feet) {
+		ClientLevel level = bot.mc().level;
+		int dx = heading.getStepX(), dz = heading.getStepZ();
+		if (target.strategy() == Requirement.Strategy.UNDERGROUND) {
+			int minY = level.getMinY() + 5, maxY = target.dimension() == Requirement.Dim.NETHER ? 118 : level.getMaxY() - 5;
+			int y = Mth.clamp(target.preferredY(), minY, maxY);
+			if (Math.abs(feet.getY() - y) > 2) return new Goal.YLevel(y);
+			return new Goal.XYZ(feet.getX() + dx * TUNNEL_LEG, y, feet.getZ() + dz * TUNNEL_LEG);
+		}
+		return new Goal.XZ(feet.getX() + dx * WALK_LEG, feet.getZ() + dz * WALK_LEG);
+	}
+
+	private void turn() {
+		if (heading != null) heading = heading.getClockWise();
 	}
 }
