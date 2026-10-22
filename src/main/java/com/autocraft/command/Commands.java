@@ -90,7 +90,8 @@ public final class Commands {
 		Job job = bot.job();
 		Chat.info((bot.isPaused() ? "[paused] " : "") + bot.activeBehavior() + ": " + bot.status());
 		if (job != null) Chat.info("Progress: " + job.progress(p));
-		if (bot.subTask() != null) Chat.info("Prerequisite: " + bot.subTask());
+		Requirement need = bot.activeNeed();
+		if (need != null) Chat.info("Prerequisite: " + need);
 		Chat.info(String.format("HP %.0f/20, food %d, pos %s", p.getHealth(), p.getFoodData().getFoodLevel(), p.blockPosition().toShortString()));
 	}
 

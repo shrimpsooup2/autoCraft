@@ -39,9 +39,9 @@ public final class BlockUtil {
 				|| s.is(Blocks.POINTED_DRIPSTONE);
 	}
 
-	/** The player's body can occupy this block (air, plants, water) without being hurt. */
+	/** The player's body can occupy this block (air, plants, water) without being hurt or teleported. */
 	public static boolean isPassable(BlockGetter level, BlockPos pos, BlockState s) {
-		if (isDangerous(s)) return false;
+		if (isDangerous(s) || s.is(Blocks.NETHER_PORTAL) || s.is(Blocks.END_PORTAL)) return false;
 		if (!s.getFluidState().isEmpty() && !isWater(s)) return false;
 		return s.getCollisionShape(level, pos).isEmpty();
 	}

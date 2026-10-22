@@ -11,14 +11,18 @@ import com.autocraft.behavior.FallReflex;
 import com.autocraft.behavior.FinishBehavior;
 import com.autocraft.behavior.GearBehavior;
 import com.autocraft.behavior.GotoBehavior;
+import com.autocraft.behavior.PortalBehavior;
 import com.autocraft.behavior.StorageBehavior;
 import com.autocraft.control.Controls;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
+import com.autocraft.goal.Requirement.Dim;
 import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
 import com.autocraft.world.WorldScanner;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
@@ -29,6 +33,14 @@ import org.jspecify.annotations.Nullable;
  * Order matters: survival reflexes first, the actual job last.
  */
 public final class Bot {
+	/** Planners that can ask the collector for prerequisite materials, highest priority first. */
+	public enum NeedOwner {
+		/** Tools, weapons, armor, nether kit. */
+		GEAR,
+		/** Portal materials (obsidian). */
+		TRAVEL
+	}
+
 	private static @Nullable Bot instance;
 
 	private final Minecraft mc;
@@ -37,11 +49,12 @@ public final class Bot {
 	private final Navigator nav;
 	private final ThreatNet threatNet;
 	private final List<Behavior> behaviors;
+	private final Map<NeedOwner, Requirement> needs = new EnumMap<>(NeedOwner.class);
 
 	private @Nullable Job job;
 	private @Nullable Goal gotoGoal;
-	private @Nullable Requirement subTask;
 	private @Nullable BlockPos base;
+	private Dim baseDim = Dim.OVERWORLD;
 	private boolean running;
 	private boolean paused;
 	private boolean logoffWhenDone = true;
@@ -64,6 +77,7 @@ public final class Bot {
 				new FinishBehavior(),
 				new GearBehavior(),
 				new StorageBehavior(),
+				new PortalBehavior(),
 				new CollectBehavior());
 	}
 
@@ -111,7 +125,7 @@ public final class Bot {
 	private void begin(@Nullable Job newJob, @Nullable Goal newGoto) {
 		job = newJob;
 		gotoGoal = newGoto;
-		subTask = null;
+		needs.clear();
 		resetBehaviors();
 		running = true;
 		paused = false;
@@ -123,7 +137,7 @@ public final class Bot {
 		running = false;
 		paused = false;
 		gotoGoal = null;
-		subTask = null;
+		needs.clear();
 		resetBehaviors();
 		controls.releaseAll();
 		threatNet.save();
@@ -143,7 +157,7 @@ public final class Bot {
 		paused = false;
 		job = null;
 		gotoGoal = null;
-		subTask = null;
+		needs.clear();
 		resetBehaviors();
 		scanner.clear();
 		threatNet.save();
@@ -152,6 +166,41 @@ public final class Bot {
 	private void resetBehaviors() {
 		nav.stop();
 		for (Behavior b : behaviors) b.reset();
+	}
+
+	// ---- prerequisites --------------------------------------------------------------------------
+
+	/** Ask the collector for materials before the job ({@code null} clears the owner's need). */
+	public void setNeed(NeedOwner owner, @Nullable Requirement r) {
+		if (r == null) needs.remove(owner);
+		else needs.put(owner, r);
+	}
+
+	public @Nullable Requirement need(NeedOwner owner) {
+		return needs.get(owner);
+	}
+
+	/** Highest-priority outstanding need, or null. */
+	public @Nullable Requirement activeNeed() {
+		for (NeedOwner o : NeedOwner.values()) {
+			Requirement r = needs.get(o);
+			if (r != null) return r;
+		}
+		return null;
+	}
+
+	/** What the collector works on: the active need, else the job's next unmet requirement. */
+	public @Nullable Requirement currentTarget() {
+		Requirement need = activeNeed();
+		if (need != null) return need;
+		return job == null || mc.player == null ? null : job.nextUnmet(mc.player);
+	}
+
+	/** What the gear planner must equip for: the travel need if any, else the job's next unmet requirement. */
+	public @Nullable Requirement targetForGear() {
+		Requirement travel = needs.get(NeedOwner.TRAVEL);
+		if (travel != null) return travel;
+		return job == null || mc.player == null ? null : job.nextUnmet(mc.player);
 	}
 
 	// ---- accessors ------------------------------------------------------------------------------
@@ -168,12 +217,14 @@ public final class Bot {
 	public @Nullable Job job() { return job; }
 	public @Nullable Goal gotoGoal() { return gotoGoal; }
 
-	/** Prerequisite the collector should gather before the job itself (set by the gear/tool planner). */
-	public @Nullable Requirement subTask() { return subTask; }
-	public void setSubTask(@Nullable Requirement r) { subTask = r; }
+	public Dim dimension() { return Dim.of(mc.level); }
 
 	public @Nullable BlockPos base() { return base; }
-	public void setBase(@Nullable BlockPos pos) { base = pos; }
+	public Dim baseDimension() { return baseDim; }
+	public void setBase(@Nullable BlockPos pos) {
+		base = pos;
+		baseDim = dimension();
+	}
 
 	public boolean logoffWhenDone() { return logoffWhenDone; }
 	public void setLogoffWhenDone(boolean v) { logoffWhenDone = v; }

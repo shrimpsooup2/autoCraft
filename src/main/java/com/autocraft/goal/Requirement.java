@@ -3,6 +3,7 @@ package com.autocraft.goal;
 import java.util.Set;
 import java.util.function.Predicate;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 
@@ -15,8 +16,10 @@ import net.minecraft.world.level.block.state.BlockState;
  * @param amount     how many items are wanted
  * @param strategy   where to explore when no source block is in range
  * @param preferredY Y level to explore at for {@link Strategy#UNDERGROUND}
+ * @param dimension  dimension the sources are found in
  */
-public record Requirement(String name, Predicate<ItemStack> counts, Set<Block> sources, int amount, Strategy strategy, int preferredY) {
+public record Requirement(String name, Predicate<ItemStack> counts, Set<Block> sources, int amount, Strategy strategy, int preferredY,
+		Dim dimension) {
 	public enum Strategy {
 		/** Walk the surface (logs, sand, clay). */
 		SURFACE,
@@ -26,16 +29,24 @@ public record Requirement(String name, Predicate<ItemStack> counts, Set<Block> s
 		ANYWHERE
 	}
 
+	public enum Dim {
+		OVERWORLD, NETHER;
+
+		public static Dim of(Level level) {
+			return level.dimension() == Level.NETHER ? NETHER : OVERWORLD;
+		}
+	}
+
 	public boolean isSource(BlockState state) {
 		return sources.contains(state.getBlock());
 	}
 
 	public Requirement withAmount(int newAmount) {
-		return new Requirement(name, counts, sources, newAmount, strategy, preferredY);
+		return new Requirement(name, counts, sources, newAmount, strategy, preferredY, dimension);
 	}
 
 	@Override
 	public String toString() {
-		return amount + " " + name;
+		return amount + " " + name + (dimension == Dim.NETHER ? " (nether)" : "");
 	}
 }
