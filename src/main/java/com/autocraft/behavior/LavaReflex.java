@@ -95,7 +95,8 @@ public final class LavaReflex implements Behavior {
 		return true;
 	}
 
-	private static boolean isFireResistance(ItemStack s) {
+	/** Any potion that grants fire resistance (also used by the fall reflex). */
+	static boolean isFireResistance(ItemStack s) {
 		PotionContents potion = s.get(DataComponents.POTION_CONTENTS);
 		if (potion == null) return false;
 		for (MobEffectInstance e : potion.getAllEffects()) {
