@@ -7,6 +7,7 @@ import com.autocraft.goal.Requirement;
 import com.autocraft.goal.Resources;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.function.Predicate;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.world.item.Item;
@@ -33,17 +34,27 @@ public final class Planner {
 	/** Gather a little extra of cheap materials so one trip covers the whole tool chain. */
 	private static final int MIN_LOGS = 6;
 	private static final int MIN_STONE = 16;
+	/** Raw ore to gather per trip: covers pickaxe + flint and steel + shield/bucket without a second trip. */
+	private static final int MIN_ORE = 5;
 
 	private final LocalPlayer p;
 	private final Requirement.Dim dimension;
 	private final boolean tableNearby;
 	private final boolean furnaceNearby;
+	private final Predicate<ItemStack> protect;
 
-	public Planner(LocalPlayer p, Requirement.Dim dimension, boolean tableNearby, boolean furnaceNearby) {
+	/** @param protect job loot: never smelted beyond what the gear needs */
+	public Planner(LocalPlayer p, Requirement.Dim dimension, boolean tableNearby, boolean furnaceNearby, Predicate<ItemStack> protect) {
 		this.p = p;
 		this.dimension = dimension;
 		this.tableNearby = tableNearby;
 		this.furnaceNearby = furnaceNearby;
+		this.protect = protect;
+	}
+
+	/** Any carried stack matches. */
+	public boolean hasAny(Predicate<ItemStack> pred) {
+		return InvUtil.find(p, pred) >= 0;
 	}
 
 	/** Next step toward carrying {@code count} of {@code want}. */
@@ -120,15 +131,18 @@ public final class Planner {
 	}
 
 	private Step ingot(Item raw, String resource, int missing) {
-		if (InvUtil.count(p, s -> s.is(raw)) < missing) return new Gather(Resources.get(resource, missing));
+		int carried = InvUtil.count(p, s -> s.is(raw));
+		if (carried < missing) return new Gather(Resources.get(resource, Math.max(missing, MIN_ORE)));
 		if (!furnaceNearby && InvUtil.count(p, s -> s.is(Items.FURNACE)) == 0) {
 			Step f = next(Items.FURNACE, 1);
 			if (!(f instanceof Done)) return f;
 		}
-		if (Smelter.fuelValue(p) < missing) {
-			return new Gather(Resources.get("coal", (missing + 7) / 8));
+		// smelt all spare ore in one furnace session, but never more job loot than needed
+		int amount = protect.test(new ItemStack(raw)) ? missing : Math.min(carried, 64);
+		if (Smelter.fuelValue(p) < amount) {
+			return new Gather(Resources.get("coal", (amount + 7) / 8));
 		}
-		return new Smelt(raw, missing);
+		return new Smelt(raw, amount);
 	}
 
 	/** Cobblestone, cobbled deepslate or blackstone: anything stone tools and furnaces accept. */

@@ -4,9 +4,11 @@ import com.autocraft.control.InvUtil;
 import com.autocraft.world.BlockUtil;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Reference2IntOpenHashMap;
+import java.util.function.Predicate;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
@@ -33,10 +35,10 @@ final class PathContext {
 	private final Reference2IntOpenHashMap<BlockState> breakTicks = new Reference2IntOpenHashMap<>();
 	private final BlockPos.MutableBlockPos mpos = new BlockPos.MutableBlockPos();
 
-	PathContext(ClientLevel level, LocalPlayer player) {
+	PathContext(ClientLevel level, LocalPlayer player, Predicate<ItemStack> scaffold) {
 		this.level = level;
 		this.player = player;
-		this.throwaway = InvUtil.count(player, InvUtil::isThrowaway);
+		this.throwaway = InvUtil.count(player, scaffold);
 		this.minY = level.getMinY();
 		this.maxY = level.getMaxY();
 	}

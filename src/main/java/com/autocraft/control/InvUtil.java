@@ -35,6 +35,15 @@ public final class InvUtil {
 		return THROWAWAY.contains(s.getItem());
 	}
 
+	/**
+	 * What to build pillars/bridges/frame corners with: throwaway blocks that {@code keep} doesn't protect
+	 * (job loot), falling back to any throwaway block when nothing else is carried.
+	 */
+	public static Predicate<ItemStack> scaffold(Player p, Predicate<ItemStack> keep) {
+		Predicate<ItemStack> spare = s -> isThrowaway(s) && !keep.test(s);
+		return find(p, spare) >= 0 ? spare : InvUtil::isThrowaway;
+	}
+
 	public static ItemStack get(Player p, int invIndex) {
 		return p.getInventory().getItem(invIndex);
 	}

@@ -183,7 +183,8 @@ public final class CombatBehavior implements Behavior {
 		}
 	}
 
-	private static void selectWeapon(LocalPlayer p) {
+	/** Best melee weapon into the main hand (shared with hunting). */
+	static void selectWeapon(LocalPlayer p) {
 		int best = -1;
 		double bestDamage = 1;
 		for (int i = 0; i < InvUtil.MAIN_SIZE; i++) {

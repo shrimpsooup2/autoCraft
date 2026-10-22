@@ -9,6 +9,7 @@ import com.autocraft.behavior.EatReflex;
 import com.autocraft.behavior.EffectReflex;
 import com.autocraft.behavior.FallReflex;
 import com.autocraft.behavior.FinishBehavior;
+import com.autocraft.behavior.FoodBehavior;
 import com.autocraft.behavior.GearBehavior;
 import com.autocraft.behavior.GotoBehavior;
 import com.autocraft.behavior.LavaReflex;
@@ -27,6 +28,7 @@ import java.util.Map;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.item.ItemStack;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -66,7 +68,7 @@ public final class Bot {
 		this.mc = mc;
 		this.controls = new Controls(mc);
 		this.scanner = new WorldScanner(mc);
-		this.nav = new Navigator(mc, controls);
+		this.nav = new Navigator(mc, controls, this::isJobItem);
 		this.threatNet = ThreatNet.loadOrTrain();
 		this.behaviors = List.of(
 				new LavaReflex(),
@@ -78,6 +80,7 @@ public final class Bot {
 				new GotoBehavior(),
 				new FinishBehavior(),
 				new GearBehavior(),
+				new FoodBehavior(),
 				new StorageBehavior(),
 				new PortalBehavior(),
 				new CollectBehavior());
@@ -218,6 +221,11 @@ public final class Bot {
 	public boolean isPaused() { return paused; }
 	public @Nullable Job job() { return job; }
 	public @Nullable Goal gotoGoal() { return gotoGoal; }
+
+	/** Counts toward the current job (never junk, never used as scaffolding while alternatives exist). */
+	public boolean isJobItem(ItemStack s) {
+		return job != null && !job.matching(s).isEmpty();
+	}
 
 	public Dim dimension() { return Dim.of(mc.level); }
 

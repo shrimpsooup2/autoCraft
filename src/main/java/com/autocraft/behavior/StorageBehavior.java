@@ -10,6 +10,7 @@ import com.autocraft.goal.Requirement;
 import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
 import java.util.Set;
+import java.util.function.Predicate;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.component.DataComponents;
@@ -150,14 +151,16 @@ public final class StorageBehavior implements Behavior {
 		return s.is(ItemTags.LOGS) || s.is(ItemTags.PLANKS) || KEEP.contains(item);
 	}
 
+	/** A stack to drop: non-keeper items first, then surplus spare scaffolding. Job loot is never junk. */
 	private static int findJunk(Bot bot) {
 		LocalPlayer p = bot.player();
-		int throwaway = InvUtil.count(p, InvUtil::isThrowaway);
+		Predicate<ItemStack> spareBlocks = s -> InvUtil.isThrowaway(s) && !bot.isJobItem(s);
+		int throwaway = InvUtil.count(p, spareBlocks);
 		int smallestThrowaway = -1;
 		for (int i = 0; i < InvUtil.MAIN_SIZE; i++) {
 			ItemStack s = p.getInventory().getItem(i);
-			if (s.isEmpty()) continue;
-			if (InvUtil.isThrowaway(s)) {
+			if (s.isEmpty() || bot.isJobItem(s)) continue;
+			if (spareBlocks.test(s)) {
 				if (smallestThrowaway < 0 || s.getCount() < p.getInventory().getItem(smallestThrowaway).getCount()) smallestThrowaway = i;
 				continue;
 			}

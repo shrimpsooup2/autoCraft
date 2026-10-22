@@ -77,7 +77,7 @@ public final class PortalBuilder {
 					if (at != null && ticks - at < PLACE_WAIT) return Status.RUNNING; // wait for the server
 					boolean ok = pl.obsidian()
 							? bot.controls().place(pl.pos(), st -> st.is(Items.OBSIDIAN))
-							: bot.controls().place(pl.pos(), InvUtil::isThrowaway);
+							: bot.controls().place(pl.pos(), InvUtil.scaffold(p, bot::isJobItem));
 					if (!ok && ++placeFailures > 20) return Status.FAILED;
 					placedAt.put(pl.pos(), ticks);
 					return Status.RUNNING;

@@ -2,10 +2,13 @@ package com.autocraft.path;
 
 import com.autocraft.Chat;
 import com.autocraft.control.Controls;
+import com.autocraft.control.InvUtil;
 import java.util.Objects;
+import java.util.function.Predicate;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.item.ItemStack;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -24,6 +27,8 @@ public final class Navigator {
 
 	private final Minecraft mc;
 	private final Controls controls;
+	/** Items the path must not consume as scaffolding while other blocks are available (job loot). */
+	private final Predicate<ItemStack> keep;
 	private @Nullable Goal goal;
 	private Status status = Status.IDLE;
 	private @Nullable Pathfinder search;
@@ -33,10 +38,12 @@ public final class Navigator {
 	private int failures;
 	private int cooldown;
 	private double bestHeuristic = Double.MAX_VALUE;
+	private Predicate<ItemStack> searchScaffold = InvUtil::isThrowaway;
 
-	public Navigator(Minecraft mc, Controls controls) {
+	public Navigator(Minecraft mc, Controls controls, Predicate<ItemStack> keep) {
 		this.mc = mc;
 		this.controls = controls;
+		this.keep = keep;
 	}
 
 	public void setGoal(Goal newGoal) {
@@ -85,7 +92,8 @@ public final class Navigator {
 		}
 		if (search == null) {
 			if (!settled(p)) return Status.MOVING; // let falls/jumps land before planning
-			search = new Pathfinder(new PathContext(mc.level, p), feet, goal);
+			searchScaffold = InvUtil.scaffold(p, keep);
+			search = new Pathfinder(new PathContext(mc.level, p, searchScaffold), feet, goal);
 			searchStart = feet;
 			searchTicks = 0;
 		}
@@ -99,7 +107,7 @@ public final class Navigator {
 			cooldown = RETRY_COOLDOWN;
 			return failures >= MAX_FAILURES ? fail("no path") : Status.MOVING;
 		}
-		executor = new PathExecutor(result.steps(), searchStart);
+		executor = new PathExecutor(result.steps(), searchStart, searchScaffold);
 		return Status.MOVING;
 	}
 

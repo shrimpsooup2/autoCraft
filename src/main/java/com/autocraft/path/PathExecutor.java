@@ -4,9 +4,11 @@ import com.autocraft.control.Controls;
 import com.autocraft.control.InvUtil;
 import com.autocraft.world.BlockUtil;
 import java.util.List;
+import java.util.function.Predicate;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 
@@ -25,13 +27,15 @@ final class PathExecutor {
 
 	private final List<Step> steps;
 	private final BlockPos start;
+	private final Predicate<ItemStack> scaffold;
 	private int index;
 	private int moveTicks;
 	private int mineTicks;
 
-	PathExecutor(List<Step> steps, BlockPos start) {
+	PathExecutor(List<Step> steps, BlockPos start, Predicate<ItemStack> scaffold) {
 		this.steps = steps;
 		this.start = start;
+		this.scaffold = scaffold;
 	}
 
 	Result tick(ClientLevel level, LocalPlayer p, Controls controls) {
@@ -57,7 +61,7 @@ final class PathExecutor {
 		// 2. place a block (bridge floor or pillar)
 		BlockPos place = step.place();
 		if (place != null && level.getBlockState(place).canBeReplaced()) {
-			if (InvUtil.count(p, InvUtil::isThrowaway) == 0) return Result.REPLAN;
+			if (InvUtil.count(p, scaffold) == 0) return Result.REPLAN;
 			return step.type() == Step.Type.PILLAR ? pillar(p, controls, place, from) : bridge(p, controls, place);
 		}
 
@@ -117,7 +121,7 @@ final class PathExecutor {
 		}
 		controls.jump();
 		if (p.getY() >= place.getY() + 1.02) {
-			controls.place(place, InvUtil::isThrowaway);
+			controls.place(place, scaffold);
 		}
 		if (++moveTicks > STUCK_TICKS) return Result.REPLAN;
 		return Result.RUNNING;
@@ -125,7 +129,7 @@ final class PathExecutor {
 
 	private Result bridge(LocalPlayer p, Controls controls, BlockPos place) {
 		controls.sneak(); // never slide off the edge while placing
-		if (!controls.place(place, InvUtil::isThrowaway)) return Result.REPLAN;
+		if (!controls.place(place, scaffold)) return Result.REPLAN;
 		return Result.RUNNING;
 	}
 

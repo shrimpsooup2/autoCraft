@@ -10,6 +10,9 @@ import com.autocraft.craft.Planner;
 import com.autocraft.craft.Planner.Step;
 import com.autocraft.craft.Smelter;
 import com.autocraft.goal.Requirement;
+import com.autocraft.path.Goal;
+import com.autocraft.path.Navigator;
+import com.autocraft.world.BlockUtil;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -19,6 +22,7 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.tags.ItemTags;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.monster.piglin.PiglinAi;
@@ -31,6 +35,7 @@ import net.minecraft.world.item.equipment.Equippable;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -44,6 +49,7 @@ public final class GearBehavior implements Behavior {
 	private static final double HOSTILE_RADIUS = 8;
 	private static final List<Item> PICKAXES = List.of(Items.WOODEN_PICKAXE, Items.STONE_PICKAXE, Items.IRON_PICKAXE, Items.DIAMOND_PICKAXE);
 	private static final int NETHER_BLOCKS = 32;
+	private static final int WATER_SEARCH_EVERY = 100;
 
 	/**
 	 * Something to have. Required wants may gather/smelt; optional ones only run when the very next step
@@ -65,6 +71,9 @@ public final class GearBehavior implements Behavior {
 	private final List<BlockPos> placed = new ArrayList<>();
 	private int sincePlan = PLAN_EVERY;
 	private int failures;
+	private @Nullable BlockPos water;
+	private int waterTicks;
+	private int sinceWaterSearch = WATER_SEARCH_EVERY;
 
 	@Override
 	public String name() {
@@ -95,6 +104,7 @@ public final class GearBehavior implements Behavior {
 			pickup = null;
 		}
 		if (equip(bot, p)) return true;
+		if (fillBucket(bot, p)) return true;
 		if (++sincePlan < PLAN_EVERY) return false;
 		sincePlan = 0;
 		if (!Threats.collect(bot, HOSTILE_RADIUS).isEmpty()) return false;
@@ -176,7 +186,8 @@ public final class GearBehavior implements Behavior {
 	// ---- planning -------------------------------------------------------------------------------
 
 	private Step plan(Bot bot, LocalPlayer p) {
-		Planner planner = new Planner(p, bot.dimension(), stationNearby(bot, Blocks.CRAFTING_TABLE), stationNearby(bot, Blocks.FURNACE));
+		Planner planner = new Planner(p, bot.dimension(), stationNearby(bot, Blocks.CRAFTING_TABLE), stationNearby(bot, Blocks.FURNACE),
+				bot::isJobItem);
 		for (Want w : wants(bot, p, bot.targetForGear())) {
 			Step s = w.plan.apply(planner);
 			if (s instanceof Planner.Done) continue;
@@ -204,6 +215,7 @@ public final class GearBehavior implements Behavior {
 		if (weapon < 5) wants.add(Want.optional(Items.STONE_SWORD));
 		if (weapon < 6) wants.add(Want.optional(Items.IRON_SWORD));
 		if (InvUtil.count(p, s -> s.is(Items.SHIELD)) == 0) wants.add(Want.optional(Items.SHIELD));
+		wants.add(new Want(GearBehavior::bucket, false, i -> i == Items.BUCKET));
 		wants.add(new Want(Planner::boat, false, item -> item.getDefaultInstance().is(ItemTags.BOATS)));
 		return wants;
 	}
@@ -211,6 +223,7 @@ public final class GearBehavior implements Behavior {
 	private static void addNetherKit(List<Want> wants, LocalPlayer p) {
 		if (!InvUtil.canHarvest(p, Blocks.GOLD_ORE.defaultBlockState())) wants.add(Want.required(Items.IRON_PICKAXE));
 		wants.add(Want.required(Items.FLINT_AND_STEEL));
+		wants.add(new Want(GearBehavior::bucket, true, i -> i == Items.BUCKET)); // obsidian casting, fall clutches
 		if (!PiglinAi.isWearingSafeArmor(p)) wants.add(Want.required(Items.GOLDEN_BOOTS));
 		if (InvUtil.count(p, InvUtil::isThrowaway) < NETHER_BLOCKS) {
 			Requirement blocks = new Requirement("building blocks", InvUtil::isThrowaway,
@@ -258,6 +271,48 @@ public final class GearBehavior implements Behavior {
 	private static boolean netherTripAhead(Bot bot, LocalPlayer p) {
 		Requirement next = bot.job() == null ? null : bot.job().nextUnmet(p);
 		return next != null && next.dimension() == Requirement.Dim.NETHER && bot.dimension() == Requirement.Dim.OVERWORLD;
+	}
+
+	/** A bucket counts whether it's empty or already holds water. */
+	private static Step bucket(Planner planner) {
+		return planner.hasAny(s -> s.is(Items.BUCKET) || s.is(Items.WATER_BUCKET)) ? new Planner.Done() : planner.next(Items.BUCKET, 1);
+	}
+
+	/** Overworld: carry water, not an empty bucket — walk to the nearest water source and scoop it. */
+	private boolean fillBucket(Bot bot, LocalPlayer p) {
+		if (bot.dimension() != Requirement.Dim.OVERWORLD || InvUtil.count(p, s -> s.is(Items.WATER_BUCKET)) > 0
+				|| InvUtil.count(p, s -> s.is(Items.BUCKET)) == 0) {
+			water = null;
+			return false;
+		}
+		if (water == null) {
+			if (++sinceWaterSearch < WATER_SEARCH_EVERY) return false;
+			sinceWaterSearch = 0;
+			List<BlockPos> found = bot.scanner().findBlocks(s -> BlockUtil.isWater(s) && s.getFluidState().isSource(), 2, 1);
+			if (found.isEmpty()) return false;
+			water = found.getFirst();
+			waterTicks = 0;
+		}
+		if (++waterTicks > 20 * 30 || !bot.mc().level.getFluidState(water).isSource()) {
+			water = null;
+			return false;
+		}
+		bot.setStatus("filling the bucket with water");
+		if (Navigator.settled(p) && p.isWithinBlockInteractionRange(water, -0.5)) {
+			bot.nav().stop();
+			if (!InvUtil.select(p, s -> s.is(Items.BUCKET))) return false;
+			bot.controls().lookAt(Vec3.atCenterOf(water).add(0, 0.4, 0));
+			bot.controls().useItem(InteractionHand.MAIN_HAND);
+			water = null;
+			return true;
+		}
+		bot.nav().setGoal(new Goal.Near(water, 2));
+		if (bot.nav().tick() == Navigator.Status.FAILED) {
+			bot.nav().stop();
+			water = null;
+			return false;
+		}
+		return true;
 	}
 
 	// ---- equipping ------------------------------------------------------------------------------

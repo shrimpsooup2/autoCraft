@@ -66,7 +66,7 @@ public final class Harvest {
 				if (chasing == null || !chasing.isAlive()) {
 					List<ItemEntity> items = bot.scanner().items(8, drops);
 					items.removeIf(i -> i.blockPosition().distSqr(target) > 36);
-					if (items.isEmpty()) return phaseTicks > 10 ? Status.DONE : Status.RUNNING; // drops spawn a tick late
+					if (items.isEmpty()) return phaseTicks > 4 ? Status.DONE : Status.RUNNING; // drops spawn a tick or two late
 					chasing = items.getFirst();
 				}
 				bot.nav().setGoal(new Goal.Near(chasing.blockPosition(), 0));
