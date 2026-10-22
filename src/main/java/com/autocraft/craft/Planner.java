@@ -20,7 +20,7 @@ import net.minecraft.world.level.block.Blocks;
  * material, or nothing (already have it). Re-run after every action — inventory is the only state.
  */
 public final class Planner {
-	public sealed interface Step permits Craft, Smelt, Gather, Done {}
+	public sealed interface Step permits Craft, Smelt, Gather, Unavailable, Done {}
 
 	public record Craft(Recipe recipe) implements Step {}
 
@@ -29,6 +29,9 @@ public final class Planner {
 	public record Gather(Requirement requirement) implements Step {}
 
 	public record Done() implements Step {}
+
+	/** Needs something the bot can't gather by mining (e.g. gunpowder from creepers). */
+	public record Unavailable(String what) implements Step {}
 
 	private static final Done DONE = new Done();
 	/** Gather a little extra of cheap materials so one trip covers the whole tool chain. */
@@ -115,6 +118,9 @@ public final class Planner {
 			case DIAMOND -> new Gather(Resources.get("diamond", needed));
 			case FLINT -> new Gather(Resources.get("flint", needed));
 			case LOG -> new Gather(Resources.get("log", Math.max(needed, MIN_LOGS)));
+			case SUGAR_CANE -> new Gather(Resources.get("sugar_cane", needed));
+			case PAPER -> next(Items.PAPER, needed);
+			case GUNPOWDER -> new Unavailable("gunpowder");
 		};
 	}
 

@@ -39,7 +39,8 @@ public final class StorageBehavior implements Behavior {
 	private static final Set<Item> KEEP = Set.of(
 			Items.STICK, Items.COAL, Items.CHARCOAL, Items.RAW_IRON, Items.IRON_INGOT, Items.RAW_GOLD, Items.GOLD_INGOT,
 			Items.DIAMOND, Items.FLINT, Items.OBSIDIAN, Items.CRAFTING_TABLE, Items.FURNACE, Items.TORCH, Items.MILK_BUCKET,
-			Items.TOTEM_OF_UNDYING, Items.ENDER_PEARL, Items.ARROW, Items.HONEY_BOTTLE, Items.FIREWORK_ROCKET);
+			Items.TOTEM_OF_UNDYING, Items.ENDER_PEARL, Items.ARROW, Items.HONEY_BOTTLE, Items.FIREWORK_ROCKET,
+			Items.PAPER, Items.GUNPOWDER, Items.SUGAR_CANE);
 
 	private enum Mode { IDLE, SHULKER, BASE, RETURN }
 
@@ -92,6 +93,7 @@ public final class StorageBehavior implements Behavior {
 			}
 			case RETURN -> {
 				bot.setStatus("walking back to work");
+				if (bot.startFlight(returnPos)) return true;
 				bot.nav().setGoal(new Goal.Near(returnPos, 2));
 				if (bot.nav().tick() != Navigator.Status.MOVING) {
 					mode = Mode.IDLE;

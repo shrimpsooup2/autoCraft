@@ -145,6 +145,7 @@ public final class PortalBehavior implements Behavior {
 			bot.setStatus("stepping into the portal");
 			return true;
 		}
+		if (bot.startFlight(portal)) return true;
 		bot.nav().setGoal(beside);
 		if (bot.nav().tick() == Navigator.Status.FAILED) {
 			bot.nav().stop();

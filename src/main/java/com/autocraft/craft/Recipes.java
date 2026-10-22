@@ -22,7 +22,10 @@ public final class Recipes {
 		GOLD(s -> s.is(Items.GOLD_INGOT)),
 		DIAMOND(s -> s.is(Items.DIAMOND)),
 		FLINT(s -> s.is(Items.FLINT)),
-		LOG(s -> s.is(ItemTags.LOGS));
+		LOG(s -> s.is(ItemTags.LOGS)),
+		SUGAR_CANE(s -> s.is(Items.SUGAR_CANE)),
+		PAPER(s -> s.is(Items.PAPER)),
+		GUNPOWDER(s -> s.is(Items.GUNPOWDER));
 
 		public final Predicate<ItemStack> test;
 
@@ -68,9 +71,12 @@ public final class Recipes {
 	public static final Recipe BUCKET = shaped(Items.BUCKET, 1, List.of("I I", " I "), Map.of('I', Ingredient.IRON));
 	public static final Recipe FLINT_AND_STEEL = shaped(Items.FLINT_AND_STEEL, 1, List.of("IF"), Map.of('I', Ingredient.IRON, 'F', Ingredient.FLINT));
 	public static final Recipe GOLDEN_BOOTS = shaped(Items.GOLDEN_BOOTS, 1, List.of("G G", "G G"), Map.of('G', Ingredient.GOLD));
+	public static final Recipe PAPER = shaped(Items.PAPER, 3, List.of("SSS"), Map.of('S', Ingredient.SUGAR_CANE));
+	/** Plain flight-duration-1 rocket (special recipe: paper + gunpowder, no star). */
+	public static final Recipe FIREWORK_ROCKET = shaped(Items.FIREWORK_ROCKET, 3, List.of("PG"), Map.of('P', Ingredient.PAPER, 'G', Ingredient.GUNPOWDER));
 
 	private static final List<Recipe> ALL = List.of(
-			STICK, CRAFTING_TABLE, FURNACE, SHIELD, BUCKET, FLINT_AND_STEEL, GOLDEN_BOOTS,
+			STICK, CRAFTING_TABLE, FURNACE, SHIELD, BUCKET, FLINT_AND_STEEL, GOLDEN_BOOTS, PAPER, FIREWORK_ROCKET,
 			pickaxe(Items.WOODEN_PICKAXE, Ingredient.PLANKS), pickaxe(Items.STONE_PICKAXE, Ingredient.STONE),
 			pickaxe(Items.IRON_PICKAXE, Ingredient.IRON), pickaxe(Items.DIAMOND_PICKAXE, Ingredient.DIAMOND),
 			sword(Items.WOODEN_SWORD, Ingredient.PLANKS), sword(Items.STONE_SWORD, Ingredient.STONE),

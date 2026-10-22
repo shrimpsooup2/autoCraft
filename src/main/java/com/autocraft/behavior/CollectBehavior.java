@@ -8,7 +8,10 @@ import com.autocraft.goal.Requirement;
 import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
 import com.autocraft.travel.BoatTravel;
+import com.autocraft.travel.ElytraTravel;
+import com.autocraft.world.BiomeFinder;
 import com.autocraft.world.BlockUtil;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -20,6 +23,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Block;
 import org.jspecify.annotations.Nullable;
 
@@ -35,6 +39,8 @@ public final class CollectBehavior implements Behavior {
 	private static final int BLACKLIST_TICKS = 20 * 60 * 5;
 	private static final int TUNNEL_LEG = 24;
 	private static final int WALK_LEG = 64;
+	private static final int BIOME_SEARCH_CHUNKS = 12;
+	private static final int FLY_LEG = 320;
 
 	private final Map<BlockPos, Long> blacklist = new HashMap<>();
 	private final Set<Integer> unreachableDrops = new HashSet<>();
@@ -45,6 +51,7 @@ public final class CollectBehavior implements Behavior {
 	private @Nullable Goal exploreGoal;
 	private @Nullable Direction heading;
 	private @Nullable ItemEntity chasing;
+	private final LongOpenHashSet exhaustedBiomeChunks = new LongOpenHashSet();
 
 	@Override
 	public String name() {
@@ -60,6 +67,7 @@ public final class CollectBehavior implements Behavior {
 		boat = null;
 		exploreGoal = null;
 		chasing = null;
+		exhaustedBiomeChunks.clear();
 	}
 
 	@Override
@@ -112,6 +120,7 @@ public final class CollectBehavior implements Behavior {
 			}
 		}
 		lastTarget = target.name();
+		exhaustedBiomeChunks.clear();
 		harvest = null;
 		chasing = null;
 		exploreGoal = null;
@@ -180,6 +189,7 @@ public final class CollectBehavior implements Behavior {
 				return;
 			}
 		}
+		if (exploreGoal instanceof Goal.XZ(int x, int z) && bot.startFlight(new BlockPos(x, p.getBlockY(), z))) return;
 		bot.nav().setGoal(exploreGoal);
 		Navigator.Status s = bot.nav().tick();
 		if (s == Navigator.Status.FAILED) {
@@ -195,6 +205,10 @@ public final class CollectBehavior implements Behavior {
 
 	private Goal nextLeg(Bot bot, Requirement target, BlockPos feet) {
 		ClientLevel level = bot.mc().level;
+		if (!target.biomes().isEmpty()) {
+			Goal toBiome = biomeLeg(bot, level, target, feet);
+			if (toBiome != null) return toBiome;
+		}
 		int dx = heading.getStepX(), dz = heading.getStepZ();
 		if (target.strategy() == Requirement.Strategy.UNDERGROUND) {
 			int minY = level.getMinY() + 5, maxY = target.dimension() == Requirement.Dim.NETHER ? 118 : level.getMaxY() - 5;
@@ -202,7 +216,27 @@ public final class CollectBehavior implements Behavior {
 			if (Math.abs(feet.getY() - y) > 2) return new Goal.YLevel(y);
 			return new Goal.XYZ(feet.getX() + dx * TUNNEL_LEG, y, feet.getZ() + dz * TUNNEL_LEG);
 		}
-		return new Goal.XZ(feet.getX() + dx * WALK_LEG, feet.getZ() + dz * WALK_LEG);
+		int leg = ElytraTravel.canFly(bot.player()) ? FLY_LEG : WALK_LEG; // with wings, scout much further per leg
+		return new Goal.XZ(feet.getX() + dx * leg, feet.getZ() + dz * leg);
+	}
+
+	/**
+	 * Head for the nearest loaded chunk of a preferred biome. Biome area we've stood in without finding
+	 * anything in scan range is marked exhausted so the search crawls on instead of circling back.
+	 */
+	private @Nullable Goal biomeLeg(Bot bot, ClientLevel level, Requirement target, BlockPos feet) {
+		if (BiomeFinder.in(level, feet, target.biomes())) {
+			int cx = feet.getX() >> 4, cz = feet.getZ() >> 4;
+			for (int dx = -SCAN_CHUNKS; dx <= SCAN_CHUNKS; dx++) {
+				for (int dz = -SCAN_CHUNKS; dz <= SCAN_CHUNKS; dz++) exhaustedBiomeChunks.add(ChunkPos.pack(cx + dx, cz + dz));
+			}
+		}
+		boolean surface = target.dimension() == Requirement.Dim.OVERWORLD;
+		BlockPos spot = BiomeFinder.nearest(level, feet, target.biomes(), BIOME_SEARCH_CHUNKS, surface, exhaustedBiomeChunks::contains);
+		if (spot == null) return null;
+		heading = Direction.getApproximateNearest(spot.getX() - feet.getX(), 0, spot.getZ() - feet.getZ());
+		bot.setStatus("heading for " + level.getBiome(spot).getRegisteredName() + " to find " + target.name());
+		return new Goal.XZ(spot.getX(), spot.getZ());
 	}
 
 	private void turn() {

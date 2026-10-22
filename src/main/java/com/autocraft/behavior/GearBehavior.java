@@ -12,6 +12,7 @@ import com.autocraft.craft.Smelter;
 import com.autocraft.goal.Requirement;
 import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
+import com.autocraft.travel.ElytraTravel;
 import com.autocraft.world.BlockUtil;
 import java.util.ArrayList;
 import java.util.List;
@@ -50,6 +51,8 @@ public final class GearBehavior implements Behavior {
 	private static final List<Item> PICKAXES = List.of(Items.WOODEN_PICKAXE, Items.STONE_PICKAXE, Items.IRON_PICKAXE, Items.DIAMOND_PICKAXE);
 	private static final int NETHER_BLOCKS = 32;
 	private static final int WATER_SEARCH_EVERY = 100;
+	/** Plain rockets to keep on hand when carrying an elytra. */
+	private static final int ROCKET_STOCK = 32;
 
 	/**
 	 * Something to have. Required wants may gather/smelt; optional ones only run when the very next step
@@ -127,6 +130,7 @@ public final class GearBehavior implements Behavior {
 				bot.setNeed(Bot.NeedOwner.GEAR, g.requirement());
 				yield false;
 			}
+			case Planner.Unavailable u -> false; // plan() skips these; listed for exhaustiveness
 			case Planner.Done d -> {
 				bot.setNeed(Bot.NeedOwner.GEAR, null);
 				yield finishStations(bot, p);
@@ -190,7 +194,7 @@ public final class GearBehavior implements Behavior {
 				bot::isJobItem);
 		for (Want w : wants(bot, p, bot.targetForGear())) {
 			Step s = w.plan.apply(planner);
-			if (s instanceof Planner.Done) continue;
+			if (s instanceof Planner.Done || s instanceof Planner.Unavailable) continue;
 			if (!w.required && !(s instanceof Planner.Craft c && w.finalItem.test(c.recipe().output()))) continue;
 			if (s instanceof Planner.Gather g) s = toolFirst(planner, p, g);
 			return s;
@@ -217,6 +221,11 @@ public final class GearBehavior implements Behavior {
 		if (InvUtil.count(p, s -> s.is(Items.SHIELD)) == 0) wants.add(Want.optional(Items.SHIELD));
 		wants.add(new Want(GearBehavior::bucket, false, i -> i == Items.BUCKET));
 		wants.add(new Want(Planner::boat, false, item -> item.getDefaultInstance().is(ItemTags.BOATS)));
+		if (InvUtil.find(p, ElytraTravel::isElytra) >= 0 && InvUtil.count(p, ElytraTravel::isPlainRocket) < ROCKET_STOCK) {
+			int rockets = InvUtil.count(p, s -> s.is(Items.FIREWORK_ROCKET));
+			// one batch (3 rockets) per plan from carried paper/sugar cane + gunpowder
+			wants.add(new Want(pl -> pl.next(Items.FIREWORK_ROCKET, rockets + 3), false, i -> i == Items.FIREWORK_ROCKET || i == Items.PAPER));
+		}
 		return wants;
 	}
 
@@ -319,7 +328,7 @@ public final class GearBehavior implements Behavior {
 
 	/** Shield to the offhand, better armor on (gold stays on for the Nether). One action per tick. */
 	private static boolean equip(Bot bot, LocalPlayer p) {
-		if (!InvUtil.inventoryMenuActive(p) || p.isUsingItem()) return false;
+		if (!p.onGround() || !InvUtil.inventoryMenuActive(p) || p.isUsingItem()) return false; // never swap armor mid-air
 		if (p.getOffhandItem().isEmpty()) {
 			int shield = InvUtil.find(p, s -> s.is(Items.SHIELD));
 			if (shield >= 0) {

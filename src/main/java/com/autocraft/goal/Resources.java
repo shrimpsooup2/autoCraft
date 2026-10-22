@@ -2,6 +2,7 @@ package com.autocraft.goal;
 
 import com.autocraft.goal.Requirement.Dim;
 import com.autocraft.goal.Requirement.Strategy;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -9,10 +10,13 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.biome.Biomes;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 
@@ -22,6 +26,8 @@ import net.minecraft.world.level.block.Blocks;
  */
 public final class Resources {
 	private static final Map<String, Supplier<Requirement>> KNOWN = new LinkedHashMap<>();
+	/** Where a resource is found or most common; exploration heads for the nearest of these biomes. */
+	private static final Map<String, Set<ResourceKey<Biome>>> BIOMES = new HashMap<>();
 
 	static {
 		// overworld ores: explore at the best Y for each
@@ -67,6 +73,31 @@ public final class Resources {
 		alias("nether_quartz", "quartz");
 		alias("debris", "ancient_debris");
 		alias("glowstone_dust", "glowstone");
+
+		biomes("sand", Biomes.DESERT, Biomes.BEACH);
+		biomes("red_sand", Biomes.BADLANDS, Biomes.ERODED_BADLANDS, Biomes.WOODED_BADLANDS);
+		biomes("clay", Biomes.SWAMP, Biomes.MANGROVE_SWAMP, Biomes.RIVER, Biomes.LUSH_CAVES);
+		biomes("gold", Biomes.BADLANDS, Biomes.ERODED_BADLANDS, Biomes.WOODED_BADLANDS);
+		biomes("emerald", Biomes.WINDSWEPT_HILLS, Biomes.WINDSWEPT_GRAVELLY_HILLS, Biomes.WINDSWEPT_FOREST, Biomes.MEADOW,
+				Biomes.CHERRY_GROVE, Biomes.GROVE, Biomes.SNOWY_SLOPES, Biomes.JAGGED_PEAKS, Biomes.FROZEN_PEAKS, Biomes.STONY_PEAKS);
+		biomes("cactus", Biomes.DESERT, Biomes.BADLANDS);
+		biomes("mud", Biomes.MANGROVE_SWAMP);
+		biomes("bamboo", Biomes.BAMBOO_JUNGLE, Biomes.JUNGLE);
+		biomes("dark_oak_log", Biomes.DARK_FOREST);
+		biomes("jungle_log", Biomes.JUNGLE, Biomes.BAMBOO_JUNGLE, Biomes.SPARSE_JUNGLE);
+		biomes("acacia_log", Biomes.SAVANNA, Biomes.SAVANNA_PLATEAU, Biomes.WINDSWEPT_SAVANNA);
+		biomes("spruce_log", Biomes.TAIGA, Biomes.SNOWY_TAIGA, Biomes.OLD_GROWTH_PINE_TAIGA, Biomes.OLD_GROWTH_SPRUCE_TAIGA, Biomes.GROVE);
+		biomes("birch_log", Biomes.BIRCH_FOREST, Biomes.OLD_GROWTH_BIRCH_FOREST);
+		biomes("cherry_log", Biomes.CHERRY_GROVE);
+		biomes("mangrove_log", Biomes.MANGROVE_SWAMP);
+		biomes("pale_oak_log", Biomes.PALE_GARDEN);
+		biomes("soul_sand", Biomes.SOUL_SAND_VALLEY);
+		biomes("soul_soil", Biomes.SOUL_SAND_VALLEY);
+		biomes("basalt", Biomes.BASALT_DELTAS);
+		biomes("blackstone", Biomes.BASALT_DELTAS);
+		biomes("magma", Biomes.BASALT_DELTAS);
+		biomes("crimson_stem", Biomes.CRIMSON_FOREST);
+		biomes("warped_stem", Biomes.WARPED_FOREST);
 	}
 
 	private Resources() {}
@@ -75,17 +106,24 @@ public final class Resources {
 	public static Requirement get(String name, int amount) {
 		String key = name.toLowerCase().replace("minecraft:", "");
 		Supplier<Requirement> known = KNOWN.get(key);
-		if (known != null) return known.get().withAmount(amount);
-		Identifier id = Identifier.tryParse(name.contains(":") ? name : "minecraft:" + key);
-		if (id == null) return null;
-		Item item = BuiltInRegistries.ITEM.getOptional(id).orElse(null);
-		Block block = BuiltInRegistries.BLOCK.getOptional(id).orElse(null);
-		if (item == null || item == Items.AIR || block == null || block == Blocks.AIR) return null;
-		return new Requirement(key, s -> s.is(item), Set.of(block), amount, Strategy.ANYWHERE, 0, Dim.OVERWORLD);
+		Requirement r;
+		if (known != null) {
+			r = known.get().withAmount(amount);
+		} else {
+			Identifier id = Identifier.tryParse(name.contains(":") ? name : "minecraft:" + key);
+			if (id == null) return null;
+			Item item = BuiltInRegistries.ITEM.getOptional(id).orElse(null);
+			Block block = BuiltInRegistries.BLOCK.getOptional(id).orElse(null);
+			if (item == null || item == Items.AIR || block == null || block == Blocks.AIR) return null;
+			r = new Requirement(key, s -> s.is(item), Set.of(block), amount, Strategy.ANYWHERE, 0, Dim.OVERWORLD);
+		}
+		Set<ResourceKey<Biome>> biomes = BIOMES.get(r.name());
+		return biomes == null ? r : r.withBiomes(biomes);
 	}
 
-	public static Set<String> names() {
-		return KNOWN.keySet();
+	@SafeVarargs
+	private static void biomes(String name, ResourceKey<Biome>... keys) {
+		BIOMES.put(name, Set.of(keys));
 	}
 
 	/** Human readable list for {@code !ac resources}. */

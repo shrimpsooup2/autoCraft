@@ -48,6 +48,7 @@ public final class BaseDeposit {
 		switch (phase) {
 			case WALK -> {
 				bot.setStatus("returning to base " + base.toShortString());
+				if (bot.startFlight(base)) return Status.RUNNING;
 				bot.nav().setGoal(new Goal.Near(base, 3));
 				Navigator.Status s = bot.nav().tick();
 				if (s == Navigator.Status.FAILED) return Status.FAILED;

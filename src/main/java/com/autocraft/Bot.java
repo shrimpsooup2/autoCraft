@@ -13,6 +13,7 @@ import com.autocraft.behavior.FoodBehavior;
 import com.autocraft.behavior.GearBehavior;
 import com.autocraft.behavior.GotoBehavior;
 import com.autocraft.behavior.LavaReflex;
+import com.autocraft.behavior.MendingBehavior;
 import com.autocraft.behavior.PortalBehavior;
 import com.autocraft.behavior.StorageBehavior;
 import com.autocraft.control.Controls;
@@ -21,6 +22,7 @@ import com.autocraft.goal.Requirement;
 import com.autocraft.goal.Requirement.Dim;
 import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
+import com.autocraft.travel.ElytraTravel;
 import com.autocraft.world.WorldScanner;
 import java.util.EnumMap;
 import java.util.List;
@@ -44,6 +46,9 @@ public final class Bot {
 		TRAVEL
 	}
 
+	/** After a failed elytra takeoff, walk for a while before trying again. */
+	private static final int FLIGHT_RETRY_TICKS = 20 * 60 * 2;
+
 	private static @Nullable Bot instance;
 
 	private final Minecraft mc;
@@ -63,6 +68,9 @@ public final class Bot {
 	private boolean logoffWhenDone = true;
 	private String activeBehavior = "idle";
 	private String status = "";
+	private @Nullable ElytraTravel flight;
+	private long ticks;
+	private long flightRetryAt;
 
 	private Bot(Minecraft mc) {
 		this.mc = mc;
@@ -77,6 +85,7 @@ public final class Bot {
 				new EatReflex(),
 				new EffectReflex(),
 				new CombatBehavior(),
+				new MendingBehavior(),
 				new GotoBehavior(),
 				new FinishBehavior(),
 				new GearBehavior(),
@@ -104,14 +113,41 @@ public final class Bot {
 			return;
 		}
 		scanner.tick();
+		ticks++;
 		activeBehavior = "idle";
 		for (Behavior b : behaviors) {
+			// mid-flight only the lava/fall reflexes may interrupt; everything else waits for landing
+			if (flight != null && !(b instanceof LavaReflex || b instanceof FallReflex)) {
+				tickFlight();
+				break;
+			}
 			if (b.tick(this)) {
 				activeBehavior = b.name();
 				break;
 			}
 		}
 		if (running) controls.apply();
+	}
+
+	private void tickFlight() {
+		ElytraTravel.Status s = flight.tick(this);
+		activeBehavior = "elytra";
+		if (s == ElytraTravel.Status.RUNNING) return;
+		if (s == ElytraTravel.Status.FAILED) flightRetryAt = ticks + FLIGHT_RETRY_TICKS;
+		flight = null;
+		nav.stop();
+	}
+
+	/**
+	 * Fly to {@code target} instead of walking when an elytra trip is possible and worthwhile.
+	 * Returns true if a flight started (the caller should stop navigating this tick).
+	 */
+	public boolean startFlight(BlockPos target) {
+		if (flight != null || ticks < flightRetryAt || !ElytraTravel.worthIt(this, target)) return false;
+		flight = new ElytraTravel(target);
+		nav.stop();
+		Chat.info("Flying to " + target.toShortString() + ".");
+		return true;
 	}
 
 	// ---- job control ----------------------------------------------------------------------------
@@ -170,6 +206,7 @@ public final class Bot {
 
 	private void resetBehaviors() {
 		nav.stop();
+		flight = null;
 		for (Behavior b : behaviors) b.reset();
 	}
 
