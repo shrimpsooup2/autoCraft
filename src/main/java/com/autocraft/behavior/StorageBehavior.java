@@ -76,8 +76,9 @@ public final class StorageBehavior implements Behavior {
 	@Override
 	public boolean tick(Bot bot) {
 		tick++;
+		if (!bot.hasWork()) return false;
 		Job job = bot.job();
-		if (job == null) return false;
+		if (job == null) mode = Mode.IDLE; // bundles, shulkers and base trips are for job loot
 		LocalPlayer p = bot.player();
 		switch (mode) {
 			case SHULKER -> {
@@ -113,14 +114,14 @@ public final class StorageBehavior implements Behavior {
 			InvUtil.dropStack(p, junk);
 			return true;
 		}
-		if (stuffBundle(p, job)) return true;
-		if (tick >= shulkerRetryAt && InvUtil.find(p, StorageBehavior::shulkerWithSpace) >= 0 && hasJobItems(p, job)) {
+		if (job != null && stuffBundle(p, job)) return true;
+		if (job != null && tick >= shulkerRetryAt && InvUtil.find(p, StorageBehavior::shulkerWithSpace) >= 0 && hasJobItems(p, job)) {
 			mode = Mode.SHULKER;
 			shulkerPhase = ShulkerPhase.PLACE;
 			modeTicks = 0;
 			return true;
 		}
-		if (bot.base() != null && bot.baseDimension() == bot.dimension() && tick >= baseRetryAt) {
+		if (job != null && bot.base() != null && bot.baseDimension() == bot.dimension() && tick >= baseRetryAt) {
 			deposit = new BaseDeposit(bot.base());
 			returnPos = Navigator.feet(p);
 			mode = Mode.BASE;

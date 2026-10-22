@@ -1,19 +1,22 @@
 package com.autocraft.world;
 
+import com.autocraft.build.StructureRegistry;
 import com.autocraft.control.InvUtil;
+import com.autocraft.goal.Requirement;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.BlockGetter;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.BaseEntityBlock;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.FallingBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
-/** Block classification shared by the pathfinder, miner and behaviors. Pure reads, no side effects. */
+/** Block classification shared by the pathfinder, miner and behaviors. Reads only (plus the built-structure registry). */
 public final class BlockUtil {
 	private BlockUtil() {}
 
@@ -67,12 +70,13 @@ public final class BlockUtil {
 	}
 
 	/**
-	 * Safe to mine: solid, breakable, not protected, not part of a lit portal frame, and no lava beside or
-	 * above that would pour into the gap (lava below can't flow up).
+	 * Safe to mine: solid, breakable, not protected, not inside something the bot built, not part of a lit
+	 * portal frame, and no lava beside or above that would pour into the gap (lava below can't flow up).
 	 */
 	public static boolean isBreakable(BlockGetter level, BlockPos pos, BlockState s) {
 		if (s.isAir() || s.getDestroySpeed(level, pos) < 0 || isProtected(s)) return false;
 		if (!s.getFluidState().isEmpty() && s.canBeReplaced()) return false;
+		if (level instanceof Level l && StructureRegistry.protects(pos, Requirement.Dim.of(l))) return false;
 		for (Direction d : Direction.values()) {
 			BlockState n = level.getBlockState(pos.relative(d));
 			if (d != Direction.DOWN && isLava(n)) return false;

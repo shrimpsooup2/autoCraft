@@ -102,6 +102,7 @@ public final class CollectBehavior implements Behavior {
 		BlockPos source = pickSource(bot, target, harvestable);
 		if (source != null) {
 			exploreGoal = null;
+			bot.noteFound(target.name());
 			harvest = new Harvest(source, target.counts());
 			harvest.tick(bot);
 			bot.setStatus("mining " + target.name() + " at " + source.toShortString());
@@ -196,9 +197,11 @@ public final class CollectBehavior implements Behavior {
 			turn();
 			exploreGoal = null;
 			bot.nav().stop();
+			bot.noteFruitlessLeg(target.name());
 		} else if (s == Navigator.Status.ARRIVED) {
 			exploreGoal = null;
 			bot.nav().stop();
+			bot.noteFruitlessLeg(target.name());
 		}
 		bot.setStatus("exploring " + heading.getName() + " for " + target.name());
 	}

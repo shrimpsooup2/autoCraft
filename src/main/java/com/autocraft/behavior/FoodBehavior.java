@@ -53,7 +53,7 @@ public final class FoodBehavior implements Behavior {
 
 	@Override
 	public boolean tick(Bot bot) {
-		if (bot.job() == null || bot.dimension() != Requirement.Dim.OVERWORLD) return false;
+		if (!bot.hasWork() || bot.dimension() != Requirement.Dim.OVERWORLD) return false;
 		LocalPlayer p = bot.player();
 		if (lootTicks >= 0) return loot(bot);
 		if (prey == null) {

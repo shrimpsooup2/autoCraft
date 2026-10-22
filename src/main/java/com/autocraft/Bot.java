@@ -2,12 +2,14 @@ package com.autocraft;
 
 import com.autocraft.ai.ThreatNet;
 import com.autocraft.behavior.Behavior;
+import com.autocraft.behavior.BuildBehavior;
 import com.autocraft.behavior.CollectBehavior;
 import com.autocraft.behavior.CombatBehavior;
 import com.autocraft.behavior.DefenseReflex;
 import com.autocraft.behavior.EatReflex;
 import com.autocraft.behavior.EffectReflex;
 import com.autocraft.behavior.FallReflex;
+import com.autocraft.behavior.FarmBehavior;
 import com.autocraft.behavior.FinishBehavior;
 import com.autocraft.behavior.FoodBehavior;
 import com.autocraft.behavior.GearBehavior;
@@ -16,6 +18,7 @@ import com.autocraft.behavior.LavaReflex;
 import com.autocraft.behavior.MendingBehavior;
 import com.autocraft.behavior.PortalBehavior;
 import com.autocraft.behavior.StorageBehavior;
+import com.autocraft.build.BuildOrder;
 import com.autocraft.control.Controls;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
@@ -25,23 +28,30 @@ import com.autocraft.path.Navigator;
 import com.autocraft.travel.ElytraTravel;
 import com.autocraft.world.WorldScanner;
 import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Owns the job and runs the behavior priority stack once per client tick.
- * Order matters: survival reflexes first, the actual job last.
+ * Owns the work (a resource job, a build order, or both) and runs the behavior priority stack once per
+ * client tick. Order matters: survival reflexes first, the actual job last.
  */
 public final class Bot {
 	/** Planners that can ask the collector for prerequisite materials, highest priority first. */
 	public enum NeedOwner {
 		/** Tools, weapons, armor, nether kit. */
 		GEAR,
+		/** Materials for the structure being built. */
+		BUILD,
 		/** Portal materials (obsidian). */
 		TRAVEL
 	}
@@ -58,8 +68,11 @@ public final class Bot {
 	private final ThreatNet threatNet;
 	private final List<Behavior> behaviors;
 	private final Map<NeedOwner, Requirement> needs = new EnumMap<>(NeedOwner.class);
+	private final Map<String, Integer> fruitlessLegs = new HashMap<>();
+	private final Set<Item> buildMaterials = new HashSet<>();
 
 	private @Nullable Job job;
+	private @Nullable BuildOrder build;
 	private @Nullable Goal gotoGoal;
 	private @Nullable BlockPos base;
 	private Dim baseDim = Dim.OVERWORLD;
@@ -91,6 +104,8 @@ public final class Bot {
 				new GearBehavior(),
 				new FoodBehavior(),
 				new StorageBehavior(),
+				new BuildBehavior(),
+				new FarmBehavior(),
 				new PortalBehavior(),
 				new CollectBehavior());
 	}
@@ -150,7 +165,7 @@ public final class Bot {
 		return true;
 	}
 
-	// ---- job control ----------------------------------------------------------------------------
+	// ---- work control ---------------------------------------------------------------------------
 
 	public void start(Job newJob) {
 		begin(newJob, null);
@@ -163,10 +178,32 @@ public final class Bot {
 		Chat.info("Going to " + goal);
 	}
 
+	/**
+	 * Build something. With a resource job running (an auto farm) the job continues afterwards; otherwise
+	 * the build is the whole task.
+	 */
+	public void startBuild(BuildOrder order) {
+		if (!running || job == null) begin(null, null);
+		build = order;
+		Chat.info("Building " + order.schematic().name() + " at " + order.origin().toShortString()
+				+ (order.rotation().ordinal() == 0 ? "" : " rotated " + order.rotation().ordinal() * 90 + "°") + ".");
+	}
+
+	/** The current build order is finished or abandoned. */
+	public void finishBuild() {
+		build = null;
+		buildMaterials.clear();
+		needs.remove(NeedOwner.BUILD);
+		nav.stop();
+	}
+
 	private void begin(@Nullable Job newJob, @Nullable Goal newGoto) {
 		job = newJob;
 		gotoGoal = newGoto;
+		build = null;
+		buildMaterials.clear();
 		needs.clear();
+		fruitlessLegs.clear();
 		resetBehaviors();
 		running = true;
 		paused = false;
@@ -178,6 +215,8 @@ public final class Bot {
 		running = false;
 		paused = false;
 		gotoGoal = null;
+		build = null;
+		buildMaterials.clear();
 		needs.clear();
 		resetBehaviors();
 		controls.releaseAll();
@@ -197,6 +236,7 @@ public final class Bot {
 		running = false;
 		paused = false;
 		job = null;
+		build = null;
 		gotoGoal = null;
 		needs.clear();
 		resetBehaviors();
@@ -238,17 +278,33 @@ public final class Bot {
 		return job == null || mc.player == null ? null : job.nextUnmet(mc.player);
 	}
 
-	/** What the gear planner must equip for: the travel need if any, else the job's next unmet requirement. */
+	/** What the gear planner must equip for: build/travel needs first, else the job's next unmet requirement. */
 	public @Nullable Requirement targetForGear() {
+		Requirement build = needs.get(NeedOwner.BUILD);
+		if (build != null) return build;
 		Requirement travel = needs.get(NeedOwner.TRAVEL);
 		if (travel != null) return travel;
 		return job == null || mc.player == null ? null : job.nextUnmet(mc.player);
+	}
+
+	/** An exploration leg for {@code requirement} ended without finding any source. */
+	public void noteFruitlessLeg(String requirement) {
+		fruitlessLegs.merge(requirement, 1, Integer::sum);
+	}
+
+	public void noteFound(String requirement) {
+		fruitlessLegs.remove(requirement);
+	}
+
+	public int fruitlessLegs(String requirement) {
+		return fruitlessLegs.getOrDefault(requirement, 0);
 	}
 
 	// ---- accessors ------------------------------------------------------------------------------
 
 	public Minecraft mc() { return mc; }
 	public LocalPlayer player() { return mc.player; }
+	public ClientLevel level() { return mc.level; }
 	public Controls controls() { return controls; }
 	public WorldScanner scanner() { return scanner; }
 	public Navigator nav() { return nav; }
@@ -257,11 +313,23 @@ public final class Bot {
 	public boolean isRunning() { return running; }
 	public boolean isPaused() { return paused; }
 	public @Nullable Job job() { return job; }
+	public @Nullable BuildOrder buildOrder() { return build; }
 	public @Nullable Goal gotoGoal() { return gotoGoal; }
+
+	/** There is a job or a build to keep supplies (gear, food, storage) up for. */
+	public boolean hasWork() {
+		return job != null || build != null;
+	}
 
 	/** Counts toward the current job (never junk, never used as scaffolding while alternatives exist). */
 	public boolean isJobItem(ItemStack s) {
-		return job != null && !job.matching(s).isEmpty();
+		return job != null && !job.matching(s).isEmpty() || buildMaterials.contains(s.getItem());
+	}
+
+	/** Items the current build still needs (kept out of the junk pile). */
+	public void setBuildMaterials(Set<Item> items) {
+		buildMaterials.clear();
+		buildMaterials.addAll(items);
 	}
 
 	public Dim dimension() { return Dim.of(mc.level); }

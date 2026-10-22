@@ -66,8 +66,8 @@ public final class PortalBehavior implements Behavior {
 		if (lastDim != null && now != lastDim) arrived(bot, lastDim, now);
 		lastDim = now;
 
-		// a gear need (e.g. iron for a new pickaxe while in the Nether) decides first: go where it can be gathered
-		Requirement gearNeed = bot.need(Bot.NeedOwner.GEAR);
+		// gear/build needs (e.g. iron for a new pickaxe, quartz for observers) decide first: go where they're found
+		Requirement gearNeed = bot.need(Bot.NeedOwner.GEAR) != null ? bot.need(Bot.NeedOwner.GEAR) : bot.need(Bot.NeedOwner.BUILD);
 		Dim want = gearNeed != null ? gearNeed.dimension() : desiredDimension(bot);
 		if (want == null || want == now) {
 			if (gearNeed == null) bot.setNeed(Bot.NeedOwner.TRAVEL, null);

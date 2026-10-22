@@ -2,14 +2,22 @@ package com.autocraft.command;
 
 import com.autocraft.Bot;
 import com.autocraft.Chat;
+import com.autocraft.behavior.FarmBehavior;
+import com.autocraft.build.BuildOrder;
+import com.autocraft.build.StructureRegistry;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
 import com.autocraft.goal.Resources;
 import com.autocraft.path.Goal;
+import com.autocraft.path.Navigator;
+import com.autocraft.schematic.Schematic;
+import com.autocraft.schematic.SchematicLibrary;
 import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.block.Rotation;
+import org.jspecify.annotations.Nullable;
 
 /** {@code !ac ...} chat commands. Handled lines are swallowed and never reach the server. */
 public final class Commands {
@@ -58,10 +66,13 @@ public final class Commands {
 			}
 			case "goto" -> {
 				if (args.length < 4) throw new IllegalArgumentException("usage: !ac goto <x> <y> <z>");
-				BlockPos target = new BlockPos(Integer.parseInt(args[1]), Integer.parseInt(args[2]), Integer.parseInt(args[3]));
-				bot.startGoto(new Goal.Block(target));
+				bot.startGoto(new Goal.Block(position(player, args, 1)));
 			}
-			case "resources" -> Chat.info("Known: " + Resources.describe() + ". Any block item id also works.");
+			case "resources" -> Chat.info("Known: " + Resources.describe() + ". Any natural block's item id also works.");
+			case "build" -> build(bot, args);
+			case "schematics" -> schematics();
+			case "farm" -> farm(bot, args);
+			case "built", "farms" -> built();
 			default -> help();
 		}
 	}
@@ -81,6 +92,83 @@ public final class Commands {
 		bot.start(new Job(reqs));
 	}
 
+	/** {@code !ac build <name> <x> <y> <z> [rotation]} or {@code !ac build <name> here [rotation]}. */
+	private static void build(Bot bot, String[] args) {
+		if (args.length < 3) {
+			throw new IllegalArgumentException("usage: !ac build <schematic> <x> <y> <z> [0|90|180|270]  or  !ac build <schematic> here [rotation]");
+		}
+		Schematic s = SchematicLibrary.get(args[1]);
+		if (s == null) throw new IllegalArgumentException("no schematic '" + args[1] + "' (see !ac schematics)");
+		boolean here = args[2].equalsIgnoreCase("here");
+		if (!here && args.length < 5) throw new IllegalArgumentException("give x y z (~ for relative) or 'here'");
+		BlockPos origin = here ? Navigator.feet(bot.player()) : position(bot.player(), args, 2);
+		Rotation rotation = rotation(args.length > (here ? 3 : 5) ? args[here ? 3 : 5] : "0");
+		Chat.info(String.format("%s is %dx%dx%d (x/y/z), %d blocks; origin = its corner at %s.", s.name(), s.size().getX(), s.size().getY(),
+				s.size().getZ(), s.nonAirCount(), origin.toShortString()));
+		bot.startBuild(new BuildOrder(s, origin, rotation, BuildOrder.Purpose.USER));
+	}
+
+	/** {@code !ac farm <resource> [x y z | here] [rotation]}: build a farm for a resource (site picked if no position). */
+	private static void farm(Bot bot, String[] args) {
+		if (args.length < 2) throw new IllegalArgumentException("usage: !ac farm <resource> [<x> <y> <z> | here] [rotation]");
+		String resource = args[1].toLowerCase().replace("minecraft:", "");
+		BlockPos origin = null;
+		int next = 2;
+		if (args.length > 2 && args[2].equalsIgnoreCase("here")) {
+			origin = Navigator.feet(bot.player());
+			next = 3;
+		} else if (args.length > 4) {
+			origin = position(bot.player(), args, 2);
+			next = 5;
+		}
+		Rotation rotation = rotation(args.length > next ? args[next] : "0");
+		if (SchematicLibrary.farmsFor(resource).isEmpty()) {
+			throw new IllegalArgumentException("no farm design for '" + resource + "' (built-in: cobblestone, sugar_cane, log, wheat; or add farm-"
+					+ resource + "-<name>.litematic)");
+		}
+		if (!FarmBehavior.buildFarm(bot, resource, origin, rotation)) throw new IllegalArgumentException("no suitable spot nearby; give a position");
+	}
+
+	private static void schematics() {
+		List<String> names = SchematicLibrary.names();
+		Chat.info("Schematics (" + names.size() + "): " + String.join(", ", names));
+		Chat.info("Add your own .litematic/.schem/.nbt files to " + SchematicLibrary.folder()
+				+ " (name a farm farm-<resource>-<anything> so jobs can use it).");
+	}
+
+	private static void built() {
+		List<StructureRegistry.Entry> all = StructureRegistry.all();
+		if (all.isEmpty()) {
+			Chat.info("Nothing built yet.");
+			return;
+		}
+		for (StructureRegistry.Entry e : all) {
+			Chat.info(e.schematic() + " at " + e.origin().toShortString() + " (" + e.dimension().name().toLowerCase() + ")"
+					+ (e.provides() == null ? "" : ", farms " + e.provides()));
+		}
+	}
+
+	/** Three coordinates starting at {@code from}; {@code ~} / {@code ~5} are relative to the player. */
+	private static BlockPos position(LocalPlayer p, String[] args, int from) {
+		BlockPos feet = Navigator.feet(p);
+		return new BlockPos(coord(args[from], feet.getX()), coord(args[from + 1], feet.getY()), coord(args[from + 2], feet.getZ()));
+	}
+
+	private static int coord(String s, int relativeTo) {
+		if (s.startsWith("~")) return relativeTo + (s.length() == 1 ? 0 : Integer.parseInt(s.substring(1)));
+		return Integer.parseInt(s);
+	}
+
+	private static Rotation rotation(@Nullable String degrees) {
+		return switch (degrees == null ? "0" : degrees) {
+			case "0" -> Rotation.NONE;
+			case "90" -> Rotation.CLOCKWISE_90;
+			case "180" -> Rotation.CLOCKWISE_180;
+			case "270", "-90" -> Rotation.COUNTERCLOCKWISE_90;
+			default -> throw new IllegalArgumentException("rotation must be 0, 90, 180 or 270");
+		};
+	}
+
 	private static void status(Bot bot) {
 		LocalPlayer p = bot.player();
 		if (!bot.isRunning()) {
@@ -90,12 +178,15 @@ public final class Commands {
 		Job job = bot.job();
 		Chat.info((bot.isPaused() ? "[paused] " : "") + bot.activeBehavior() + ": " + bot.status());
 		if (job != null) Chat.info("Progress: " + job.progress(p));
+		BuildOrder build = bot.buildOrder();
+		if (build != null) Chat.info("Building " + build.schematic().name() + " at " + build.origin().toShortString());
 		Requirement need = bot.activeNeed();
 		if (need != null) Chat.info("Prerequisite: " + need);
 		Chat.info(String.format("HP %.0f/20, food %d, pos %s", p.getHealth(), p.getFoodData().getFoodLevel(), p.blockPosition().toShortString()));
 	}
 
 	private static void help() {
-		Chat.info("!ac collect <resource> <amount> ... | stop | pause | resume | status | base | logoff on|off | goto x y z | resources");
+		Chat.info("!ac collect <resource> <amount> ... | build <schematic> <x y z|here> [rot] | farm <resource> [x y z|here] | "
+				+ "schematics | built | stop | pause | resume | status | base | logoff on|off | goto x y z | resources");
 	}
 }

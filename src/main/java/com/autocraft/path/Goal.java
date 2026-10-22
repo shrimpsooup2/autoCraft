@@ -65,6 +65,25 @@ public interface Goal {
 		}
 	}
 
+	/**
+	 * Stand within {@code range} of {@code target}'s centre (eye height) without occupying it, standing on it
+	 * or hanging under it — a spot to place or mine the block from.
+	 */
+	record Reach(BlockPos target, double range) implements Goal {
+		@Override
+		public boolean isEnd(int x, int y, int z) {
+			if (x == target.getX() && z == target.getZ() && y >= target.getY() - 2 && y <= target.getY() + 1) return false;
+			double dx = x + 0.5 - (target.getX() + 0.5), dy = y + 1.62 - (target.getY() + 0.5), dz = z + 0.5 - (target.getZ() + 0.5);
+			return dx * dx + dy * dy + dz * dz <= range * range;
+		}
+
+		@Override
+		public double heuristic(int x, int y, int z) {
+			double d = Math.sqrt(target.distSqr(new BlockPos(x, y, z)));
+			return Math.max(0, d - range) * WALK;
+		}
+	}
+
 	/** Reach a Y level anywhere. */
 	record YLevel(int y) implements Goal {
 		@Override

@@ -88,7 +88,7 @@ public final class GearBehavior implements Behavior {
 
 	@Override
 	public boolean tick(Bot bot) {
-		if (bot.job() == null) return false;
+		if (!bot.hasWork()) return false;
 		LocalPlayer p = bot.player();
 		switch (workshop.tick(bot)) {
 			case RUNNING -> {
