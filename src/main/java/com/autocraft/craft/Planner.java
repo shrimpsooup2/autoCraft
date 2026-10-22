@@ -1,23 +1,30 @@
 package com.autocraft.craft;
 
 import com.autocraft.control.InvUtil;
-import com.autocraft.craft.Recipes.Ingredient;
-import com.autocraft.craft.Recipes.Recipe;
+import com.autocraft.craft.RecipeBook.Ingredient;
+import com.autocraft.craft.RecipeBook.Recipe;
 import com.autocraft.goal.Requirement;
-import com.autocraft.goal.Resources;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Predicate;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.Holder;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
-import net.minecraft.world.level.block.Blocks;
+import org.jspecify.annotations.Nullable;
 
 /**
- * Works out the next concrete action toward having an item: craft something, smelt something, gather a raw
- * material, or nothing (already have it). Re-run after every action — inventory is the only state.
+ * Works out the next concrete action toward carrying some items, using every vanilla crafting and furnace
+ * recipe: craft something, smelt something, gather a raw material, or nothing (already have it). Routes
+ * are compared by a rough effort cost (carried = free, mining a named resource = 8, other natural blocks
+ * = 20, other dimension +40, each craft +1, each smelt +4), so e.g. iron ingots come from smelting raw
+ * iron, not from an iron block. Re-run after every action: the inventory is the only state.
  */
 public final class Planner {
 	public sealed interface Step permits Craft, Smelt, Gather, Unavailable, Done {}
@@ -28,25 +35,29 @@ public final class Planner {
 
 	public record Gather(Requirement requirement) implements Step {}
 
-	public record Done() implements Step {}
-
-	/** Needs something the bot can't gather by mining (e.g. gunpowder from creepers). */
+	/** Needs something the bot can't mine, craft or smelt (mob drops, loot). */
 	public record Unavailable(String what) implements Step {}
 
+	public record Done() implements Step {}
+
 	private static final Done DONE = new Done();
-	/** Gather a little extra of cheap materials so one trip covers the whole tool chain. */
-	private static final int MIN_LOGS = 6;
-	private static final int MIN_STONE = 16;
-	/** Raw ore to gather per trip: covers pickaxe + flint and steel + shield/bucket without a second trip. */
-	private static final int MIN_ORE = 5;
+	private static final double INF = 1e9;
+	private static final int MAX_DEPTH = 8;
+	private static final double CRAFT_COST = 1;
+	private static final double SMELT_COST = 4;
+
+	/** Cheapest way to make or mine more of an item. */
+	private record Route(@Nullable Requirement gather, @Nullable Recipe recipe, double cost) {}
 
 	private final LocalPlayer p;
 	private final Requirement.Dim dimension;
 	private final boolean tableNearby;
 	private final boolean furnaceNearby;
 	private final Predicate<ItemStack> protect;
+	private final RecipeBook book = RecipeBook.get();
+	private final Map<String, Double> costMemo = new HashMap<>();
 
-	/** @param protect job loot: never smelted beyond what the gear needs */
+	/** @param protect job loot: never smelted beyond what's needed */
 	public Planner(LocalPlayer p, Requirement.Dim dimension, boolean tableNearby, boolean furnaceNearby, Predicate<ItemStack> protect) {
 		this.p = p;
 		this.dimension = dimension;
@@ -60,102 +71,174 @@ public final class Planner {
 		return InvUtil.find(p, pred) >= 0;
 	}
 
-	/** Next step toward carrying {@code count} of {@code want}. */
+	/** Next step toward carrying {@code count} of {@code want} (worn-out tools don't count). */
 	public Step next(Item want, int count) {
-		int missing = count - InvUtil.count(p, s -> s.is(want) && !InvUtil.nearlyBroken(s));
-		if (want == Items.IRON_INGOT) return ingot(Items.RAW_IRON, "iron", missing);
-		if (want == Items.GOLD_INGOT) return ingot(Items.RAW_GOLD, "gold", missing);
-		Recipe r = Recipes.forOutput(want);
-		if (r == null) throw new IllegalArgumentException("no recipe for " + want);
-		return craft(r, missing);
+		return obtain(want, count, false, 0, new LinkedHashSet<>());
 	}
 
-	/** Next step toward a boat of whatever wood we have most planks/logs of. */
+	/** Next step toward the cheapest boat (usually the wood we're carrying). */
 	public Step boat() {
-		if (InvUtil.find(p, s -> s.is(ItemTags.BOATS)) >= 0) return DONE;
-		for (int i = 0; i < InvUtil.MAIN_SIZE; i++) {
-			ItemStack s = p.getInventory().getItem(i);
-			if (s.is(ItemTags.PLANKS) && InvUtil.count(p, x -> x.is(s.getItem())) >= 5) {
-				Recipe boat = Recipes.boatFrom(s.getItem());
-				if (boat != null) return withTable(boat);
+		if (hasAny(s -> s.is(ItemTags.BOATS))) return DONE;
+		Item best = null;
+		double bestCost = INF;
+		for (Holder<Item> h : BuiltInRegistries.ITEM.getTagOrEmpty(ItemTags.BOATS)) {
+			double c = cost(h.value(), false, 0, new HashSet<>());
+			if (c < bestCost) {
+				bestCost = c;
+				best = h.value();
 			}
 		}
-		int log = InvUtil.find(p, Ingredient.LOG.test);
-		if (log >= 0) {
-			Recipe planks = Recipes.planksFrom(p.getInventory().getItem(log).getItem());
-			if (planks != null) return new Craft(planks);
-		}
-		return new Gather(Resources.get("log", 2));
+		return best == null ? new Unavailable("boat") : next(best, 1);
 	}
 
-	private Step craft(Recipe r, int missingOutput) {
+	// ---- planning -------------------------------------------------------------------------------
+
+	private int carried(Item item) {
+		return InvUtil.count(p, s -> s.is(item) && !InvUtil.nearlyBroken(s));
+	}
+
+	private Step obtain(Item want, int count, boolean flexible, int depth, Set<Item> visiting) {
+		int have = carried(want);
+		if (have >= count) return DONE;
+		if (depth > MAX_DEPTH || !visiting.add(want)) return new Unavailable(name(want));
+		try {
+			int missing = count - have;
+			Route route = bestRoute(want, flexible, depth, visiting);
+			if (route == null) return new Unavailable(name(want));
+			if (route.gather != null) {
+				int total = InvUtil.count(p, route.gather.counts()) + missing; // requirement amounts are absolute
+				Requirement g = Gatherable.requirementFor(want, total, dimension, flexible);
+				return g == null ? new Unavailable(name(want)) : new Gather(g);
+			}
+			if (route.recipe.isSmelting()) return smelt(route.recipe, missing, depth, visiting);
+			return craft(route.recipe, missing, depth, visiting);
+		} finally {
+			visiting.remove(want);
+		}
+	}
+
+	private Step craft(Recipe r, int missingOutput, int depth, Set<Item> visiting) {
 		int batches = (missingOutput + r.count() - 1) / r.count();
 		Set<Ingredient> seen = new HashSet<>();
 		for (Ingredient ing : r.key().values()) {
 			if (!seen.add(ing)) continue;
-			Step s = ingredient(ing, r.amountOf(ing) * batches);
+			Step s = ingredient(ing, r.amountOf(ing) * batches, depth, visiting);
 			if (!(s instanceof Done)) return s;
 		}
-		return withTable(r);
-	}
-
-	private Step withTable(Recipe r) {
-		if (!r.fits2x2() && !tableNearby && InvUtil.count(p, s -> s.is(Items.CRAFTING_TABLE)) == 0) {
-			Step t = next(Items.CRAFTING_TABLE, 1);
+		if (!r.fits2x2() && !tableNearby && carried(Items.CRAFTING_TABLE) == 0) {
+			Step t = obtain(Items.CRAFTING_TABLE, 1, false, depth + 1, visiting);
 			if (!(t instanceof Done)) return t;
 		}
 		return new Craft(r);
 	}
 
-	private Step ingredient(Ingredient ing, int needed) {
-		if (InvUtil.count(p, ing.test) >= needed) return DONE;
-		return switch (ing) {
-			case PLANKS -> planks(needed);
-			case STICK -> next(Items.STICK, needed);
-			case IRON -> next(Items.IRON_INGOT, needed);
-			case GOLD -> next(Items.GOLD_INGOT, needed);
-			case STONE -> new Gather(stoneMaterial(Math.max(needed, MIN_STONE)));
-			case DIAMOND -> new Gather(Resources.get("diamond", needed));
-			case FLINT -> new Gather(Resources.get("flint", needed));
-			case LOG -> new Gather(Resources.get("log", Math.max(needed, MIN_LOGS)));
-			case SUGAR_CANE -> new Gather(Resources.get("sugar_cane", needed));
-			case PAPER -> next(Items.PAPER, needed);
-			case GUNPOWDER -> new Unavailable("gunpowder");
-		};
-	}
-
-	private Step planks(int needed) {
-		int have = InvUtil.count(p, Ingredient.PLANKS.test);
-		if (have >= needed) return DONE;
-		int log = InvUtil.find(p, Ingredient.LOG.test);
-		if (log >= 0) {
-			Recipe r = Recipes.planksFrom(p.getInventory().getItem(log).getItem());
-			if (r != null) return new Craft(r);
-		}
-		int logs = (needed - have + 3) / 4;
-		return new Gather(Resources.get("log", Math.max(logs, MIN_LOGS)));
-	}
-
-	private Step ingot(Item raw, String resource, int missing) {
-		int carried = InvUtil.count(p, s -> s.is(raw));
-		if (carried < missing) return new Gather(Resources.get(resource, Math.max(missing, MIN_ORE)));
-		if (!furnaceNearby && InvUtil.count(p, s -> s.is(Items.FURNACE)) == 0) {
-			Step f = next(Items.FURNACE, 1);
+	private Step smelt(Recipe r, int missingOutput, int depth, Set<Item> visiting) {
+		Ingredient input = r.smeltInput();
+		Step s = ingredient(input, missingOutput, depth, visiting);
+		if (!(s instanceof Done)) return s;
+		if (!furnaceNearby && carried(Items.FURNACE) == 0) {
+			Step f = obtain(Items.FURNACE, 1, false, depth + 1, visiting);
 			if (!(f instanceof Done)) return f;
 		}
-		// smelt all spare ore in one furnace session, but never more job loot than needed
-		int amount = protect.test(new ItemStack(raw)) ? missing : Math.min(carried, 64);
+		Item inputItem = pickCarried(input);
+		// smelt every spare piece in one furnace session, but never more job loot than needed
+		int carriedInput = InvUtil.count(p, input::test);
+		int amount = protect.test(new ItemStack(inputItem)) ? missingOutput : Math.min(carriedInput, 64);
 		if (Smelter.fuelValue(p) < amount) {
-			return new Gather(Resources.get("coal", (amount + 7) / 8));
+			int coal = InvUtil.count(p, x -> x.is(Items.COAL)) + (amount + 7) / 8;
+			Requirement fuel = Gatherable.requirementFor(Items.COAL, coal, dimension, false);
+			return fuel == null ? new Unavailable("fuel") : new Gather(fuel);
 		}
-		return new Smelt(raw, amount);
+		return new Smelt(inputItem, amount);
 	}
 
-	/** Cobblestone, cobbled deepslate or blackstone: anything stone tools and furnaces accept. */
-	private Requirement stoneMaterial(int amount) {
-		Requirement cobble = Resources.get("cobblestone", amount);
-		return new Requirement("cobblestone", Ingredient.STONE.test,
-				Set.of(Blocks.STONE, Blocks.COBBLESTONE, Blocks.DEEPSLATE, Blocks.COBBLED_DEEPSLATE, Blocks.BLACKSTONE),
-				amount, cobble.strategy(), cobble.preferredY(), dimension);
+	/** Make sure {@code needed} items matching the ingredient are carried (any mix of its options). */
+	private Step ingredient(Ingredient ing, int needed, int depth, Set<Item> visiting) {
+		int have = InvUtil.count(p, ing::test);
+		if (have >= needed) return DONE;
+		Item choice = cheapestOption(ing, depth, visiting);
+		if (choice == null) return new Unavailable(ing.toString());
+		boolean flexible = ing.options().size() > 1;
+		return obtain(choice, carried(choice) + needed - have, flexible, depth + 1, visiting);
+	}
+
+	private Item pickCarried(Ingredient ing) {
+		for (Item option : ing.options()) {
+			if (carried(option) > 0) return option;
+		}
+		return ing.options().getFirst();
+	}
+
+	private @Nullable Item cheapestOption(Ingredient ing, int depth, Set<Item> visiting) {
+		Item best = null;
+		double bestCost = INF;
+		boolean flexible = ing.options().size() > 1;
+		for (Item option : ing.options()) {
+			double c = cost(option, flexible, depth + 1, visiting);
+			if (c < bestCost) {
+				bestCost = c;
+				best = option;
+			}
+		}
+		return best;
+	}
+
+	// ---- route costs ----------------------------------------------------------------------------
+
+	private @Nullable Route bestRoute(Item item, boolean flexible, int depth, Set<Item> visiting) {
+		Route best = null;
+		Requirement gather = Gatherable.requirementFor(item, carried(item) + 1, dimension, flexible);
+		if (gather != null) best = new Route(gather, null, Gatherable.cost(gather, dimension));
+		for (Recipe r : book.crafting(item)) {
+			double c = CRAFT_COST + recipeInputs(r, depth, visiting);
+			if (best == null || c < best.cost) best = new Route(null, r, c);
+		}
+		for (Recipe r : book.smelting(item)) {
+			double c = SMELT_COST + optionCost(r.smeltInput(), depth, visiting);
+			if (best == null || c < best.cost) best = new Route(null, r, c);
+		}
+		return best == null || best.cost >= INF ? null : best;
+	}
+
+	private double cost(Item item, boolean flexible, int depth, Set<Item> visiting) {
+		if (carried(item) > 0) return 0;
+		String key = BuiltInRegistries.ITEM.getKey(item) + (flexible ? "*" : "");
+		Double memo = costMemo.get(key);
+		if (memo != null) return memo;
+		if (depth > MAX_DEPTH || !visiting.add(item)) return INF;
+		try {
+			Route r = bestRoute(item, flexible, depth, visiting);
+			double c = r == null ? INF : r.cost;
+			if (c < INF) costMemo.put(key, c); // INF can be an artefact of the current recursion path
+			return c;
+		} finally {
+			visiting.remove(item);
+		}
+	}
+
+	private double recipeInputs(Recipe r, int depth, Set<Item> visiting) {
+		double total = 0;
+		Set<Ingredient> seen = new HashSet<>();
+		for (Ingredient ing : r.key().values()) {
+			if (!seen.add(ing)) continue;
+			double unit = optionCost(ing, depth, visiting);
+			if (unit >= INF) return INF;
+			total += unit * r.amountOf(ing) / r.count();
+		}
+		return total;
+	}
+
+	private double optionCost(Ingredient ing, int depth, Set<Item> visiting) {
+		double best = INF;
+		boolean flexible = ing.options().size() > 1;
+		for (Item option : ing.options()) {
+			best = Math.min(best, cost(option, flexible, depth + 1, visiting));
+			if (best == 0) break;
+		}
+		return best;
+	}
+
+	private static String name(Item item) {
+		return BuiltInRegistries.ITEM.getKey(item).getPath();
 	}
 }

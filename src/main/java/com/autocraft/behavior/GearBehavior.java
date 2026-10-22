@@ -5,10 +5,9 @@ import com.autocraft.Chat;
 import com.autocraft.ai.Features;
 import com.autocraft.combat.Threats;
 import com.autocraft.control.InvUtil;
-import com.autocraft.craft.Crafter;
 import com.autocraft.craft.Planner;
 import com.autocraft.craft.Planner.Step;
-import com.autocraft.craft.Smelter;
+import com.autocraft.craft.Workshop;
 import com.autocraft.goal.Requirement;
 import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
@@ -68,10 +67,7 @@ public final class GearBehavior implements Behavior {
 		}
 	}
 
-	private @Nullable Crafter crafter;
-	private @Nullable Smelter smelter;
-	private @Nullable Harvest pickup;
-	private final List<BlockPos> placed = new ArrayList<>();
+	private final Workshop workshop = new Workshop();
 	private int sincePlan = PLAN_EVERY;
 	private int failures;
 	private @Nullable BlockPos water;
@@ -85,10 +81,7 @@ public final class GearBehavior implements Behavior {
 
 	@Override
 	public void reset() {
-		crafter = null;
-		smelter = null;
-		pickup = null;
-		placed.clear();
+		workshop.reset();
 		sincePlan = PLAN_EVERY;
 		failures = 0;
 	}
@@ -97,14 +90,18 @@ public final class GearBehavior implements Behavior {
 	public boolean tick(Bot bot) {
 		if (bot.job() == null) return false;
 		LocalPlayer p = bot.player();
-		if (crafter != null) return tickCrafter(bot);
-		if (smelter != null) return tickSmelter(bot);
-		if (pickup != null) {
-			if (pickup.tick(bot) == Harvest.Status.RUNNING) {
-				bot.setStatus("picking up crafting station");
+		switch (workshop.tick(bot)) {
+			case RUNNING -> {
 				return true;
 			}
-			pickup = null;
+			case FAILED -> {
+				onFailure();
+				sincePlan = PLAN_EVERY;
+				return true;
+			}
+			case DONE -> sincePlan = PLAN_EVERY; // plan the next step right away
+			case IDLE -> {
+			}
 		}
 		if (equip(bot, p)) return true;
 		if (fillBucket(bot, p)) return true;
@@ -112,79 +109,42 @@ public final class GearBehavior implements Behavior {
 		sincePlan = 0;
 		if (!Threats.collect(bot, HOSTILE_RADIUS).isEmpty()) return false;
 
-		return switch (plan(bot, p)) {
+		Step step = plan(bot, p);
+		switch (step) {
 			case Planner.Craft c -> {
 				bot.setNeed(Bot.NeedOwner.GEAR, null);
-				crafter = new Crafter(c.recipe());
-				yield tickCrafter(bot);
+				workshop.start(c);
+				return true;
 			}
 			case Planner.Smelt s -> {
 				bot.setNeed(Bot.NeedOwner.GEAR, null);
-				smelter = new Smelter(s.input(), s.count());
-				yield tickSmelter(bot);
+				workshop.start(s);
+				return true;
 			}
 			case Planner.Gather g -> {
-				if (finishStations(bot, p)) yield true;
+				if (workshop.packUp(bot)) return true;
 				Requirement before = bot.need(Bot.NeedOwner.GEAR);
 				if (before == null || !before.name().equals(g.requirement().name())) Chat.info("Gathering " + g.requirement() + " for gear.");
 				bot.setNeed(Bot.NeedOwner.GEAR, g.requirement());
-				yield false;
+				return false;
 			}
-			case Planner.Unavailable u -> false; // plan() skips these; listed for exhaustiveness
+			case Planner.Unavailable u -> {
+				return false; // plan() skips these
+			}
 			case Planner.Done d -> {
 				bot.setNeed(Bot.NeedOwner.GEAR, null);
-				yield finishStations(bot, p);
+				return workshop.packUp(bot);
 			}
-		};
+		}
 	}
 
-	private boolean tickCrafter(Bot bot) {
-		Crafter.Status s = crafter.tick(bot);
-		String what = crafter.recipe().output().getDefaultInstance().getHoverName().getString();
-		bot.setStatus("crafting " + what);
-		if (s == Crafter.Status.RUNNING) return true;
-		remember(crafter.placedTable());
-		if (s == Crafter.Status.FAILED) onFailure("crafting " + what);
-		crafter = null;
-		sincePlan = PLAN_EVERY; // plan the next step right away
-		return true;
-	}
-
-	private boolean tickSmelter(Bot bot) {
-		Smelter.Status s = smelter.tick(bot);
-		if (s == Smelter.Status.RUNNING) return true;
-		remember(smelter.placedFurnace());
-		if (s == Smelter.Status.FAILED) onFailure("smelting");
-		smelter = null;
-		sincePlan = PLAN_EVERY;
-		return true;
-	}
-
-	private void remember(@Nullable BlockPos pos) {
-		if (pos != null && !placed.contains(pos)) placed.add(pos);
-	}
-
-	private void onFailure(String what) {
+	private void onFailure() {
 		failures++;
-		Chat.warn(what + " failed (" + failures + ")");
+		Chat.warn("Crafting/smelting failed (" + failures + ")");
 		if (failures >= 5) {
 			sincePlan = -20 * 30; // back off for a while; the world may change
 			failures = 0;
 		}
-	}
-
-	/** Close any station screen and pick our placed tables/furnaces back up. True while doing so. */
-	private boolean finishStations(Bot bot, LocalPlayer p) {
-		if (!InvUtil.inventoryMenuActive(p)) p.closeContainer();
-		while (!placed.isEmpty()) {
-			BlockPos pos = placed.removeFirst();
-			BlockState s = bot.mc().level.getBlockState(pos);
-			if (s.is(Blocks.CRAFTING_TABLE) || s.is(Blocks.FURNACE)) {
-				pickup = new Harvest(pos, st -> st.is(Items.CRAFTING_TABLE) || st.is(Items.FURNACE));
-				return true;
-			}
-		}
-		return false;
 	}
 
 	// ---- planning -------------------------------------------------------------------------------

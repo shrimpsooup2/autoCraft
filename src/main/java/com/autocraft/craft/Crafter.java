@@ -2,7 +2,7 @@ package com.autocraft.craft;
 
 import com.autocraft.Bot;
 import com.autocraft.control.InvUtil;
-import com.autocraft.craft.Recipes.Recipe;
+import com.autocraft.craft.RecipeBook.Recipe;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.inventory.AbstractContainerMenu;

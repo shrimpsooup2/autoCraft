@@ -1,5 +1,6 @@
 package com.autocraft.goal;
 
+import com.autocraft.craft.Gatherable;
 import com.autocraft.goal.Requirement.Dim;
 import com.autocraft.goal.Requirement.Strategy;
 import java.util.HashMap;
@@ -73,6 +74,9 @@ public final class Resources {
 		alias("nether_quartz", "quartz");
 		alias("debris", "ancient_debris");
 		alias("glowstone_dust", "glowstone");
+		alias("clay_ball", "clay");
+		alias("gold_nugget", "nether_gold");
+		alias("magma_block", "magma");
 
 		biomes("sand", Biomes.DESERT, Biomes.BEACH);
 		biomes("red_sand", Biomes.BADLANDS, Biomes.ERODED_BADLANDS, Biomes.WOODED_BADLANDS);
@@ -102,6 +106,11 @@ public final class Resources {
 
 	private Resources() {}
 
+	/** A name the registry knows directly (ores, logs, aliases), as opposed to the any-block fallback. */
+	public static boolean isNamed(String name) {
+		return KNOWN.containsKey(name.toLowerCase().replace("minecraft:", ""));
+	}
+
 	/** Requirement for {@code amount} of {@code name}, or null if nothing can produce it. */
 	public static Requirement get(String name, int amount) {
 		String key = name.toLowerCase().replace("minecraft:", "");
@@ -115,6 +124,7 @@ public final class Resources {
 			Item item = BuiltInRegistries.ITEM.getOptional(id).orElse(null);
 			Block block = BuiltInRegistries.BLOCK.getOptional(id).orElse(null);
 			if (item == null || item == Items.AIR || block == null || block == Blocks.AIR) return null;
+			if (!Gatherable.isNatural(block, item)) return null; // made by recipes, or doesn't drop itself
 			r = new Requirement(key, s -> s.is(item), Set.of(block), amount, Strategy.ANYWHERE, 0, Dim.OVERWORLD);
 		}
 		Set<ResourceKey<Biome>> biomes = BIOMES.get(r.name());
