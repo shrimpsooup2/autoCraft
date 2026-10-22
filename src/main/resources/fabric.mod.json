@@ -1,0 +1,26 @@
+{
+	"schemaVersion": 1,
+	"id": "autocraft",
+	"version": "${version}",
+	"name": "autoCraft",
+	"description": "Client-side autonomous resource collector: give it resources and amounts, it survives, paths, mines, crafts, stores and logs off when done.",
+	"authors": [
+		"30HamghalamA"
+	],
+	"license": "MIT",
+	"environment": "client",
+	"entrypoints": {
+		"client": [
+			"com.autocraft.AutoCraftClient"
+		]
+	},
+	"mixins": [
+		"autocraft.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}
