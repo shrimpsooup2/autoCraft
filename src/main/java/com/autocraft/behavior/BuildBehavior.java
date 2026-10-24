@@ -111,8 +111,8 @@ public final class BuildBehavior implements Behavior {
 		reset();
 		current = order;
 		Schematic s = order.schematic();
-		String wood = s.builtIn() ? BuildPlan.preferredWood(bot.player()) : null;
-		plan = new BuildPlan(s, order.origin(), order.rotation(), order.mirror(), wood);
+		plan = new BuildPlan(s, order.origin(), order.rotation(), order.mirror(), order.substitution());
+		if (!order.substitution().isIdentity()) Chat.info("Materials: " + order.substitution().reason() + ".");
 		builder = new Builder(plan);
 		bot.setBuildPlan(plan);
 		StructureRegistry.setUnderConstruction(plan.box(), bot.dimension());
@@ -190,8 +190,8 @@ public final class BuildBehavior implements Behavior {
 		String provides = s.farm() == null ? null : s.farm().provides();
 		StructureRegistry.setUnderConstruction(null, null);
 		StructureRegistry.add(new StructureRegistry.Entry(s.name(), order.origin().getX(), order.origin().getY(), order.origin().getZ(),
-				order.rotation().ordinal(), order.mirror().ordinal(), bot.dimension(), box.minX(), box.minY(), box.minZ(), box.maxX(), box.maxY(),
-				box.maxZ(), provides));
+				order.rotation().ordinal(), order.mirror().ordinal(), order.substitution().encode(), bot.dimension(), box.minX(), box.minY(),
+				box.minZ(), box.maxX(), box.maxY(), box.maxZ(), provides));
 		Chat.info("Finished building " + s.name() + " (" + builder.placed() + " placements"
 				+ (builder.skippedItems().isEmpty() ? "" : ", skipped blocks needing " + builder.skippedItems().stream()
 						.map(i -> i.getDefaultInstance().getHoverName().getString()).collect(Collectors.joining(", "))) + ").");

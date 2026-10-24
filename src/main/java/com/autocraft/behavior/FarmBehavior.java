@@ -4,6 +4,8 @@ import com.autocraft.Bot;
 import com.autocraft.Chat;
 import com.autocraft.build.BuildOrder;
 import com.autocraft.build.BuildPlan;
+import com.autocraft.build.MaterialAdvisor;
+import com.autocraft.build.MaterialSettings;
 import com.autocraft.build.SiteFinder;
 import com.autocraft.build.StructureRegistry;
 import com.autocraft.control.ContainerOpener;
@@ -93,7 +95,8 @@ public final class FarmBehavior implements Behavior {
 		for (Schematic s : SchematicLibrary.farmsFor(resource)) {
 			BlockPos site = origin != null ? origin : SiteFinder.find(bot, s);
 			if (site == null) continue;
-			bot.startBuild(new BuildOrder(s, site, rotation, Mirror.NONE, BuildOrder.Purpose.FARM));
+			bot.startBuild(new BuildOrder(s, site, rotation, Mirror.NONE, MaterialAdvisor.resolve(MaterialSettings.defaults(), s),
+					BuildOrder.Purpose.FARM));
 			return true;
 		}
 		return false;
@@ -125,7 +128,7 @@ public final class FarmBehavior implements Behavior {
 	private boolean operate(Bot bot, StructureRegistry.Entry farm, Requirement target) {
 		Schematic s = SchematicLibrary.get(farm.schematic());
 		if (s == null || s.farm() == null) return false;
-		BuildPlan plan = geometry.computeIfAbsent(farm, e -> new BuildPlan(s, e.origin(), e.rotationValue(), e.mirrorValue(), null));
+		BuildPlan plan = geometry.computeIfAbsent(farm, e -> new BuildPlan(s, e.origin(), e.rotationValue(), e.mirrorValue(), e.substitution()));
 		if (harvest != null) {
 			if (harvest.tick(bot) == Harvest.Status.RUNNING) {
 				bot.setStatus("harvesting " + s.name());

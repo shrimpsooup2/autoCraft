@@ -111,7 +111,7 @@ public final class GhostRenderer {
 			double d = pos.distToCenterSqr(eye);
 			if (d > maxSq) continue;
 			BlockState world = level.getBlockState(pos);
-			if (BuildPlan.matches(world, m.states[i])) continue;
+			if (m.tasks[i].satisfiedBy(world)) continue;
 			if (!world.isAir() && !world.canBeReplaced()) {
 				outline(pos, WRONG);
 				continue;
@@ -169,7 +169,7 @@ public final class GhostRenderer {
 		final int[] x;
 		final int[] y;
 		final int[] z;
-		final BlockState[] states;
+		final BuildPlan.Task[] tasks;
 		/** Non-zero: drawn as a colored outline instead of a model (fluids, chests and other block-entity blocks). */
 		final int[] outlineColor;
 		/** Quads of block {@code i} are {@code quads[quadStart[i] .. quadStart[i+1])}. */
@@ -184,13 +184,13 @@ public final class GhostRenderer {
 			this.x = new int[count];
 			this.y = new int[count];
 			this.z = new int[count];
-			this.states = new BlockState[count];
+			this.tasks = new BuildPlan.Task[count];
 			for (int i = 0; i < count; i++) {
 				BuildPlan.Task t = places.get(i);
 				x[i] = t.pos().getX();
 				y[i] = t.pos().getY();
 				z[i] = t.pos().getZ();
-				states[i] = t.state();
+				tasks[i] = t;
 			}
 			this.quads = quadList.toArray(new BakedQuad[0]);
 			this.colors = colorList.stream().mapToInt(Integer::intValue).toArray();

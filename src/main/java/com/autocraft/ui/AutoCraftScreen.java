@@ -415,6 +415,9 @@ public final class AutoCraftScreen extends Screen {
 		placeButton = addRenderableWidget(Button.builder(Component.literal("Place in world"), b -> place())
 				.tooltip(Tooltip.create(Component.literal("Show it as a ghost where you look and position it (like Litematica)")))
 				.bounds(rightX + half + 4, bottomY, half, 18).build());
+		addRenderableWidget(Button.builder(Component.literal("Materials (defaults)..."), b -> minecraft.gui.setScreen(new MaterialsScreen(this, null)))
+				.tooltip(Tooltip.create(Component.literal("Wood type, stand-ins, filler blocks used for new placements")))
+				.bounds(rightX, bottomY - 22, colW, 18).build());
 		updateBuildButtons();
 	}
 
@@ -441,6 +444,8 @@ public final class AutoCraftScreen extends Screen {
 			Placements.moveToCrosshair();
 			syncCoordinates(p);
 		}).tooltip(Tooltip.create(Component.literal("Centered on the block you're looking at"))).bounds(rightX + half + 4, rowY + 84, half, 18).build());
+		addRenderableWidget(Button.builder(Component.literal("Materials..."), b -> minecraft.gui.setScreen(new MaterialsScreen(this, p)))
+				.tooltip(Tooltip.create(Component.literal(p.substitution().reason()))).bounds(rightX, rowY + 106, colW, 18).build());
 		int third = (colW - 8) / 3;
 		addRenderableWidget(Button.builder(Component.literal("Cancel"), b -> {
 			Placements.cancel();
@@ -574,7 +579,7 @@ public final class AutoCraftScreen extends Screen {
 			g.text(font, "X", rightX + 1, rowY + 4, Widgets.GRAY);
 			g.text(font, "Y", rightX + 1, rowY + 24, Widgets.GRAY);
 			g.text(font, "Z", rightX + 1, rowY + 44, Widgets.GRAY);
-			g.text(font, font.plainSubstrByWidth("Shift: steps of 8. The ghost in the world updates live.", colW), rightX, rowY + 108, Widgets.GRAY);
+			g.text(font, font.plainSubstrByWidth("Shift: steps of 8. The ghost in the world updates live.", colW), rightX, rowY + 128, Widgets.GRAY);
 			return;
 		}
 		if (preview == null) {
@@ -599,7 +604,7 @@ public final class AutoCraftScreen extends Screen {
 		y += 2;
 		int perRow = 2;
 		int cellW = colW / perRow;
-		int maxRows = Math.max(0, (bottomY - 16 - y) / 12);
+		int maxRows = Math.max(0, (bottomY - 38 - y) / 12);
 		for (int i = 0; i < previewBill.size() && i < maxRows * perRow; i++) {
 			Map.Entry<Item, Integer> e = previewBill.get(i);
 			int cx = rightX + (i % perRow) * cellW;

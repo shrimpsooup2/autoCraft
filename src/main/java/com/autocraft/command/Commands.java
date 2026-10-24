@@ -4,6 +4,8 @@ import com.autocraft.Bot;
 import com.autocraft.Chat;
 import com.autocraft.behavior.FarmBehavior;
 import com.autocraft.build.BuildOrder;
+import com.autocraft.build.MaterialAdvisor;
+import com.autocraft.build.MaterialSettings;
 import com.autocraft.build.StructureRegistry;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
@@ -109,7 +111,8 @@ public final class Commands {
 		Rotation rotation = rotation(args.length > (here ? 3 : 5) ? args[here ? 3 : 5] : "0");
 		Chat.info(String.format("%s is %dx%dx%d (x/y/z), %d blocks; origin = its corner at %s.", s.name(), s.size().getX(), s.size().getY(),
 				s.size().getZ(), s.nonAirCount(), origin.toShortString()));
-		bot.startBuild(new BuildOrder(s, origin, rotation, Mirror.NONE, BuildOrder.Purpose.USER));
+		bot.startBuild(new BuildOrder(s, origin, rotation, Mirror.NONE, MaterialAdvisor.resolve(MaterialSettings.defaults(), s),
+				BuildOrder.Purpose.USER));
 	}
 
 	/** {@code !ac place <name>}: show it as a ghost at the crosshair and position it with the placement keys. */

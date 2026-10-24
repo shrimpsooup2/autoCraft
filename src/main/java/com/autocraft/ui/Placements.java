@@ -2,7 +2,7 @@ package com.autocraft.ui;
 
 import com.autocraft.Bot;
 import com.autocraft.Chat;
-import com.autocraft.build.BuildPlan;
+import com.autocraft.build.MaterialSettings;
 import com.autocraft.build.Placement;
 import com.autocraft.path.Navigator;
 import com.autocraft.schematic.Schematic;
@@ -73,11 +73,10 @@ public final class Placements {
 	/** Start positioning {@code s}, centered on the block you look at (or just in front of you). */
 	public static Placement start(Schematic s) {
 		Minecraft mc = Minecraft.getInstance();
-		LocalPlayer p = mc.player;
-		String wood = s.builtIn() && p != null ? BuildPlan.preferredWood(p) : null;
-		Placement placement = new Placement(s, BlockPos.ZERO, wood);
+		Placement placement = new Placement(s, BlockPos.ZERO, MaterialSettings.defaults());
 		placement.centerOn(target(mc));
 		active = placement;
+		if (!placement.substitution().isIdentity()) Chat.info("Materials: " + placement.substitution().reason() + " (change in K → Build → Materials).");
 		Chat.info("Placing " + s.name() + ": arrows/PgUp/PgDn or Alt+wheel move it, R rotates, M mirrors, G moves it to the crosshair, "
 				+ "Enter builds, Backspace cancels (or use the panel).");
 		return placement;

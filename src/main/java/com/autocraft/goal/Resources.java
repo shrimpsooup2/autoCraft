@@ -87,7 +87,8 @@ public final class Resources {
 				Biomes.CHERRY_GROVE, Biomes.GROVE, Biomes.SNOWY_SLOPES, Biomes.JAGGED_PEAKS, Biomes.FROZEN_PEAKS, Biomes.STONY_PEAKS);
 		biomes("cactus", Biomes.DESERT, Biomes.BADLANDS);
 		biomes("mud", Biomes.MANGROVE_SWAMP);
-		biomes("bamboo", Biomes.BAMBOO_JUNGLE, Biomes.JUNGLE);
+		biomes("dark_oak_log", Biomes.DARK_FOREST);
+		biomes("oak_log", Biomes.FOREST, Biomes.FLOWER_FOREST, Biomes.WINDSWEPT_FOREST, Biomes.PLAINS, Biomes.SWAMP, Biomes.WOODED_BADLANDS);
 		biomes("dark_oak_log", Biomes.DARK_FOREST);
 		biomes("jungle_log", Biomes.JUNGLE, Biomes.BAMBOO_JUNGLE, Biomes.SPARSE_JUNGLE);
 		biomes("acacia_log", Biomes.SAVANNA, Biomes.SAVANNA_PLATEAU, Biomes.WINDSWEPT_SAVANNA);
