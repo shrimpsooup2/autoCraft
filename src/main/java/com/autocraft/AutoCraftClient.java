@@ -6,6 +6,7 @@ import com.autocraft.ui.AutoCraftScreen;
 import com.autocraft.ui.GhostRenderer;
 import com.autocraft.ui.HudOverlay;
 import com.autocraft.ui.Placements;
+import com.autocraft.team.Team;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -34,6 +35,7 @@ public final class AutoCraftClient implements ClientModInitializer {
 			}
 			Placements.tick(mc);
 			GhostRenderer.tick(mc);
+			Team.tick(mc);
 		});
 		LevelRenderEvents.COLLECT_SUBMITS.register(GhostRenderer::collect);
 		HudElementRegistry.addLast(Identifier.fromNamespaceAndPath(MOD_ID, "status"), HudOverlay::extract);

@@ -26,6 +26,8 @@ import com.autocraft.craft.RecipeBook;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
 import com.autocraft.goal.Requirement.Dim;
+import com.autocraft.team.Team;
+import com.autocraft.team.TeamRole;
 import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
 import com.autocraft.travel.ElytraTravel;
@@ -82,6 +84,9 @@ public final class Bot {
 	private @Nullable BuildPlan buildPlan;
 	private int buildPlaced;
 	private int buildTotal;
+	private TeamRole teamRole = TeamRole.SOLO;
+	private @Nullable BlockPos depot;
+	private Map<Item, Integer> teamNeeds = Map.of();
 
 	private @Nullable Job job;
 	private @Nullable BuildOrder build;
@@ -181,10 +186,11 @@ public final class Bot {
 	// ---- work control ---------------------------------------------------------------------------
 
 	public void start(Job newJob) {
-		begin(newJob, null);
-		List<Item> products = newJob.requirements().stream().map(Requirement::product).filter(Objects::nonNull).toList();
+		Job mine = Team.shareJob(newJob); // with teammates, they take an even share
+		begin(mine, null);
+		List<Item> products = mine.requirements().stream().map(Requirement::product).filter(Objects::nonNull).toList();
 		if (!products.isEmpty()) jobMaterials.addAll(RecipeBook.get().ingredientTree(products, 3));
-		Chat.info("Job started: " + newJob.requirements());
+		Chat.info("Job started: " + mine.requirements());
 	}
 
 	/** Utility mode: only walk to {@code goal}; reflexes and combat still run. */
@@ -195,14 +201,27 @@ public final class Bot {
 
 	/**
 	 * Build something. With a resource job running (an auto farm) the job continues afterwards; otherwise
-	 * the build is the whole task.
+	 * the build is the whole task. A team leader shares user builds with its members.
 	 */
 	public void startBuild(BuildOrder order) {
+		Team.Assignment share = order.purpose() == BuildOrder.Purpose.USER ? Team.shareBuild(order) : null;
+		if (share != null) {
+			startTeamBuild(order, share.role(), share.depot());
+			return;
+		}
 		if (!running || job == null) begin(null, null);
 		build = order;
 		Chat.info("Building " + order.schematic().name() + " at " + order.origin().toShortString()
 				+ (order.rotation().ordinal() == 0 ? "" : " rotated " + order.rotation().ordinal() * 90 + "°")
 				+ (order.mirror() == Mirror.NONE ? "" : ", mirrored") + ".");
+	}
+
+	/** One part of a shared build (placer, digger or gatherer); {@code depot} is where materials are exchanged. */
+	public void startTeamBuild(BuildOrder order, TeamRole role, BlockPos depot) {
+		if (!running || job == null) begin(null, null);
+		build = order;
+		teamRole = role;
+		this.depot = depot;
 	}
 
 	/** The current build order is finished or abandoned. */
@@ -217,6 +236,9 @@ public final class Bot {
 		buildPlan = null;
 		buildMaterials.clear();
 		buildPlaced = buildTotal = 0;
+		teamRole = TeamRole.SOLO;
+		depot = null;
+		teamNeeds = Map.of();
 	}
 
 	private void begin(@Nullable Job newJob, @Nullable Goal newGoto) {
@@ -234,6 +256,7 @@ public final class Bot {
 
 	public void stop(String reason) {
 		if (!running) return;
+		if (teamRole != TeamRole.SOLO || job != null) Team.stopAll();
 		running = false;
 		paused = false;
 		gotoGoal = null;
@@ -415,6 +438,15 @@ public final class Bot {
 		buildPlaced = placed;
 		buildTotal = total;
 	}
+
+	/** This bot's part of a shared build ({@link TeamRole#SOLO} when working alone). */
+	public TeamRole teamRole() { return teamRole; }
+	public void setTeamRole(TeamRole role) { teamRole = role; }
+	/** Chest spot where a team exchanges materials; null when solo. */
+	public @Nullable BlockPos depot() { return depot; }
+	/** Gatherer: items to have on hand before the next delivery (sent by the leader). */
+	public Map<Item, Integer> teamNeeds() { return teamNeeds; }
+	public void setTeamNeeds(Map<Item, Integer> needs) { teamNeeds = Map.copyOf(needs); }
 
 	public String activeBehavior() { return activeBehavior; }
 	public String status() { return status; }

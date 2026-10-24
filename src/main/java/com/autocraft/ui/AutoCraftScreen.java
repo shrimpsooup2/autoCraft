@@ -11,6 +11,7 @@ import com.autocraft.goal.Requirement;
 import com.autocraft.goal.Resources;
 import com.autocraft.schematic.Schematic;
 import com.autocraft.schematic.SchematicLibrary;
+import com.autocraft.team.Team;
 import com.mojang.blaze3d.Blaze3D;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -39,7 +40,7 @@ import org.jspecify.annotations.Nullable;
  */
 public final class AutoCraftScreen extends Screen {
 	private enum Tab {
-		COLLECT("Collect"), BUILD("Build"), BOT("Bot");
+		COLLECT("Collect"), BUILD("Build"), TEAM("Team"), BOT("Bot");
 
 		final String label;
 
@@ -101,6 +102,11 @@ public final class AutoCraftScreen extends Screen {
 	private @Nullable Button logoffButton;
 	private @Nullable Button hudButton;
 
+	// team tab
+	private static String joinAddress = "127.0.0.1:" + Team.DEFAULT_PORT;
+	private static String joinCode = "";
+	private @Nullable Button joinButton;
+
 	public AutoCraftScreen() {
 		super(Component.literal("autoCraft"));
 	}
@@ -136,6 +142,7 @@ public final class AutoCraftScreen extends Screen {
 		switch (tab) {
 			case COLLECT -> initCollect();
 			case BUILD -> initBuild();
+			case TEAM -> initTeam();
 			case BOT -> initBot();
 		}
 	}
@@ -145,6 +152,7 @@ public final class AutoCraftScreen extends Screen {
 		switch (tab) {
 			case COLLECT -> updateCollectButtons();
 			case BUILD -> updateBuildButtons();
+			case TEAM -> updateTeamButtons();
 			case BOT -> updateBotButtons();
 		}
 	}
@@ -161,6 +169,7 @@ public final class AutoCraftScreen extends Screen {
 		switch (tab) {
 			case COLLECT -> extractCollect(g, mouseX, mouseY);
 			case BUILD -> extractBuild(g, mouseX, mouseY);
+			case TEAM -> extractTeam(g);
 			case BOT -> extractBot(g);
 		}
 		super.extractRenderState(g, mouseX, mouseY, a);
@@ -615,6 +624,88 @@ public final class AutoCraftScreen extends Screen {
 		}
 		if (previewBill.size() > maxRows * perRow && maxRows > 0) {
 			g.text(font, "+" + (previewBill.size() - maxRows * perRow) + " more kinds", rightX, y + maxRows * 12, Widgets.GRAY);
+		}
+	}
+
+	// ---- team -----------------------------------------------------------------------------------
+
+	private void initTeam() {
+		if (Team.isActive()) {
+			addRenderableWidget(Button.builder(Component.literal(Team.isLeader() ? "Close team" : "Leave team"), b -> {
+				Team.leave();
+				rebuildWidgets();
+			}).bounds(rightX, bottomY, colW, 18).build());
+			return;
+		}
+		addRenderableWidget(Button.builder(Component.literal("Host a team here"), b -> {
+			try {
+				Team.host(Team.DEFAULT_PORT);
+			} catch (IllegalStateException e) {
+				Chat.error(e.getMessage());
+			}
+			rebuildWidgets();
+		}).tooltip(Tooltip.create(Component.literal("Open the team server on this computer; teammates join with the address and code shown")))
+				.bounds(rightX, contentY + 14, colW, 18).build());
+		EditBox address = addRenderableWidget(new EditBox(font, rightX, contentY + 72, colW, 16, Component.literal("Address")));
+		address.setMaxLength(64);
+		address.setValue(joinAddress);
+		address.setResponder(s -> joinAddress = s);
+		EditBox code = addRenderableWidget(new EditBox(font, rightX, contentY + 104, colW / 2, 16, Component.literal("Code")));
+		code.setMaxLength(8);
+		code.setValue(joinCode);
+		code.setHint(Component.literal("CODE").withStyle(ChatFormatting.DARK_GRAY));
+		code.setResponder(s -> joinCode = s);
+		joinButton = addRenderableWidget(Button.builder(Component.literal("Join"), b -> {
+			String a = joinAddress.trim();
+			int colon = a.lastIndexOf(':');
+			try {
+				Team.join(colon > 0 ? a.substring(0, colon) : a, colon > 0 ? Integer.parseInt(a.substring(colon + 1)) : Team.DEFAULT_PORT, joinCode.trim());
+			} catch (RuntimeException e) {
+				Chat.error("Can't join: " + e.getMessage());
+			}
+			rebuildWidgets();
+		}).bounds(rightX + colW / 2 + 4, contentY + 103, colW / 2 - 4, 18).build());
+		updateTeamButtons();
+	}
+
+	private void updateTeamButtons() {
+		if (joinButton != null) joinButton.active = !joinCode.isBlank() && !joinAddress.isBlank();
+	}
+
+	private void extractTeam(GuiGraphicsExtractor g) {
+		int x = left + 8;
+		int y = contentY + 2;
+		if (!Team.isActive()) {
+			g.textWithWordWrap(font, Component.literal("Bots on several accounts can share work. One computer hosts the team (usually the one"
+					+ " starting the job); the others join with its address and code. Every bot must be in the same world.\n\nA build you"
+					+ " start is split: you place, one teammate digs out the site and then gathers, the rest gather materials into a chest"
+					+ " next to the site. Collect jobs are split by amount."), x, y, colW, Widgets.GRAY);
+			g.text(font, "Join a team", rightX, contentY + 50, Widgets.WHITE);
+			g.text(font, "Address (host:port)", rightX, contentY + 62, Widgets.GRAY);
+			g.text(font, "Code", rightX, contentY + 94, Widgets.GRAY);
+			return;
+		}
+		if (Team.isLeader()) {
+			g.text(font, "Hosting a team", rightX, y, Widgets.WHITE);
+			g.text(font, "Address: " + Team.shareAddress(), rightX, y + LINE + 2, 0xFF7FE0FF);
+			g.text(font, "Code: " + Team.code(), rightX, y + 2 * LINE + 2, 0xFF7FE0FF);
+			g.textWithWordWrap(font, Component.literal("Teammates on this PC can use 127.0.0.1. Start a build or a collect job as usual and it's"
+					+ " shared with everyone here."), rightX, y + 3 * LINE + 8, colW, Widgets.GRAY);
+		} else {
+			g.text(font, Team.isMember() ? "In " + Team.leaderName() + "'s team" : "Joining...", rightX, y, Widgets.WHITE);
+			g.textWithWordWrap(font, Component.literal("The leader hands out the work; this bot follows its orders."), rightX, y + LINE + 2, colW,
+					Widgets.GRAY);
+		}
+		g.text(font, "Members", x, y, Widgets.WHITE);
+		y += LINE + 2;
+		LocalPlayer p = minecraft.player;
+		for (Team.MemberView m : Team.roster()) {
+			if (y > bottomY + 6) break;
+			String head = m.name() + (m.role().isEmpty() ? "" : " · " + m.role());
+			if (m.pos() != null && p != null) head += " · " + (int) Math.sqrt(m.pos().distSqr(p.blockPosition())) + "m";
+			g.text(font, font.plainSubstrByWidth(head, colW), x, y, Widgets.WHITE);
+			g.text(font, font.plainSubstrByWidth(m.activity(), colW - 6), x + 6, y + LINE, Widgets.GRAY);
+			y += 2 * LINE + 3;
 		}
 	}
 

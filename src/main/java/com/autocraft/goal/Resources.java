@@ -89,7 +89,6 @@ public final class Resources {
 		biomes("mud", Biomes.MANGROVE_SWAMP);
 		biomes("dark_oak_log", Biomes.DARK_FOREST);
 		biomes("oak_log", Biomes.FOREST, Biomes.FLOWER_FOREST, Biomes.WINDSWEPT_FOREST, Biomes.PLAINS, Biomes.SWAMP, Biomes.WOODED_BADLANDS);
-		biomes("dark_oak_log", Biomes.DARK_FOREST);
 		biomes("jungle_log", Biomes.JUNGLE, Biomes.BAMBOO_JUNGLE, Biomes.SPARSE_JUNGLE);
 		biomes("acacia_log", Biomes.SAVANNA, Biomes.SAVANNA_PLATEAU, Biomes.WINDSWEPT_SAVANNA);
 		biomes("spruce_log", Biomes.TAIGA, Biomes.SNOWY_TAIGA, Biomes.OLD_GROWTH_PINE_TAIGA, Biomes.OLD_GROWTH_SPRUCE_TAIGA, Biomes.GROVE);

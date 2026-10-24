@@ -76,7 +76,17 @@ public final class SchematicLibrary {
 		return out;
 	}
 
-	private static @Nullable Schematic load(Path file) {
+	/** The user file behind a schematic name, or null for built-ins / unknown names. */
+	public static @Nullable Path fileOf(String name) {
+		String wanted = name.toLowerCase(Locale.ROOT);
+		for (Path f : files()) {
+			if (stem(f).toLowerCase(Locale.ROOT).equals(wanted)) return f;
+		}
+		return null;
+	}
+
+	/** Load a schematic file outside the folder (sent by a team leader); cached like folder files. */
+	public static @Nullable Schematic load(Path file) {
 		try {
 			long modified = Files.getLastModifiedTime(file).toMillis();
 			Loaded cached = cache.get(file);

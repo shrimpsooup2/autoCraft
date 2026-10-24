@@ -14,6 +14,7 @@ import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
 import com.autocraft.schematic.Schematic;
 import com.autocraft.schematic.SchematicLibrary;
+import com.autocraft.team.Team;
 import com.autocraft.ui.Placements;
 import java.util.ArrayList;
 import java.util.List;
@@ -79,7 +80,35 @@ public final class Commands {
 			case "schematics" -> schematics();
 			case "farm" -> farm(bot, args);
 			case "built", "farms" -> built();
+			case "team" -> team(args);
 			default -> help();
+		}
+	}
+
+	/** {@code !ac team host [port] | join <host[:port]> <code> | leave} or just {@code !ac team} for the roster. */
+	private static void team(String[] args) {
+		String sub = args.length > 1 ? args[1].toLowerCase() : "";
+		switch (sub) {
+			case "host" -> Team.host(args.length > 2 ? Integer.parseInt(args[2]) : Team.DEFAULT_PORT);
+			case "join" -> {
+				if (args.length < 4) throw new IllegalArgumentException("usage: !ac team join <host[:port]> <code>");
+				String address = args[2];
+				int colon = address.lastIndexOf(':');
+				String host = colon > 0 ? address.substring(0, colon) : address;
+				int port = colon > 0 ? Integer.parseInt(address.substring(colon + 1)) : Team.DEFAULT_PORT;
+				Team.join(host, port, args[3]);
+			}
+			case "leave" -> Team.leave();
+			default -> {
+				if (!Team.isActive()) {
+					Chat.info("Not in a team. !ac team host  (then others: !ac team join <address> <code>)");
+					return;
+				}
+				if (Team.isLeader()) Chat.info("Hosting at " + Team.shareAddress() + ", code " + Team.code() + ".");
+				for (Team.MemberView m : Team.roster()) {
+					Chat.info(m.name() + (m.role().isEmpty() ? "" : " [" + m.role() + "]") + ": " + m.activity());
+				}
+			}
 		}
 	}
 
@@ -205,7 +234,7 @@ public final class Commands {
 
 	private static void help() {
 		Chat.info("Press K for the control panel. Commands: !ac collect <item> <amount> ... (mined or crafted) | place <schematic> (ghost preview,"
-				+ " then position it) | build <schematic> <x y z|here> [rot] | farm <resource> [x y z|here] | schematics | built | stop | pause"
-				+ " | resume | status | base | logoff on|off | goto x y z | resources");
+				+ " then position it) | build <schematic> <x y z|here> [rot] | farm <resource> [x y z|here] | team host|join|leave | schematics"
+				+ " | built | stop | pause | resume | status | base | logoff on|off | goto x y z | resources");
 	}
 }
