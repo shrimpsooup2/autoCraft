@@ -11,6 +11,7 @@ import com.autocraft.build.FluidFill;
 import com.autocraft.build.StructureRegistry;
 import com.autocraft.control.InvUtil;
 import com.autocraft.craft.Planner;
+import com.autocraft.craft.Stations;
 import com.autocraft.craft.Workshop;
 import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
@@ -25,7 +26,6 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Items;
-import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import org.jspecify.annotations.Nullable;
 
@@ -268,9 +268,7 @@ public final class BuildBehavior implements Behavior {
 	}
 
 	private boolean step(Bot bot, Item item, int total) {
-		boolean table = !bot.scanner().findBlocks(s -> s.is(Blocks.CRAFTING_TABLE), 1, 1).isEmpty();
-		boolean furnace = !bot.scanner().findBlocks(s -> s.is(Blocks.FURNACE), 1, 1).isEmpty();
-		Planner planner = new Planner(bot.player(), bot.dimension(), table, furnace, bot::isJobItem);
+		Planner planner = Stations.planner(bot);
 		Planner.Step step = planner.next(item, total);
 		switch (step) {
 			case Planner.Craft c -> {

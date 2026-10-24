@@ -136,14 +136,23 @@ public final class Planner {
 		Ingredient input = r.smeltInput();
 		Step s = ingredient(input, missingOutput, depth, visiting);
 		if (!(s instanceof Done)) return s;
-		if (!furnaceNearby && carried(Items.FURNACE) == 0) {
-			Step f = obtain(Items.FURNACE, 1, false, depth + 1, visiting);
-			if (!(f instanceof Done)) return f;
-		}
 		Item inputItem = pickCarried(input);
 		// smelt every spare piece in one furnace session, but never more job loot than needed
 		int carriedInput = InvUtil.count(p, input::test);
 		int amount = protect.test(new ItemStack(inputItem)) ? missingOutput : Math.min(carriedInput, 64);
+		int furnaces = carried(Items.FURNACE) + (furnaceNearby ? 1 : 0);
+		if (furnaces == 0) {
+			Step f = obtain(Items.FURNACE, 1, false, depth + 1, visiting);
+			if (!(f instanceof Done)) return f;
+		} else {
+			// big batch: a few more furnaces cook it several times faster when the cobblestone is already here
+			int extra = Smelter.furnacesFor(amount) - furnaces;
+			int cobble = InvUtil.count(p, x -> x.is(ItemTags.STONE_CRAFTING_MATERIALS) && !protect.test(x));
+			if (extra > 0 && cobble >= 8 * extra) {
+				Step f = obtain(Items.FURNACE, carried(Items.FURNACE) + extra, false, depth + 1, visiting);
+				if (f instanceof Craft) return f;
+			}
+		}
 		if (Smelter.fuelValue(p) < amount) {
 			int coal = InvUtil.count(p, x -> x.is(Items.COAL)) + (amount + 7) / 8;
 			Requirement fuel = Gatherable.requirementFor(Items.COAL, coal, dimension, false);
@@ -152,9 +161,9 @@ public final class Planner {
 		return new Smelt(inputItem, amount);
 	}
 
-	/** Make sure {@code needed} items matching the ingredient are carried (any mix of its options). */
+	/** Make sure {@code needed} items matching the ingredient are carried (any mix of its options; job loot doesn't count). */
 	private Step ingredient(Ingredient ing, int needed, int depth, Set<Item> visiting) {
-		int have = InvUtil.count(p, ing::test);
+		int have = InvUtil.count(p, s -> ing.test(s) && !protect.test(s));
 		if (have >= needed) return DONE;
 		Item choice = cheapestOption(ing, depth, visiting);
 		if (choice == null) return new Unavailable(ing.toString());

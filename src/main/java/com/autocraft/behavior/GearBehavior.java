@@ -7,6 +7,7 @@ import com.autocraft.combat.Threats;
 import com.autocraft.control.InvUtil;
 import com.autocraft.craft.Planner;
 import com.autocraft.craft.Planner.Step;
+import com.autocraft.craft.Stations;
 import com.autocraft.craft.Workshop;
 import com.autocraft.goal.Requirement;
 import com.autocraft.path.Goal;
@@ -21,6 +22,7 @@ import java.util.function.Predicate;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.component.DataComponents;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.EquipmentSlot;
@@ -34,7 +36,6 @@ import net.minecraft.world.item.component.ItemAttributeModifiers;
 import net.minecraft.world.item.equipment.Equippable;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 
@@ -133,7 +134,7 @@ public final class GearBehavior implements Behavior {
 			}
 			case Planner.Done d -> {
 				bot.setNeed(Bot.NeedOwner.GEAR, null);
-				return workshop.packUp(bot);
+				return false; // stations are picked up when the bot leaves the area or finishes
 			}
 		}
 	}
@@ -150,8 +151,7 @@ public final class GearBehavior implements Behavior {
 	// ---- planning -------------------------------------------------------------------------------
 
 	private Step plan(Bot bot, LocalPlayer p) {
-		Planner planner = new Planner(p, bot.dimension(), stationNearby(bot, Blocks.CRAFTING_TABLE), stationNearby(bot, Blocks.FURNACE),
-				bot::isJobItem);
+		Planner planner = Stations.planner(bot);
 		for (Want w : wants(bot, p, bot.targetForGear())) {
 			Step s = w.plan.apply(planner);
 			if (s instanceof Planner.Done || s instanceof Planner.Unavailable) continue;
@@ -162,22 +162,23 @@ public final class GearBehavior implements Behavior {
 		return new Planner.Done();
 	}
 
-	private static boolean stationNearby(Bot bot, Block block) {
-		return !bot.scanner().findBlocks(s -> s.is(block), 1, 1).isEmpty();
-	}
-
+	/**
+	 * What to own, in order. Tools scale with the work left: a stone pickaxe for any real stone work (never mine
+	 * a lot with wood), iron/diamond when hundreds of blocks remain and the materials are cheap, axes and shovels
+	 * for big wood/dirt jobs. Nothing is made that something carried already beats.
+	 */
 	private static List<Want> wants(Bot bot, LocalPlayer p, @Nullable Requirement target) {
 		List<Want> wants = new ArrayList<>();
 		if (target != null) {
 			Item tool = requiredPickaxe(target);
 			if (tool != null && !canHarvestAny(p, target)) wants.add(Want.required(tool));
 			boolean deep = target.strategy() == Requirement.Strategy.UNDERGROUND || target.dimension() == Requirement.Dim.NETHER;
-			if (deep && !InvUtil.canHarvest(p, Blocks.IRON_ORE.defaultBlockState())) wants.add(Want.required(Items.STONE_PICKAXE));
+			int remaining = Math.max(0, target.amount() - InvUtil.count(p, target.counts()));
+			addToolTiers(wants, p, target, deep, remaining);
 		}
 		if (netherTripAhead(bot, p)) addNetherKit(wants, p);
-		double weapon = Features.bestWeaponDamage(p);
-		if (weapon < 5) wants.add(Want.optional(Items.STONE_SWORD));
-		if (weapon < 6) wants.add(Want.optional(Items.IRON_SWORD));
+		// combat only takes quick kills, so a stone sword is plenty; never "upgrade" past something carried
+		if (Features.bestWeaponDamage(p) < 5) wants.add(Want.optional(Items.STONE_SWORD));
 		if (InvUtil.count(p, s -> s.is(Items.SHIELD)) == 0) wants.add(Want.optional(Items.SHIELD));
 		wants.add(new Want(GearBehavior::bucket, false, i -> i == Items.BUCKET));
 		wants.add(new Want(Planner::boat, false, item -> item.getDefaultInstance().is(ItemTags.BOATS)));
@@ -187,6 +188,37 @@ public final class GearBehavior implements Behavior {
 			wants.add(new Want(pl -> pl.next(Items.FIREWORK_ROCKET, rockets + 3), false, i -> i == Items.FIREWORK_ROCKET || i == Items.PAPER));
 		}
 		return wants;
+	}
+
+	/** Better tools when the work ahead pays for them. */
+	private static void addToolTiers(List<Want> wants, LocalPlayer p, Requirement target, boolean deep, int remaining) {
+		boolean pickaxeWork = deep || target.sources().stream().anyMatch(b -> b.defaultBlockState().is(BlockTags.MINEABLE_WITH_PICKAXE));
+		if (pickaxeWork) {
+			boolean stoneTier = InvUtil.canHarvest(p, Blocks.IRON_ORE.defaultBlockState());
+			boolean ironTier = InvUtil.canHarvest(p, Blocks.DIAMOND_ORE.defaultBlockState());
+			boolean diamondTier = InvUtil.canHarvest(p, Blocks.OBSIDIAN.defaultBlockState());
+			if (!stoneTier) {
+				wants.add(Want.required(Items.STONE_PICKAXE)); // 3 cobblestone, mined anyway: 50% faster than wood
+			} else if (!ironTier && (remaining >= 1024 || remaining >= 384 && carriedSpare(p, Items.IRON_INGOT, Items.RAW_IRON) >= 3)) {
+				wants.add(Want.required(Items.IRON_PICKAXE));
+			} else if (ironTier && !diamondTier && remaining >= 256 && carriedSpare(p, Items.DIAMOND) >= 3) {
+				wants.add(Want.optional(Items.DIAMOND_PICKAXE));
+			}
+		}
+		boolean axeWork = target.sources().stream().anyMatch(b -> b.defaultBlockState().is(BlockTags.MINEABLE_WITH_AXE));
+		if (axeWork && remaining >= 24 && InvUtil.find(p, s -> s.is(ItemTags.AXES) && !InvUtil.nearlyBroken(s)) < 0) {
+			wants.add(remaining >= 64 ? Want.required(Items.STONE_AXE) : Want.optional(Items.STONE_AXE));
+		}
+		boolean shovelWork = target.sources().stream().anyMatch(b -> b.defaultBlockState().is(BlockTags.MINEABLE_WITH_SHOVEL));
+		if (shovelWork && remaining >= 48 && InvUtil.find(p, s -> s.is(ItemTags.SHOVELS) && !InvUtil.nearlyBroken(s)) < 0) {
+			wants.add(Want.optional(Items.STONE_SHOVEL));
+		}
+	}
+
+	private static int carriedSpare(LocalPlayer p, Item... items) {
+		int n = 0;
+		for (Item item : items) n += InvUtil.count(p, s -> s.is(item) && !Bot.get().isJobTarget(s));
+		return n;
 	}
 
 	private static void addNetherKit(List<Want> wants, LocalPlayer p) {
@@ -246,7 +278,10 @@ public final class GearBehavior implements Behavior {
 		return planner.hasAny(s -> s.is(Items.BUCKET) || s.is(Items.WATER_BUCKET)) ? new Planner.Done() : planner.next(Items.BUCKET, 1);
 	}
 
-	/** Overworld: carry water, not an empty bucket — walk to the nearest water source and scoop it. */
+	/**
+	 * Overworld: carry water, not an empty bucket — scoop the nearest water source, but only if it's close (or a
+	 * Nether trip is coming up, where water is needed for obsidian and clutches).
+	 */
 	private boolean fillBucket(Bot bot, LocalPlayer p) {
 		if (bot.dimension() != Requirement.Dim.OVERWORLD || InvUtil.count(p, s -> s.is(Items.WATER_BUCKET)) > 0
 				|| InvUtil.count(p, s -> s.is(Items.BUCKET)) == 0) {
@@ -256,7 +291,9 @@ public final class GearBehavior implements Behavior {
 		if (water == null) {
 			if (++sinceWaterSearch < WATER_SEARCH_EVERY) return false;
 			sinceWaterSearch = 0;
-			List<BlockPos> found = bot.scanner().findBlocks(s -> BlockUtil.isWater(s) && s.getFluidState().isSource(), 2, 1);
+			double maxDist = netherTripAhead(bot, p) ? 48 : 16;
+			List<BlockPos> found = bot.scanner().findBlocks(s -> BlockUtil.isWater(s) && s.getFluidState().isSource(), 2, 4);
+			found.removeIf(w -> w.distSqr(p.blockPosition()) > maxDist * maxDist);
 			if (found.isEmpty()) return false;
 			water = found.getFirst();
 			waterTicks = 0;

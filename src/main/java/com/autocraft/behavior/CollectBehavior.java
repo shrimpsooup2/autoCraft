@@ -3,6 +3,7 @@ package com.autocraft.behavior;
 import com.autocraft.Bot;
 import com.autocraft.Chat;
 import com.autocraft.control.InvUtil;
+import com.autocraft.craft.Stations;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
 import com.autocraft.path.Goal;
@@ -40,7 +41,7 @@ public final class CollectBehavior implements Behavior {
 	private static final int TUNNEL_LEG = 24;
 	private static final int WALK_LEG = 64;
 	private static final int BIOME_SEARCH_CHUNKS = 12;
-	private static final int FLY_LEG = 320;
+	private static final int FLY_LEG = 1000;
 
 	private final Map<BlockPos, Long> blacklist = new HashMap<>();
 	private final Set<Integer> unreachableDrops = new HashSet<>();
@@ -52,6 +53,7 @@ public final class CollectBehavior implements Behavior {
 	private @Nullable Direction heading;
 	private @Nullable ItemEntity chasing;
 	private final LongOpenHashSet exhaustedBiomeChunks = new LongOpenHashSet();
+	private final Stations.Cleanup cleanup = new Stations.Cleanup();
 
 	@Override
 	public String name() {
@@ -68,6 +70,7 @@ public final class CollectBehavior implements Behavior {
 		exploreGoal = null;
 		chasing = null;
 		exhaustedBiomeChunks.clear();
+		cleanup.reset();
 	}
 
 	@Override
@@ -122,9 +125,10 @@ public final class CollectBehavior implements Behavior {
 		}
 		lastTarget = target.name();
 		exhaustedBiomeChunks.clear();
-		harvest = null;
 		chasing = null;
 		exploreGoal = null;
+		if (harvest != null && harvest.isMining()) return; // a second from done: finish it rather than waste the work
+		harvest = null;
 		bot.nav().stop();
 	}
 
@@ -156,18 +160,24 @@ public final class CollectBehavior implements Behavior {
 		return true;
 	}
 
-	/** Nearest safe source block, weighting vertical distance (digging is slower than walking). */
+	/**
+	 * Nearest safe source block, weighting vertical distance (digging is slower than walking). Blocks touching
+	 * water (lake beds, flooded caves) are skipped — mining there is 5x slower and drowns the bot — unless
+	 * searching dry ground has already failed.
+	 */
 	private @Nullable BlockPos pickSource(Bot bot, Requirement target, Set<Block> harvestable) {
 		ClientLevel level = bot.mc().level;
 		BlockPos feet = Navigator.feet(bot.player());
 		String key = target.name() + "@" + target.dimension();
 		List<BlockPos> found = bot.scanner().findBlocksCached(key, s -> harvestable.contains(s.getBlock()), SCAN_CHUNKS, SCAN_MAX, SCAN_MAX_AGE);
+		boolean allowWet = bot.fruitlessLegs(target.name()) >= 2;
 		BlockPos best = null;
 		double bestScore = Double.MAX_VALUE;
 		for (BlockPos pos : found) {
 			Long until = blacklist.get(pos);
 			if (until != null && until > tick) continue;
 			if (!BlockUtil.isBreakable(level, pos, level.getBlockState(pos))) continue;
+			if (!allowWet && BlockUtil.touchesWater(level, pos)) continue;
 			double dx = pos.getX() - feet.getX(), dy = pos.getY() - feet.getY(), dz = pos.getZ() - feet.getZ();
 			double score = Math.sqrt(dx * dx + dz * dz) + Math.abs(dy) * 2;
 			if (score < bestScore) {
@@ -175,11 +185,12 @@ public final class CollectBehavior implements Behavior {
 				best = pos;
 			}
 		}
-		return best;
+		return best == null ? null : BlockUtil.tallPlantCut(level, best);
 	}
 
 	private void explore(Bot bot, Requirement target) {
 		LocalPlayer p = bot.player();
+		if (exploreGoal == null && cleanup.tick(bot)) return; // leaving the area: take our tables and furnaces
 		if (heading == null) heading = Direction.fromYRot(p.getYRot());
 		if (exploreGoal == null) exploreGoal = nextLeg(bot, target, Navigator.feet(p));
 		if (boat == null && target.strategy() != Requirement.Strategy.UNDERGROUND && exploreGoal instanceof Goal.XZ(int x, int z)) {
@@ -190,7 +201,7 @@ public final class CollectBehavior implements Behavior {
 				return;
 			}
 		}
-		if (exploreGoal instanceof Goal.XZ(int x, int z) && bot.startFlight(new BlockPos(x, p.getBlockY(), z))) return;
+		if (exploreGoal instanceof Goal.XZ(int x, int z) && bot.startFlight(new BlockPos(x, p.getBlockY(), z), () -> spotted(bot, target))) return;
 		bot.nav().setGoal(exploreGoal);
 		Navigator.Status s = bot.nav().tick();
 		if (s == Navigator.Status.FAILED) {
@@ -204,6 +215,12 @@ public final class CollectBehavior implements Behavior {
 			bot.noteFruitlessLeg(target.name());
 		}
 		bot.setStatus("exploring " + heading.getName() + " for " + target.name());
+	}
+
+	/** From the air: a harvestable source of the target in the loaded area below (ends an exploration flight). */
+	private static boolean spotted(Bot bot, Requirement target) {
+		Set<Block> harvestable = harvestableSources(bot.player(), target);
+		return !harvestable.isEmpty() && !bot.scanner().findBlocks(s -> harvestable.contains(s.getBlock()), 3, 1).isEmpty();
 	}
 
 	private Goal nextLeg(Bot bot, Requirement target, BlockPos feet) {

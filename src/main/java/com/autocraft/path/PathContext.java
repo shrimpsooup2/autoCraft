@@ -8,6 +8,7 @@ import java.util.function.Predicate;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.state.BlockState;
@@ -113,10 +114,14 @@ final class PathContext {
 		return cost;
 	}
 
-	/** Walking-cost multiplier for the floor under feet (x,y,z): soul sand, honey, etc. are slow. */
+	/**
+	 * Walking-cost multiplier for the floor under feet (x,y,z): soul sand, honey, etc. are slow; leaves are avoided
+	 * (tree canopies lead nowhere and end in long falls).
+	 */
 	double floorMultiplier(int x, int y, int z) {
 		BlockState floor = state(x, y - 1, z);
 		if (floor == null) return 1;
+		if (floor.is(BlockTags.LEAVES)) return 3;
 		float factor = floor.getBlock().getSpeedFactor();
 		return factor >= 1 ? 1 : 1 / Math.max(factor, 0.2);
 	}

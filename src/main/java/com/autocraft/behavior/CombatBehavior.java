@@ -21,16 +21,29 @@ import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Deals with hostile mobs. ThreatNet decides fight or flee (with hysteresis so it doesn't flip-flop);
- * the fight itself is hardcoded: best weapon, close in, swing only at full attack strength, hit-and-back
- * off creepers. Each finished fight is fed back to the network as a training example.
+ * Deals with hostile mobs without wasting time on them. A fight is picked only when it ends quickly: the
+ * estimated time to kill everything nearby (weapon damage with crits, attack cooldown, approach) must be short
+ * and ThreatNet must not object. Mobs that aren't close or shooting at us are ignored so the job continues;
+ * close ones that would take long to kill, or any fight at low health, mean running away. Hits land only at
+ * full attack strength, as jump crits when possible; creepers get hit-and-back-off. Each finished fight is fed
+ * back to the network as a training example.
  */
 public final class CombatBehavior implements Behavior {
 	private static final double SCAN = 16;
-	private static final double ENGAGE = 8;
-	private static final double CHASE_LIMIT = 24;
+	/** Melee mobs this close are dealt with (fight or flee); farther ones are left alone. */
+	private static final double CLOSE = 4;
+	/** Mobs within this distance count toward the kill-time estimate. */
+	private static final double GROUP = 6;
+	/** A fight that should take longer than this (ticks) isn't worth it. */
+	private static final double QUICK_KILL_TICKS = 20 * 4;
+	/** Creepers explode 1.5 s after starting to hiss: only fight one that dies faster. */
+	private static final double CREEPER_KILL_TICKS = 25;
+	private static final float LOW_HEALTH = 8;
+	private static final double CHASE_LIMIT = 8;
 	private static final int QUIET_TICKS_TO_END = 40;
 	private static final int CREEPER_BACKOFF = 15;
+	/** Sprinting speed in blocks per tick, for the approach part of the estimate. */
+	private static final double SPRINT_SPEED = 0.28;
 
 	private enum Mode { FIGHT, FLEE }
 
@@ -78,39 +91,46 @@ public final class CombatBehavior implements Behavior {
 
 		ThreatNet net = bot.threatNet();
 		double[] x = Features.of(bot, threats);
-		double fight = net.predict(x);
+		double netSays = net.predict(x);
+		Mob target = pickTarget(p, threats);
+		double killTicks = target == null ? Double.MAX_VALUE : killTicks(p, threats);
+		boolean quick = target instanceof Creeper ? killTicks <= CREEPER_KILL_TICKS : killTicks <= QUICK_KILL_TICKS;
+		boolean oneHit = target != null && hitsToKill(p, target) <= 1;
+		boolean low = p.getHealth() <= LOW_HEALTH;
+		Mode wanted = target == null || threats.stream().anyMatch(m -> m instanceof Warden) ? Mode.FLEE
+				: low && !oneHit ? Mode.FLEE
+				: quick && netSays >= (engaged && mode == Mode.FIGHT ? 0.3 : 0.4) ? Mode.FIGHT
+				: Mode.FLEE;
 		if (!engaged) {
 			engaged = true;
 			fought = false;
 			startFeatures = x;
 			startHealth = p.getHealth();
 			startPos = p.position();
-			mode = fight >= 0.5 ? Mode.FIGHT : Mode.FLEE;
-		} else if (mode == Mode.FIGHT && fight < 0.4) {
-			mode = Mode.FLEE;
-		} else if (mode == Mode.FLEE && fight > 0.6) {
-			mode = Mode.FIGHT;
 		}
+		mode = wanted;
 
-		Mob target = pickTarget(p, threats);
-		boolean mustFlee = target == null || threats.stream().anyMatch(m -> m instanceof Warden);
-		if (mode == Mode.FIGHT && !mustFlee) {
-			if (p.position().distanceTo(startPos) > CHASE_LIMIT) {
-				givenUp.add(target.getId()); // don't get dragged across the map
-				return true;
+		if (mode == Mode.FIGHT) {
+			if (p.position().distanceTo(startPos) > CHASE_LIMIT && target.distanceTo(p) > CLOSE) {
+				givenUp.add(target.getId()); // it ran; don't get dragged across the map
+				return false;
 			}
 			fight(bot, p, target);
-			bot.setStatus(String.format("fighting %s (p=%.2f)", target.getType().getDescription().getString(), fight));
+			bot.setStatus(String.format("fighting %s (~%.1fs)", target.getType().getDescription().getString(), killTicks / 20));
 		} else {
 			flee(bot, threats);
-			bot.setStatus(String.format("fleeing %d mobs (p=%.2f)", threats.size(), fight));
+			bot.setStatus(low ? "low health, getting away" : "avoiding " + threats.size() + " mob" + (threats.size() == 1 ? "" : "s"));
 		}
 		return true;
 	}
 
-	/** Threats worth reacting to: close, already after us, or shooting at us. */
+	/**
+	 * Threats worth reacting to: melee mobs within {@link #CLOSE}, ranged mobs shooting at us, flying shooters
+	 * when hurt. Everything else is ignored (the job goes on; they're dealt with if they come close).
+	 */
 	private List<Mob> relevantThreats(Bot bot, LocalPlayer p) {
 		List<Mob> out = new ArrayList<>();
+		boolean hurt = p.getHealth() <= LOW_HEALTH;
 		for (Mob m : Threats.collect(bot, SCAN)) {
 			if (givenUp.contains(m.getId())) continue;
 			double d = m.distanceTo(p);
@@ -119,16 +139,52 @@ public final class CombatBehavior implements Behavior {
 				if (p.getHealth() < 10 && p.hasLineOfSight(m)) out.add(m);
 				continue;
 			}
-			if (d < ENGAGE || m.isAggressive() && d < SCAN || Threats.isRanged(m) && p.hasLineOfSight(m)) out.add(m);
+			boolean shooting = Threats.isRanged(m) && m.isAggressive() && p.hasLineOfSight(m);
+			if (d < CLOSE || shooting || hurt && m.isAggressive() && d < 10 || m instanceof Creeper && d < CLOSE + 2) out.add(m);
 		}
 		return out;
 	}
 
 	private @Nullable Mob pickTarget(LocalPlayer p, List<Mob> threats) {
+		Mob best = null;
+		double bestDist = Double.MAX_VALUE;
 		for (Mob m : threats) {
-			if (!Threats.isUnreachableShooter(m) || p.isWithinEntityInteractionRange(m, 0)) return m;
+			if (Threats.isUnreachableShooter(m) && !p.isWithinEntityInteractionRange(m, 0)) continue;
+			double d = m.distanceToSqr(p);
+			if (d < bestDist) {
+				bestDist = d;
+				best = m;
+			}
 		}
-		return null;
+		return best;
+	}
+
+	/** Estimated ticks to kill every reachable threat within {@link #GROUP} of us, nearest first. */
+	private static double killTicks(LocalPlayer p, List<Mob> threats) {
+		double delay = p.getCurrentItemAttackStrengthDelay();
+		double total = 0;
+		double nearest = Double.MAX_VALUE;
+		for (Mob m : threats) {
+			if (Threats.isUnreachableShooter(m)) continue;
+			double d = m.distanceTo(p);
+			nearest = Math.min(nearest, d);
+			if (d > GROUP && !Threats.isRanged(m)) continue;
+			total += Math.max(0, hitsToKill(p, m) - 1) * delay + delay * 0.5;
+		}
+		double approach = nearest == Double.MAX_VALUE ? 0 : Math.max(0, nearest - 3) / SPRINT_SPEED;
+		return total + approach;
+	}
+
+	/** Full-strength hits (crits when we can jump) to kill {@code m} with the best weapon carried. */
+	private static int hitsToKill(LocalPlayer p, Mob m) {
+		double damage = Math.max(1, Features.bestWeaponDamage(p)) * (canCrit(p) ? 1.5 : 1);
+		double armor = m.getArmorValue();
+		damage *= 1 - Math.min(20, armor) / 25.0; // vanilla armor reduction, ignoring toughness
+		return (int) Math.ceil(m.getHealth() / damage);
+	}
+
+	private static boolean canCrit(LocalPlayer p) {
+		return !p.isInWater() && !p.onClimbable() && !p.isPassenger();
 	}
 
 	private void fight(Bot bot, LocalPlayer p, Mob target) {
@@ -144,10 +200,16 @@ public final class CombatBehavior implements Behavior {
 		if (p.isWithinEntityInteractionRange(target, 0) && p.hasLineOfSight(target)) {
 			bot.nav().stop();
 			c.lookAt(target.getBoundingBox().getCenter());
-			if (p.getAttackStrengthScale(0.5F) >= 0.9F) {
-				c.attack(target);
-				if (target instanceof Creeper) backoff = CREEPER_BACKOFF;
+			p.setSprinting(false); // sprint hits are knockback, not crits
+			if (p.getAttackStrengthScale(0.5F) < 0.95F) return; // no spam: wait for a full-strength swing
+			boolean crit = canCrit(p) && !(target instanceof Creeper);
+			if (crit && p.onGround()) {
+				c.jump(); // hit on the way down for 1.5x damage
+				return;
 			}
+			if (crit && !(p.fallDistance > 0 && p.getDeltaMovement().y < 0)) return; // still rising
+			c.attack(target);
+			if (target instanceof Creeper) backoff = CREEPER_BACKOFF;
 			return;
 		}
 		if (p.hasLineOfSight(target) && Math.abs(target.getY() - p.getY()) < 1.5) {

@@ -19,8 +19,8 @@ import net.minecraft.world.phys.Vec3;
 final class PathExecutor {
 	enum Result { RUNNING, DONE, REPLAN }
 
-	/** Ticks a step may take without mining/placing before we call it stuck. */
-	private static final int STUCK_TICKS = 100;
+	/** Ticks a step may take without mining/placing before we call it stuck (then the path is re-planned). */
+	private static final int STUCK_TICKS = 40;
 	/** Upper bound for mining a single planned block. */
 	private static final int MINE_TICKS = 20 * 25;
 	private static final double CENTER_TOLERANCE = 0.4;
@@ -36,6 +36,15 @@ final class PathExecutor {
 		this.steps = steps;
 		this.start = start;
 		this.scaffold = scaffold;
+	}
+
+	int remaining() {
+		return steps.size() - index;
+	}
+
+	/** Where the path ends. */
+	BlockPos end() {
+		return steps.getLast().dest();
 	}
 
 	Result tick(ClientLevel level, LocalPlayer p, Controls controls) {

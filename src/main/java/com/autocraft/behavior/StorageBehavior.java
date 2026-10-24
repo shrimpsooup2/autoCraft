@@ -241,7 +241,7 @@ public final class StorageBehavior implements Behavior {
 					return true;
 				}
 				if (shulkerPos == null) {
-					shulkerPos = Placement.besideFeet(bot, StorageBehavior::shulkerWithSpace);
+					shulkerPos = Placement.besideFeet(bot, StorageBehavior::shulkerWithSpace, true);
 					if (shulkerPos == null) return abandonShulker();
 				} else if (modeTicks > 20) {
 					return abandonShulker(); // placement never showed up

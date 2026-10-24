@@ -6,6 +6,7 @@ import com.autocraft.behavior.BuildBehavior;
 import com.autocraft.behavior.CollectBehavior;
 import com.autocraft.behavior.CombatBehavior;
 import com.autocraft.behavior.DefenseReflex;
+import com.autocraft.behavior.DrowningReflex;
 import com.autocraft.behavior.EatReflex;
 import com.autocraft.behavior.EffectReflex;
 import com.autocraft.behavior.FallReflex;
@@ -39,6 +40,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
@@ -110,6 +112,7 @@ public final class Bot {
 		this.threatNet = ThreatNet.loadOrTrain();
 		this.behaviors = List.of(
 				new LavaReflex(),
+				new DrowningReflex(),
 				new FallReflex(),
 				new DefenseReflex(),
 				new EatReflex(),
@@ -176,8 +179,13 @@ public final class Bot {
 	 * Returns true if a flight started (the caller should stop navigating this tick).
 	 */
 	public boolean startFlight(BlockPos target) {
+		return startFlight(target, null);
+	}
+
+	/** As {@link #startFlight(BlockPos)}; {@code lookout} ends the flight early when it reports true (exploring). */
+	public boolean startFlight(BlockPos target, @Nullable BooleanSupplier lookout) {
 		if (flight != null || ticks < flightRetryAt || !ElytraTravel.worthIt(this, target)) return false;
-		flight = new ElytraTravel(target);
+		flight = new ElytraTravel(target, lookout);
 		nav.stop();
 		Chat.info("Flying to " + target.toShortString() + ".");
 		return true;
@@ -407,6 +415,11 @@ public final class Bot {
 	/** Counts toward the current job or goes into it (never junk, never used as scaffolding while alternatives exist). */
 	public boolean isJobItem(ItemStack s) {
 		return job != null && !job.matching(s).isEmpty() || buildMaterials.contains(s.getItem()) || jobMaterials.contains(s.getItem());
+	}
+
+	/** Counts toward the job itself (the loot side work must never use up). */
+	public boolean isJobTarget(ItemStack s) {
+		return job != null && !job.matching(s).isEmpty();
 	}
 
 	/** Items the current build still needs (kept out of the junk pile). */

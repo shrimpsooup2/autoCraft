@@ -14,16 +14,18 @@ import org.jspecify.annotations.Nullable;
 /**
  * Plans with A* and walks the path. Behaviors call {@link #setGoal} (no-op for an equal goal) and then
  * {@link #tick} every tick they own. ARRIVED/FAILED are sticky until {@link #stop} or a different goal.
- * Searches run a few milliseconds per tick; long ones end with a partial path that is followed and then
- * re-planned from its end. Repeated attempts without getting closer to the goal end in FAILED.
+ * Searches run a few milliseconds per tick for at most half a second; then the best partial path is walked
+ * and the next segment planned from its end, so the bot never stands around thinking. A search that explores
+ * every reachable position without finding the goal fails right away; repeated attempts without getting
+ * closer fail too.
  */
 public final class Navigator {
 	public enum Status { IDLE, MOVING, ARRIVED, FAILED }
 
 	private static final long SEARCH_NANOS_PER_TICK = 12_000_000L;
-	private static final int MAX_SEARCH_TICKS = 40;
-	private static final int MAX_FAILURES = 4;
-	private static final int RETRY_COOLDOWN = 20;
+	private static final int MAX_SEARCH_TICKS = 10;
+	private static final int MAX_FAILURES = 3;
+	private static final int RETRY_COOLDOWN = 5;
 
 	private final Minecraft mc;
 	private final Controls controls;
@@ -39,6 +41,8 @@ public final class Navigator {
 	private int cooldown;
 	private double bestHeuristic = Double.MAX_VALUE;
 	private Predicate<ItemStack> searchScaffold = InvUtil::isThrowaway;
+	private Pathfinder.@Nullable Result preResult;
+	private boolean lastPartial;
 
 	public Navigator(Minecraft mc, Controls controls, Predicate<ItemStack> keep) {
 		this.mc = mc;
@@ -58,6 +62,8 @@ public final class Navigator {
 		status = Status.IDLE;
 		search = null;
 		executor = null;
+		preResult = null;
+		lastPartial = false;
 		failures = 0;
 		cooldown = 0;
 		bestHeuristic = Double.MAX_VALUE;
@@ -81,9 +87,22 @@ public final class Navigator {
 
 		if (executor != null) {
 			PathExecutor.Result r = executor.tick(mc.level, p, controls);
-			if (r == PathExecutor.Result.RUNNING) return Status.MOVING;
+			if (r == PathExecutor.Result.RUNNING) {
+				prePlan(p);
+				return Status.MOVING;
+			}
 			executor = null;
-			if (r == PathExecutor.Result.REPLAN) failures++;
+			if (r == PathExecutor.Result.REPLAN) {
+				failures++;
+				search = null;
+				preResult = null;
+			} else if (preResult != null && feet.equals(searchStart)) {
+				Pathfinder.Result next = preResult; // planned while walking: keep going without a pause
+				preResult = null;
+				return accept(next);
+			}
+			search = null;
+			preResult = null;
 		}
 		if (failures >= MAX_FAILURES) return fail("no progress after " + failures + " attempts");
 		if (cooldown > 0) {
@@ -100,15 +119,38 @@ public final class Navigator {
 		Pathfinder.Result result = search.run(System.nanoTime() + SEARCH_NANOS_PER_TICK);
 		if (result == null && ++searchTicks < MAX_SEARCH_TICKS) return Status.MOVING;
 		if (result == null) result = search.finish();
-		Chat.LOG.debug("path {} -> {}: {} steps, complete={}, expanded={}", searchStart, goal, result.steps().size(), result.complete(), search.expanded());
 		search = null;
+		return accept(result);
+	}
+
+	private Status accept(Pathfinder.Result result) {
+		Chat.LOG.debug("path {} -> {}: {} steps, complete={}", searchStart, goal, result.steps().size(), result.complete());
+		if (result.exhausted() && result.steps().isEmpty()) return fail("unreachable");
 		if (result.steps().isEmpty()) {
 			failures++;
 			cooldown = RETRY_COOLDOWN;
 			return failures >= MAX_FAILURES ? fail("no path") : Status.MOVING;
 		}
+		if (result.exhausted()) failures++; // walking to the closest point we can reach; counts against retries
+		lastPartial = !result.complete();
 		executor = new PathExecutor(result.steps(), searchStart, searchScaffold);
 		return Status.MOVING;
+	}
+
+	/** Near the end of a partial path: plan the next segment from its end while still walking. */
+	private void prePlan(LocalPlayer p) {
+		if (lastPartial && search == null && preResult == null && executor.remaining() <= 3) {
+			searchStart = executor.end();
+			search = new Pathfinder(new PathContext(mc.level, p, searchScaffold), searchStart, goal);
+			searchTicks = 0;
+		}
+		if (search == null) return;
+		Pathfinder.Result r = search.run(System.nanoTime() + SEARCH_NANOS_PER_TICK / 2);
+		if (r == null && ++searchTicks >= MAX_SEARCH_TICKS * 2) r = search.finish();
+		if (r != null) {
+			preResult = r;
+			search = null;
+		}
 	}
 
 	/** Getting closer to the goal forgives earlier failed attempts. */

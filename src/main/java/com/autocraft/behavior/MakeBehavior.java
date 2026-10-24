@@ -4,12 +4,12 @@ import com.autocraft.Bot;
 import com.autocraft.Chat;
 import com.autocraft.control.InvUtil;
 import com.autocraft.craft.Planner;
+import com.autocraft.craft.Stations;
 import com.autocraft.craft.Workshop;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.world.item.Item;
-import net.minecraft.world.level.block.Blocks;
 
 /**
  * Job requirements that are crafted or smelted (torches, glass, pistons, iron ingots...): the recipe planner
@@ -62,9 +62,7 @@ public final class MakeBehavior implements Behavior {
 
 		Item item = target.product();
 		int total = InvUtil.count(p, s -> s.is(item)) + job.missing(p, target);
-		boolean table = !bot.scanner().findBlocks(s -> s.is(Blocks.CRAFTING_TABLE), 1, 1).isEmpty();
-		boolean furnace = !bot.scanner().findBlocks(s -> s.is(Blocks.FURNACE), 1, 1).isEmpty();
-		Planner planner = new Planner(p, bot.dimension(), table, furnace, bot::isJobItem);
+		Planner planner = Stations.planner(bot, s -> s.is(item)); // only the product itself is off limits
 		switch (planner.next(item, total)) {
 			case Planner.Craft c -> {
 				bot.setNeed(Bot.NeedOwner.MAKE, null);

@@ -10,6 +10,7 @@ import net.minecraft.tags.FluidTags;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.BambooStalkBlock;
 import net.minecraft.world.level.block.BaseEntityBlock;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.FallingBlock;
@@ -102,6 +103,26 @@ public final class BlockUtil {
 	/** Sand/gravel/etc. resting on top of {@code pos} will fall when it is mined. */
 	public static boolean hasFallingBlockAbove(BlockGetter level, BlockPos pos) {
 		return level.getBlockState(pos.above()).getBlock() instanceof FallingBlock;
+	}
+
+	/**
+	 * Where to break a stalk plant (bamboo, sugar cane, cactus, kelp) so the whole column
+	 * drops at once: one above the bottom segment (the base stays and regrows), or the base of a 1-tall plant.
+	 * Other blocks are returned unchanged.
+	 */
+	public static BlockPos tallPlantCut(BlockGetter level, BlockPos pos) {
+		BlockState s = level.getBlockState(pos);
+		boolean stalk = s.getBlock() instanceof BambooStalkBlock || s.is(Blocks.SUGAR_CANE) || s.is(Blocks.CACTUS)
+				|| s.is(Blocks.KELP_PLANT) || s.is(Blocks.KELP);
+		if (!stalk) return pos;
+		BlockPos base = pos;
+		while (sameStalk(level.getBlockState(base.below()), s)) base = base.below();
+		return sameStalk(level.getBlockState(base.above()), s) ? base.above() : base;
+	}
+
+	private static boolean sameStalk(BlockState a, BlockState b) {
+		if (a.getBlock() == b.getBlock()) return true;
+		return (a.is(Blocks.KELP) || a.is(Blocks.KELP_PLANT)) && (b.is(Blocks.KELP) || b.is(Blocks.KELP_PLANT));
 	}
 
 	/** Ticks to break {@code s} with the best tool in the inventory (vanilla formula, no enchant/effect bonuses). */

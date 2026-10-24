@@ -2,6 +2,7 @@ package com.autocraft.behavior;
 
 import com.autocraft.Bot;
 import com.autocraft.Chat;
+import com.autocraft.craft.Stations;
 import com.autocraft.goal.Job;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -12,6 +13,7 @@ import org.jspecify.annotations.Nullable;
  * other dimension, step aside so the portal behavior brings the bot home first.
  */
 public final class FinishBehavior implements Behavior {
+	private final Stations.Cleanup cleanup = new Stations.Cleanup();
 	private @Nullable BaseDeposit deposit;
 	private boolean deposited;
 
@@ -24,12 +26,14 @@ public final class FinishBehavior implements Behavior {
 	public void reset() {
 		deposit = null;
 		deposited = false;
+		cleanup.reset();
 	}
 
 	@Override
 	public boolean tick(Bot bot) {
 		Job job = bot.job();
 		if (job == null || !job.isComplete(bot.player())) return false;
+		if (cleanup.tick(bot)) return true; // don't leave tables and furnaces behind
 		if (bot.base() != null && !deposited) {
 			if (bot.baseDimension() != bot.dimension()) return false;
 			if (deposit == null) deposit = new BaseDeposit(bot.base());

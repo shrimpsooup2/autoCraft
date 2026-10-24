@@ -54,7 +54,9 @@ import org.jspecify.annotations.Nullable;
 public final class FarmBehavior implements Behavior {
 	/** Fruitless exploration legs before building a farm instead. */
 	private static final int AUTO_BUILD_AFTER = 4;
-	private static final double MAX_FARM_DISTANCE = 256;
+	/** A farm this close is harvested right away; up to {@link #FAR_FARM_DISTANCE} once searching nearby has failed. */
+	private static final double NEAR_FARM_DISTANCE = 48;
+	private static final double FAR_FARM_DISTANCE = 128;
 	private static final int CONTAINER_CHECK_EVERY = 20 * 120;
 
 	private final Set<String> autoTried = new HashSet<>();
@@ -84,7 +86,8 @@ public final class FarmBehavior implements Behavior {
 		if (bot.job() == null || bot.buildOrder() != null || bot.activeNeed() != null) return false;
 		Requirement target = bot.job().nextUnmet(bot.player());
 		if (target == null) return false;
-		StructureRegistry.Entry farm = nearestFarm(bot, target.name());
+		double reach = bot.fruitlessLegs(target.name()) >= 1 ? FAR_FARM_DISTANCE : NEAR_FARM_DISTANCE;
+		StructureRegistry.Entry farm = nearestFarm(bot, target.name(), reach);
 		if (farm != null) return operate(bot, farm, target);
 		if (bot.fruitlessLegs(target.name()) >= AUTO_BUILD_AFTER && autoTried.add(target.name())) return autoBuild(bot, target);
 		return false;
@@ -110,9 +113,9 @@ public final class FarmBehavior implements Behavior {
 		return false;
 	}
 
-	private static StructureRegistry.@Nullable Entry nearestFarm(Bot bot, String resource) {
+	private static StructureRegistry.@Nullable Entry nearestFarm(Bot bot, String resource, double reach) {
 		StructureRegistry.Entry best = null;
-		double bestDist = MAX_FARM_DISTANCE * MAX_FARM_DISTANCE;
+		double bestDist = reach * reach;
 		for (StructureRegistry.Entry e : StructureRegistry.farmsFor(resource, bot.dimension())) {
 			double d = e.center().distSqr(bot.player().blockPosition());
 			if (d < bestDist) {

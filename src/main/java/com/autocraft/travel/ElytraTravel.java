@@ -6,6 +6,7 @@ import com.autocraft.control.Controls;
 import com.autocraft.control.InvUtil;
 import com.autocraft.goal.Requirement;
 import com.autocraft.path.Navigator;
+import java.util.function.BooleanSupplier;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
@@ -18,7 +19,7 @@ import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.Fireworks;
 import net.minecraft.world.level.levelgen.Heightmap;
-import net.minecraft.world.phys.Vec3;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Long-distance flight: swap the chestplate for the elytra, take off with a jump + glide + rocket, climb
@@ -42,17 +43,21 @@ public final class ElytraTravel {
 	private static final double LAND_DISTANCE = 40;
 
 	private final BlockPos target;
+	/** Exploration flights: true once what we're looking for is in sight (land there instead of flying on). */
+	private final @Nullable BooleanSupplier lookout;
 	private Phase phase = Phase.EQUIP;
 	private int phaseTicks;
 	private int totalTicks;
+	private int timeoutTicks = -1;
 	private int sinceRocket = ROCKET_EVERY;
 	private int restoreSlot = -1;
 	private boolean jumpedLastTick;
 	/** Takeoff failed: report FAILED after restoring the chestplate so callers back off. */
 	private boolean failed;
 
-	public ElytraTravel(BlockPos target) {
+	public ElytraTravel(BlockPos target, @Nullable BooleanSupplier lookout) {
 		this.target = target.immutable();
+		this.lookout = lookout;
 	}
 
 	// ---- pre-flight checks ----------------------------------------------------------------------
@@ -107,7 +112,8 @@ public final class ElytraTravel {
 		phaseTicks++;
 		sinceRocket++;
 		bot.setStatus("elytra " + phase.name().toLowerCase() + " to " + target.toShortString());
-		if (++totalTicks > timeout(p) && phase != Phase.LAND && phase != Phase.RESTORE) enter(Phase.LAND);
+		if (timeoutTicks < 0) timeoutTicks = (int) (horizontalDistance(p, target) / BLOCKS_PER_SECOND * 20) + 20 * 90;
+		if (++totalTicks > timeoutTicks && phase != Phase.LAND && phase != Phase.RESTORE) enter(Phase.LAND);
 		switch (phase) {
 			case EQUIP -> {
 				if (!InvUtil.inventoryMenuActive(p)) p.closeContainer();
@@ -144,6 +150,10 @@ public final class ElytraTravel {
 				if (!p.isFallFlying()) return grounded(p);
 				if (horizontalDistance(p, target) < LAND_DISTANCE || lowOnSupplies(p)) {
 					if (lowOnSupplies(p)) Chat.warn("Elytra or rockets running low, landing early.");
+					return enter(Phase.LAND);
+				}
+				if (lookout != null && totalTicks % 20 == 0 && lookout.getAsBoolean()) {
+					Chat.info("Spotted what we're looking for below, landing.");
 					return enter(Phase.LAND);
 				}
 				double want = cruiseAltitude(bot, p);
@@ -184,10 +194,6 @@ public final class ElytraTravel {
 		if (p.onGround() || p.isInWater()) return enter(Phase.RESTORE);
 		Chat.warn("Elytra flight interrupted in the air.");
 		return Status.FAILED; // chestplate gets re-equipped by the gear behavior once on the ground
-	}
-
-	private int timeout(LocalPlayer p) {
-		return (int) (horizontalDistance(p, target) / BLOCKS_PER_SECOND * 20) + 20 * 90;
 	}
 
 	private void face(Controls c, LocalPlayer p, float pitch) {

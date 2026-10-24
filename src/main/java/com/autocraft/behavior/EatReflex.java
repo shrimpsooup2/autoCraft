@@ -14,13 +14,17 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 
 /**
- * Eat when hungry (or hurt and not full) and nothing is about to hit us. Picks the most nutritious safe
- * food; risky foods only when starving; golden apples are kept for emergencies.
+ * Eat when hungry (or hurt and not full) and it's safe: no mob within reach of us soon, no archer with a line
+ * of sight — and at low health a much bigger safety margin, because standing still to eat next to a mob is how
+ * bots die (combat runs away first, eating happens once clear). Picks the most nutritious safe food; risky foods
+ * only when starving; golden apples are kept for emergencies.
  */
 public final class EatReflex implements Behavior {
 	private static final int START_BELOW = 15;
 	private static final int STOP_AT = 19;
-	private static final double SAFE_RADIUS = 4;
+	private static final double SAFE_RADIUS = 5;
+	private static final double SAFE_RADIUS_HURT = 14;
+	private static final double ARCHER_RADIUS = 20;
 	private static final Set<Item> RISKY = Set.of(Items.ROTTEN_FLESH, Items.SPIDER_EYE, Items.POISONOUS_POTATO, Items.PUFFERFISH, Items.CHICKEN);
 	private static final Set<Item> NEVER = Set.of(Items.SUSPICIOUS_STEW, Items.CHORUS_FRUIT);
 	private static final Set<Item> EMERGENCY = Set.of(Items.GOLDEN_APPLE, Items.ENCHANTED_GOLDEN_APPLE);
@@ -45,8 +49,13 @@ public final class EatReflex implements Behavior {
 		if (!eating && !hungry) return false;
 		if (eating && food >= STOP_AT && p.getHealth() >= 14) eating = false;
 		if (!eating && !hungry) return false;
-		for (Mob m : Threats.collect(bot, SAFE_RADIUS)) {
-			if (m.distanceTo(p) < SAFE_RADIUS) return false; // fight or flee first
+		double margin = p.getHealth() < 12 ? SAFE_RADIUS_HURT : SAFE_RADIUS;
+		for (Mob m : Threats.collect(bot, ARCHER_RADIUS)) {
+			double d = m.distanceTo(p);
+			if (d < margin || Threats.isRanged(m) && m.isAggressive() && p.hasLineOfSight(m)) {
+				eating = false; // fight or flee first; letting go of "use" stops the bite
+				return false;
+			}
 		}
 		int best = bestFood(p, food);
 		if (best < 0) {

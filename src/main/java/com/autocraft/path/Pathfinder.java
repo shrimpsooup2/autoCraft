@@ -14,8 +14,11 @@ import org.jspecify.annotations.Nullable;
  * reached, otherwise the path to the node closest to the goal (partial path).
  */
 final class Pathfinder {
-	/** Path result; {@code complete} = ends on a goal position. */
-	record Result(List<Step> steps, boolean complete) {}
+	/**
+	 * Path result; {@code complete} = ends on a goal position; {@code exhausted} = every reachable position was
+	 * searched without finding the goal (it's unreachable from here, no point retrying).
+	 */
+	record Result(List<Step> steps, boolean complete, boolean exhausted) {}
 
 	private static final int MAX_NODES = 120_000;
 	private static final double HEURISTIC_WEIGHT = 1.4;
@@ -85,7 +88,7 @@ final class Pathfinder {
 			if (n.closed || o.f != n.g + n.h * HEURISTIC_WEIGHT) continue;
 			n.closed = true;
 			if (goal.isEnd(n.x, n.y, n.z)) {
-				return result = new Result(backtrack(n), true);
+				return result = new Result(backtrack(n), true, false);
 			}
 			if (n.h < best.h) best = n;
 			expand(n);
@@ -100,7 +103,7 @@ final class Pathfinder {
 
 	/** Stop searching and return the best path found so far. */
 	Result finish() {
-		if (result == null) result = new Result(best == start ? List.of() : backtrack(best), false);
+		if (result == null) result = new Result(best == start ? List.of() : backtrack(best), false, open.isEmpty());
 		return result;
 	}
 

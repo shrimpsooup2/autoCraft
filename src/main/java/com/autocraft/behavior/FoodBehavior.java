@@ -23,15 +23,23 @@ import net.minecraft.world.item.ItemStack;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Keeps a food supply: when the carried food is low (Overworld), hunt the nearest adult cow, pig, sheep,
- * chicken or rabbit, then pick up the meat. Named animals (pets, farm favourites) are left alone.
+ * Keeps a food supply without wandering off for it: hunts the nearest adult cow, pig, sheep, chicken or rabbit
+ * only when actually getting hungry with little food carried (farther the hungrier), when stocking up for a
+ * Nether trip, or when an animal is right next to us and the supply is low. Then picks up the meat. Named
+ * animals (pets, farm favourites) are left alone.
  */
 public final class FoodBehavior implements Behavior {
-	/** Hunger points of food carried below which we go hunting (≈ 4 steaks). */
+	/** Hunger points of food carried below which hunting is considered (≈ 4 steaks). */
 	private static final int LOW_STOCK = 24;
-	private static final double HUNT_RADIUS = 32;
+	/** Hunger bar level (out of 20) at which a low supply is worth a short detour. */
+	private static final int HUNGRY = 14;
+	/** Hunger bar level at which food matters more than the job. */
+	private static final int STARVING = 8;
+	private static final double OPPORTUNITY_RADIUS = 6;
+	private static final double HUNGRY_RADIUS = 20;
+	private static final double STARVING_RADIUS = 48;
 	private static final int LOOK_EVERY = 100;
-	private static final int HUNT_TIMEOUT = 20 * 40;
+	private static final int HUNT_TIMEOUT = 20 * 25;
 	private static final int LOOT_TIMEOUT = 20 * 5;
 
 	private @Nullable Animal prey;
@@ -57,9 +65,11 @@ public final class FoodBehavior implements Behavior {
 		LocalPlayer p = bot.player();
 		if (lootTicks >= 0) return loot(bot);
 		if (prey == null) {
-			if (foodPoints(p) >= wantedStock(bot) || ++sinceLook < LOOK_EVERY) return false;
+			if (++sinceLook < LOOK_EVERY) return false;
 			sinceLook = 0;
-			prey = nearestPrey(bot);
+			double radius = huntRadius(bot, p);
+			if (radius <= 0) return false;
+			prey = nearestPrey(bot, radius);
 			if (prey == null) return false;
 			huntTicks = 0;
 			chaseAt = null;
@@ -92,9 +102,14 @@ public final class FoodBehavior implements Behavior {
 		return true;
 	}
 
-	/** No animals to hunt in the Nether: take twice the usual supply when the next work is there. */
-	private static int wantedStock(Bot bot) {
-		return bot.workDimension() == Requirement.Dim.NETHER ? LOW_STOCK * 2 : LOW_STOCK;
+	/** How far an animal may be for a hunt to be worth it right now (0 = don't hunt). */
+	private static double huntRadius(Bot bot, LocalPlayer p) {
+		int stock = foodPoints(p);
+		int hunger = p.getFoodData().getFoodLevel();
+		boolean netherPrep = bot.workDimension() == Requirement.Dim.NETHER && stock < LOW_STOCK * 2; // no animals over there
+		if (hunger <= STARVING && stock < 8) return STARVING_RADIUS;
+		if (hunger <= HUNGRY && stock < LOW_STOCK || netherPrep) return HUNGRY_RADIUS;
+		return stock < LOW_STOCK ? OPPORTUNITY_RADIUS : 0;
 	}
 
 	/** Walk over the meat the kill dropped. */
@@ -116,8 +131,8 @@ public final class FoodBehavior implements Behavior {
 		return true;
 	}
 
-	private static @Nullable Animal nearestPrey(Bot bot) {
-		List<Entity> animals = bot.scanner().entities(HUNT_RADIUS, e -> e instanceof Animal a && !a.isBaby() && !a.hasCustomName()
+	private static @Nullable Animal nearestPrey(Bot bot, double radius) {
+		List<Entity> animals = bot.scanner().entities(radius, e -> e instanceof Animal a && !a.isBaby() && !a.hasCustomName()
 				&& (a instanceof AbstractCow || a instanceof Pig || a instanceof Sheep || a instanceof Chicken || a instanceof Rabbit));
 		return (Animal) animals.stream().min(Comparator.comparingDouble(e -> e.distanceToSqr(bot.player()))).orElse(null);
 	}

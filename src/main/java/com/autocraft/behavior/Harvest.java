@@ -41,6 +41,11 @@ public final class Harvest {
 		return target;
 	}
 
+	/** Already breaking the block (not walking or picking up). */
+	public boolean isMining() {
+		return phase == Phase.MINE;
+	}
+
 	public Status tick(Bot bot) {
 		phaseTicks++;
 		ClientLevel level = bot.mc().level;
