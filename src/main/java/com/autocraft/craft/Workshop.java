@@ -23,20 +23,22 @@ public final class Workshop {
 
 	private @Nullable Crafter crafter;
 	private @Nullable Smelter smelter;
+	private @Nullable Cutter cutter;
 	private Procedure.@Nullable Task special;
 	private @Nullable Item specialItem;
 	private final Stations.Cleanup cleanup = new Stations.Cleanup();
 	private boolean cleaning;
 
 	public boolean busy() {
-		return crafter != null || smelter != null || special != null || cleaning;
+		return crafter != null || smelter != null || cutter != null || special != null || cleaning;
 	}
 
-	/** Begin a Craft, Smelt or Special step; other steps are ignored. */
+	/** Begin a Craft, Smelt, Cut or Special step; other steps are ignored. */
 	public void start(Planner.Step step) {
 		switch (step) {
 			case Planner.Craft c -> crafter = new Crafter(c.recipe());
 			case Planner.Smelt s -> smelter = new Smelter(s.input(), s.count());
+			case Planner.Cut c -> cutter = new Cutter(c.input(), c.output(), c.cuts());
 			case Planner.Special sp -> {
 				special = sp.procedure().start(sp.item(), sp.total());
 				specialItem = sp.item();
@@ -64,6 +66,12 @@ public final class Workshop {
 			if (s == Smelter.Status.RUNNING) return Status.RUNNING;
 			smelter = null;
 			return s == Smelter.Status.DONE ? Status.DONE : Status.FAILED;
+		}
+		if (cutter != null) {
+			Cutter.Status s = cutter.tick(bot);
+			if (s == Cutter.Status.RUNNING) return Status.RUNNING;
+			cutter = null;
+			return s == Cutter.Status.DONE ? Status.DONE : Status.FAILED;
 		}
 		if (special != null) {
 			Procedure.Task.Status s = special.tick(bot);
@@ -95,6 +103,7 @@ public final class Workshop {
 	public void reset() {
 		crafter = null;
 		smelter = null;
+		cutter = null;
 		special = null;
 		specialItem = null;
 		cleaning = false;

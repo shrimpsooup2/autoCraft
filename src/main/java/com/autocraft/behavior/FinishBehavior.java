@@ -43,7 +43,7 @@ public final class FinishBehavior implements Behavior {
 		}
 		Chat.info("Job complete: " + job.progress(bot.player()));
 		bot.stop("job complete");
-		if (bot.logoffWhenDone()) {
+		if (com.autocraft.Settings.get().logoffWhenDone) {
 			Minecraft mc = bot.mc();
 			Chat.info("Logging off.");
 			mc.schedule(() -> mc.disconnectFromWorld(ClientLevel.DEFAULT_QUIT_MESSAGE)); // outside the tick

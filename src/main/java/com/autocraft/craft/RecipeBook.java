@@ -104,10 +104,14 @@ public final class RecipeBook {
 		}
 	}
 
+	/** A stonecutter recipe: one {@code input} item becomes {@code count} of {@code output}. */
+	public record Cut(Item output, int count, Ingredient input) {}
+
 	private static @Nullable RecipeBook instance;
 
 	private final Map<Item, List<Recipe>> crafting = new HashMap<>();
 	private final Map<Item, List<Recipe>> smelting = new HashMap<>();
+	private final Map<Item, List<Cut>> cutting = new HashMap<>();
 
 	public static RecipeBook get() {
 		if (instance == null) instance = load();
@@ -122,7 +126,14 @@ public final class RecipeBook {
 		return smelting.getOrDefault(output, List.of());
 	}
 
-	/** Some recipe makes this item (so it isn't a "natural" block to go mining for). */
+	public List<Cut> cutting(Item output) {
+		return cutting.getOrDefault(output, List.of());
+	}
+
+	/**
+	 * Some crafting or smelting recipe makes this item (so it isn't a "natural" block to go mining for). Stonecutting
+	 * doesn't count: 26.x cuts stone into cobblestone, which is still mined.
+	 */
 	public boolean isMade(Item item) {
 		return crafting.containsKey(item) || smelting.containsKey(item);
 	}
@@ -141,6 +152,7 @@ public final class RecipeBook {
 					for (Ingredient ing : r.key().values()) addOptions(ing, out, next);
 				}
 				for (Recipe r : smelting(item)) addOptions(r.smeltInput(), out, next);
+				for (Cut c : cutting(item)) addOptions(c.input(), out, next);
 			}
 			frontier = next;
 		}
@@ -220,8 +232,12 @@ public final class RecipeBook {
 				Ingredient input = ingredient(json.get("ingredient"));
 				return result(json, (out, count) -> put(smelting, new Recipe(out, count, List.of(), Map.of(), input)));
 			}
+			case "minecraft:stonecutting" -> {
+				Ingredient input = ingredient(json.get("ingredient"));
+				return result(json, (out, count) -> cutting.computeIfAbsent(out, k -> new ArrayList<>()).add(new Cut(out, count, input)));
+			}
 			default -> {
-				return false; // stonecutting, smithing, special and transmute recipes need other stations or rules
+				return false; // smithing, special and transmute recipes need other stations or rules
 			}
 		}
 	}

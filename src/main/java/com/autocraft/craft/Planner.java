@@ -9,6 +9,7 @@ import com.autocraft.procedure.Procedures;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Predicate;
@@ -31,11 +32,14 @@ import org.jspecify.annotations.Nullable;
  * inventory is the only state.
  */
 public final class Planner {
-	public sealed interface Step permits Craft, Smelt, Gather, Special, Unavailable, Done {}
+	public sealed interface Step permits Craft, Smelt, Cut, Gather, Special, Unavailable, Done {}
 
 	public record Craft(Recipe recipe) implements Step {}
 
 	public record Smelt(Item input, int count) implements Step {}
+
+	/** Cut {@code cuts} of {@code input} into {@code output} on a stonecutter. */
+	public record Cut(Item input, Item output, int cuts) implements Step {}
 
 	public record Gather(Requirement requirement) implements Step {}
 
@@ -52,24 +56,32 @@ public final class Planner {
 	private static final int MAX_DEPTH = 8;
 	private static final double CRAFT_COST = 1;
 	private static final double SMELT_COST = 4;
+	/** One click on a stonecutter, cheaper than laying out a crafting grid. */
+	private static final double CUT_COST = 0.5;
+	/** A stonecutter made just for this is shared by roughly this many items (it's kept for later too). */
+	private static final double CUTTER_AMORTIZE = 16;
 
 	/** Cheapest way to make or get more of an item. */
-	private record Route(@Nullable Requirement gather, @Nullable Recipe recipe, @Nullable Procedure procedure, double cost) {}
+	private record Route(@Nullable Requirement gather, @Nullable Recipe recipe, RecipeBook.@Nullable Cut cut, @Nullable Procedure procedure,
+			double cost) {}
 
 	private final LocalPlayer p;
 	private final Requirement.Dim dimension;
 	private final boolean tableNearby;
 	private final boolean furnaceNearby;
+	private final boolean cutterNearby;
 	private final Predicate<ItemStack> protect;
 	private final RecipeBook book = RecipeBook.get();
 	private final Map<String, Double> costMemo = new HashMap<>();
 
 	/** @param protect job loot: never smelted beyond what's needed */
-	public Planner(LocalPlayer p, Requirement.Dim dimension, boolean tableNearby, boolean furnaceNearby, Predicate<ItemStack> protect) {
+	public Planner(LocalPlayer p, Requirement.Dim dimension, boolean tableNearby, boolean furnaceNearby, boolean cutterNearby,
+			Predicate<ItemStack> protect) {
 		this.p = p;
 		this.dimension = dimension;
 		this.tableNearby = tableNearby;
 		this.furnaceNearby = furnaceNearby;
+		this.cutterNearby = cutterNearby;
 		this.protect = protect;
 	}
 
@@ -125,6 +137,7 @@ public final class Planner {
 				}
 				return new Special(route.procedure, want, count);
 			}
+			if (route.cut != null) return cut(route.cut, missing, depth, visiting);
 			if (route.recipe.isSmelting()) return smelt(route.recipe, missing, depth, visiting);
 			return craft(route.recipe, missing, depth, visiting);
 		} finally {
@@ -145,6 +158,17 @@ public final class Planner {
 			if (!(t instanceof Done)) return t;
 		}
 		return new Craft(r);
+	}
+
+	private Step cut(RecipeBook.Cut c, int missingOutput, int depth, Set<Item> visiting) {
+		int cuts = (missingOutput + c.count() - 1) / c.count();
+		Step s = ingredient(c.input(), cuts, depth, visiting);
+		if (!(s instanceof Done)) return s;
+		if (!cutterNearby && carried(Items.STONECUTTER) == 0) {
+			Step t = obtain(Items.STONECUTTER, 1, false, depth + 1, visiting);
+			if (!(t instanceof Done)) return t;
+		}
+		return new Cut(pickCarried(c.input()), c.output(), cuts);
 	}
 
 	private Step smelt(Recipe r, int missingOutput, int depth, Set<Item> visiting) {
@@ -212,14 +236,23 @@ public final class Planner {
 	private @Nullable Route bestRoute(Item item, boolean flexible, int depth, Set<Item> visiting) {
 		Route best = null;
 		Requirement gather = Gatherable.requirementFor(item, carried(item) + 1, dimension, flexible);
-		if (gather != null) best = new Route(gather, null, null, Gatherable.cost(gather, dimension));
+		if (gather != null) best = new Route(gather, null, null, null, Gatherable.cost(gather, dimension));
 		for (Recipe r : book.crafting(item)) {
 			double c = CRAFT_COST + recipeInputs(r, depth, visiting);
-			if (best == null || c < best.cost) best = new Route(null, r, null, c);
+			if (best == null || c < best.cost) best = new Route(null, r, null, null, c);
 		}
 		for (Recipe r : book.smelting(item)) {
 			double c = SMELT_COST + optionCost(r.smeltInput(), depth, visiting);
-			if (best == null || c < best.cost) best = new Route(null, r, null, c);
+			if (best == null || c < best.cost) best = new Route(null, r, null, null, c);
+		}
+		List<RecipeBook.Cut> cuts = book.cutting(item);
+		if (!cuts.isEmpty()) {
+			// stonecutter vs crafting table: better yields (stairs 1:1, not 6:4), but the cutter itself costs iron
+			double station = cutterNearby || carried(Items.STONECUTTER) > 0 ? 0 : cost(Items.STONECUTTER, false, depth + 1, visiting) / CUTTER_AMORTIZE;
+			for (RecipeBook.Cut cut : cuts) {
+				double c = CUT_COST + station + optionCost(cut.input(), depth, visiting) / cut.count();
+				if (best == null || c < best.cost) best = new Route(null, null, cut, null, c);
+			}
 		}
 		Procedure proc = Procedures.forItem(item);
 		if (proc != null) {
@@ -228,7 +261,7 @@ public final class Planner {
 				c += cost(need, false, depth + 1, visiting) * 0.25; // tools and containers are reused across items
 				if (c >= INF) break;
 			}
-			if (best == null || c < best.cost) best = new Route(null, null, proc, c);
+			if (best == null || c < best.cost) best = new Route(null, null, null, proc, c);
 		}
 		return best == null || best.cost >= INF ? null : best;
 	}

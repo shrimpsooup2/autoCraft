@@ -1,6 +1,7 @@
 package com.autocraft.ui;
 
 import com.autocraft.Bot;
+import com.autocraft.Settings;
 import com.autocraft.build.BuildOrder;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
@@ -14,23 +15,17 @@ import net.minecraft.client.player.LocalPlayer;
 public final class HudOverlay {
 	private static final int MAX_ROWS = 5;
 	private static final int WIDTH = 170;
-	private static boolean enabled = true;
 
 	private HudOverlay() {}
-
-	public static boolean enabled() {
-		return enabled;
-	}
-
-	public static void setEnabled(boolean value) {
-		enabled = value;
-	}
 
 	public static void extract(GuiGraphicsExtractor g, DeltaTracker delta) {
 		Minecraft mc = Minecraft.getInstance();
 		Bot bot = Bot.get();
 		LocalPlayer p = mc.player;
-		if (!enabled || !bot.isRunning() || p == null || mc.getDebugOverlay().showDebugScreen() || mc.gui.screen() instanceof AutoCraftScreen) return;
+		if (!Settings.get().statusOverlay || !bot.isRunning() || p == null || mc.getDebugOverlay().showDebugScreen()
+				|| mc.gui.screen() instanceof AutoCraftScreen) {
+			return;
+		}
 		Font font = mc.font;
 		Job job = bot.job();
 		BuildOrder build = bot.buildOrder();

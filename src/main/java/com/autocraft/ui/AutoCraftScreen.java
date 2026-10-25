@@ -2,6 +2,8 @@ package com.autocraft.ui;
 
 import com.autocraft.Bot;
 import com.autocraft.Chat;
+import com.autocraft.DeathLog;
+import com.autocraft.Settings;
 import com.autocraft.build.BuildPlan;
 import com.autocraft.build.Placement;
 import com.autocraft.build.SiteFinder;
@@ -17,6 +19,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
@@ -33,14 +37,15 @@ import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The bot's control panel (default key K). Collect: search any minable or craftable item, add it with an amount,
+ * The bot's control panel (default key K). Collect: search any item the bot can get, add it with an amount,
  * start the job. Build: pick a schematic (built-in or from the folder) and place it in the world as a ghost,
- * Litematica-style — exact coordinates, nudges, rotation, mirror — then build it. Bot: live status, pause/stop,
- * base, log-off and HUD toggles.
+ * Litematica-style — exact coordinates, nudges, rotation, mirror — then build it. Team: host or join a team of
+ * bots. Bot: live status, pause/stop, base. Settings: saved options (log off, overlay, smooth aim, players
+ * nearby, after death).
  */
 public final class AutoCraftScreen extends Screen {
 	private enum Tab {
-		COLLECT("Collect"), BUILD("Build"), TEAM("Team"), BOT("Bot");
+		COLLECT("Collect"), BUILD("Build"), TEAM("Team"), BOT("Bot"), SETTINGS("Settings");
 
 		final String label;
 
@@ -99,8 +104,10 @@ public final class AutoCraftScreen extends Screen {
 
 	// bot tab
 	private @Nullable Button pauseButton;
-	private @Nullable Button logoffButton;
-	private @Nullable Button hudButton;
+
+	// settings tab
+	private static final int[] PLAYER_RADII = {16, 32, 48, 64, 96, 128};
+	private final List<Runnable> settingLabels = new ArrayList<>();
 
 	// team tab
 	private static String joinAddress = "127.0.0.1:" + Team.DEFAULT_PORT;
@@ -144,6 +151,7 @@ public final class AutoCraftScreen extends Screen {
 			case BUILD -> initBuild();
 			case TEAM -> initTeam();
 			case BOT -> initBot();
+			case SETTINGS -> initSettings();
 		}
 	}
 
@@ -154,6 +162,8 @@ public final class AutoCraftScreen extends Screen {
 			case BUILD -> updateBuildButtons();
 			case TEAM -> updateTeamButtons();
 			case BOT -> updateBotButtons();
+			case SETTINGS -> {
+			}
 		}
 	}
 
@@ -171,6 +181,7 @@ public final class AutoCraftScreen extends Screen {
 			case BUILD -> extractBuild(g, mouseX, mouseY);
 			case TEAM -> extractTeam(g);
 			case BOT -> extractBot(g);
+			case SETTINGS -> extractSettings(g);
 		}
 		super.extractRenderState(g, mouseX, mouseY, a);
 	}
@@ -726,24 +737,63 @@ public final class AutoCraftScreen extends Screen {
 			Chat.info("Base set to " + p.blockPosition().toShortString() + ". Chests within 8 blocks will be used for storage.");
 		}).tooltip(Tooltip.create(Component.literal("Chests near here receive the loot; finished jobs are delivered here")))
 				.bounds(rightX, contentY + 22, colW, 18).build());
-		logoffButton = addRenderableWidget(Button.builder(Component.empty(), b -> {
-			bot.setLogoffWhenDone(!bot.logoffWhenDone());
-			updateBotButtons();
-		}).bounds(rightX, contentY + 44, colW, 18).build());
-		hudButton = addRenderableWidget(Button.builder(Component.empty(), b -> {
-			HudOverlay.setEnabled(!HudOverlay.enabled());
-			updateBotButtons();
-		}).bounds(rightX, contentY + 66, colW, 18).build());
 		updateBotButtons();
 	}
 
 	private void updateBotButtons() {
-		if (pauseButton == null || logoffButton == null || hudButton == null) return;
+		if (pauseButton == null) return;
 		Bot bot = Bot.get();
 		pauseButton.active = bot.isRunning();
 		pauseButton.setMessage(Component.literal(bot.isPaused() ? "Resume" : "Pause"));
-		logoffButton.setMessage(Component.literal("Log off when done: " + (bot.logoffWhenDone() ? "ON" : "OFF")));
-		hudButton.setMessage(Component.literal("Status overlay: " + (HudOverlay.enabled() ? "ON" : "OFF")));
+	}
+
+	// ---- settings -------------------------------------------------------------------------------
+
+	private void initSettings() {
+		settingLabels.clear();
+		Settings s = Settings.get();
+		int y = contentY + 14;
+		toggle(left + 8, y, "Log off when done", "Disconnect once the job is finished and the loot is stored",
+				() -> s.logoffWhenDone, v -> s.logoffWhenDone = v);
+		toggle(left + 8, y + 22, "Status overlay", "Small activity and progress panel at the top left while the bot runs",
+				() -> s.statusOverlay, v -> s.statusOverlay = v);
+		toggle(left + 8, y + 44, "Smooth aim", "Turn the view along curved, eased paths like a hand on a mouse instead of snapping",
+				() -> s.smoothAim, v -> s.smoothAim = v);
+		toggle(left + 8, y + 66, "After death: recover", "Go back for the dropped items and carry on with the job (off: stop the job)",
+				() -> s.recoverAfterDeath, v -> s.recoverAfterDeath = v);
+		toggle(rightX, y, "Log off near players", "Disconnect as soon as another player comes within the radius below",
+				() -> s.logoffNearPlayers, v -> s.logoffNearPlayers = v);
+		Button radius = addRenderableWidget(Button.builder(Component.empty(), b -> {
+			int next = PLAYER_RADII[0];
+			for (int r : PLAYER_RADII) {
+				if (r > s.playerAlertRadius) {
+					next = r;
+					break;
+				}
+			}
+			s.playerAlertRadius = next;
+			s.save();
+			updateSettingsButtons();
+		}).tooltip(Tooltip.create(Component.literal("How close another player may come (click to change)"))).bounds(rightX, y + 22, colW, 18).build());
+		settingLabels.add(() -> radius.setMessage(Component.literal("Player radius: " + s.playerAlertRadius + " blocks")));
+		updateSettingsButtons();
+	}
+
+	private void toggle(int x, int y, String label, String tip, BooleanSupplier get, Consumer<Boolean> set) {
+		Button b = addRenderableWidget(Button.builder(Component.empty(), btn -> {
+			set.accept(!get.getAsBoolean());
+			Settings.get().save();
+			updateSettingsButtons();
+		}).tooltip(Tooltip.create(Component.literal(tip))).bounds(x, y, colW, 18).build());
+		settingLabels.add(() -> b.setMessage(Component.literal(label + ": " + (get.getAsBoolean() ? "ON" : "OFF"))));
+	}
+
+	private void updateSettingsButtons() {
+		for (Runnable r : settingLabels) r.run();
+	}
+
+	private void extractSettings(GuiGraphicsExtractor g) {
+		g.text(font, "Saved to config/autocraft/settings.json", left + 8, contentY + 2, Widgets.GRAY);
 	}
 
 	private void extractBot(GuiGraphicsExtractor g) {
@@ -779,13 +829,19 @@ public final class AutoCraftScreen extends Screen {
 		}
 		if (p != null) {
 			int vy = top + panelH - 24;
+			DeathLog.Death death = DeathLog.last();
+			if (death != null) {
+				String where = "Last death: " + death.pos().toShortString() + " (" + death.dim().name().toLowerCase() + ", " + death.cause() + ")"
+						+ (bot.recovery() != null ? " · recovering" : "");
+				g.text(font, font.plainSubstrByWidth(where, colW), x, vy - LINE, 0xFFFF9F9F);
+			}
 			g.text(font, String.format("Health %.0f/20 · Food %d", p.getHealth(), p.getFoodData().getFoodLevel()), x, vy, Widgets.GRAY);
 			BlockPos base = bot.base();
 			g.text(font, font.plainSubstrByWidth("At " + p.blockPosition().toShortString() + " · base "
 					+ (base == null ? "not set" : base.toShortString()), colW), x, vy + LINE, Widgets.GRAY);
 		}
 
-		int sy = contentY + 92;
+		int sy = contentY + 48;
 		List<StructureRegistry.Entry> built = StructureRegistry.all();
 		g.text(font, "Built (" + built.size() + ")", rightX, sy, Widgets.WHITE);
 		sy += LINE;

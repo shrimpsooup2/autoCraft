@@ -1,5 +1,6 @@
 package com.autocraft.control;
 
+import com.autocraft.Settings;
 import com.autocraft.loot.LootBook;
 import java.util.function.Predicate;
 import net.minecraft.client.Minecraft;
@@ -20,13 +21,20 @@ import net.minecraft.world.phys.Vec3;
 /**
  * The bot's hands and feet. Movement keys are "desired state" for the current tick: {@link #beginTick()}
  * clears them, behaviors set what they need, {@link #apply()} pushes them into the key mappings.
- * Actions (mine/attack/place/use) talk to MultiPlayerGameMode directly.
+ * Actions (mine/attack/place/use) talk to MultiPlayerGameMode directly. Looking goes through {@link Aim}
+ * (smooth, curved turns) unless smooth aim is off; movement keys are meant relative to where the bot is
+ * turning to, and are remapped while the view is still on its way there.
  */
 public final class Controls {
+	/** Remapped movement: a key is pressed when the wanted direction is within ~67° of it. */
+	private static final double KEY_THRESHOLD = 0.38;
+
 	private final Minecraft mc;
+	private final Aim aim = new Aim();
 	private boolean forward, back, left, right, jump, sneak, sprint, use;
 	private boolean mining;
 	private boolean driving;
+	private boolean aimedLastTick = true;
 
 	public Controls(Minecraft mc) {
 		this.mc = mc;
@@ -53,26 +61,57 @@ public final class Controls {
 	public boolean isMining() { return mining; }
 
 	public void apply() {
+		LocalPlayer p = mc.player;
+		aim.update(p);
+		boolean f = forward, b = back, l = left, r = right;
+		float delta = Mth.wrapDegrees(aim.targetYaw(p) - p.getYRot());
+		if (Math.abs(delta) > 1 && (f || b || l || r)) {
+			// keys were chosen for the target yaw: rotate the wanted direction into the current view
+			double fw = (f ? 1 : 0) - (b ? 1 : 0), lw = (l ? 1 : 0) - (r ? 1 : 0);
+			double a = Math.toRadians(delta), cos = Math.cos(a), sin = Math.sin(a);
+			double lNow = lw * cos - fw * sin, fNow = fw * cos + lw * sin;
+			f = fNow > KEY_THRESHOLD;
+			b = fNow < -KEY_THRESHOLD;
+			l = lNow > KEY_THRESHOLD;
+			r = lNow < -KEY_THRESHOLD;
+		}
 		Options o = mc.options;
-		o.keyUp.setDown(forward);
-		o.keyDown.setDown(back);
-		o.keyLeft.setDown(left);
-		o.keyRight.setDown(right);
+		o.keyUp.setDown(f);
+		o.keyDown.setDown(b);
+		o.keyLeft.setDown(l);
+		o.keyRight.setDown(r);
 		o.keyJump.setDown(jump);
 		o.keyShift.setDown(sneak);
 		o.keySprint.setDown(sprint);
 		o.keyUse.setDown(use);
 		o.keyAttack.setDown(false);
 		driving = true;
+		aimedLastTick = aim.settled(); // this tick's movement packet carries the settled view
 	}
 
 	/** Let go of everything (bot stopped / paused). Safe to call repeatedly. */
 	public void releaseAll() {
 		if (!driving) return;
 		beginTick();
-		apply();
+		Options o = mc.options;
+		o.keyUp.setDown(false);
+		o.keyDown.setDown(false);
+		o.keyLeft.setDown(false);
+		o.keyRight.setDown(false);
+		o.keyJump.setDown(false);
+		o.keyShift.setDown(false);
+		o.keySprint.setDown(false);
+		o.keyUse.setDown(false);
+		o.keyAttack.setDown(false);
+		aim.cancel();
+		aimedLastTick = true;
 		driving = false;
 		if (mc.gameMode != null) mc.gameMode.stopDestroyBlock();
+	}
+
+	/** Every rendered frame: keep turning along the current curve (smooth on screen, not just per tick). */
+	public void frame() {
+		if (driving && mc.player != null) aim.update(mc.player);
 	}
 
 	// ---- looking ----------------------------------------------------------------------------
@@ -91,11 +130,24 @@ public final class Controls {
 		lookAt(Vec3.atCenterOf(pos));
 	}
 
+	/** Turn toward yaw/pitch: along a smooth curve with smooth aim on, else at once. */
 	public void face(float yaw, float pitch) {
 		LocalPlayer p = mc.player;
-		p.setYRot(Mth.wrapDegrees(yaw));
-		p.setXRot(Mth.clamp(pitch, -90.0F, 90.0F));
-		p.setYHeadRot(p.getYRot());
+		if (Settings.get().smoothAim) aim.target(p, yaw, pitch);
+		else aim.snap(p, yaw, pitch);
+	}
+
+	/** Turn at once (reflexes: shield up toward an arrow, water bucket straight down). */
+	public void snap(float yaw, float pitch) {
+		aim.snap(mc.player, yaw, pitch);
+	}
+
+	/**
+	 * True when the view has reached its target and the server has been told (settled since the last tick):
+	 * wait for this before clicks whose result depends on facing (stairs, observers, furnaces).
+	 */
+	public boolean aimed() {
+		return aimedLastTick && aim.settled();
 	}
 
 	/** Turn to walk toward {@code target} horizontally, keeping pitch level-ish. */
@@ -150,6 +202,7 @@ public final class Controls {
 
 	/** Start using the item in {@code hand} (eat, drink, raise shield, bucket). Hold with {@link #holdUse()}. */
 	public InteractionResult useItem(InteractionHand hand) {
+		aim.finish(mc.player); // untargeted use goes where the view points: finish the turn first
 		return mc.gameMode.useItem(mc.player, hand);
 	}
 

@@ -284,6 +284,11 @@ public final class BuildBehavior implements Behavior {
 				workshop.start(s);
 				return true;
 			}
+			case Planner.Cut c -> {
+				bot.setNeed(Bot.NeedOwner.BUILD, null);
+				workshop.start(c);
+				return true;
+			}
 			case Planner.Special sp -> {
 				if (workshop.packUp(bot)) return true;
 				bot.setNeed(Bot.NeedOwner.BUILD, null);

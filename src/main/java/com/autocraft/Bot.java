@@ -19,6 +19,7 @@ import com.autocraft.behavior.LavaReflex;
 import com.autocraft.behavior.MakeBehavior;
 import com.autocraft.behavior.MendingBehavior;
 import com.autocraft.behavior.PortalBehavior;
+import com.autocraft.behavior.RecoverBehavior;
 import com.autocraft.behavior.StorageBehavior;
 import com.autocraft.build.BuildOrder;
 import com.autocraft.build.BuildPlan;
@@ -47,6 +48,7 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Mirror;
@@ -93,6 +95,12 @@ public final class Bot {
 	private Map<Item, Integer> teamNeeds = Map.of();
 	/** Mobs the collector is hunting right now (combat fights these instead of avoiding them). */
 	private Set<EntityType<?>> huntTargets = Set.of();
+	/** Where to go back for our dropped items after a death; null when not recovering. */
+	private @Nullable Recovery recovery;
+	private boolean respawnRequested;
+
+	/** Death spot to return to. */
+	public record Recovery(BlockPos pos, Dim dim) {}
 
 	private @Nullable Job job;
 	private @Nullable BuildOrder build;
@@ -101,7 +109,6 @@ public final class Bot {
 	private Dim baseDim = Dim.OVERWORLD;
 	private boolean running;
 	private boolean paused;
-	private boolean logoffWhenDone = true;
 	private String activeBehavior = "idle";
 	private String status = "";
 	private @Nullable ElytraTravel flight;
@@ -122,6 +129,7 @@ public final class Bot {
 				new EatReflex(),
 				new EffectReflex(),
 				new CombatBehavior(),
+				new RecoverBehavior(),
 				new MendingBehavior(),
 				new GotoBehavior(),
 				new FinishBehavior(),
@@ -149,9 +157,11 @@ public final class Bot {
 			return;
 		}
 		if (!mc.player.isAlive()) {
-			stop("died");
+			onDeath();
 			return;
 		}
+		respawnRequested = false;
+		if (playerAlert()) return;
 		scanner.tick();
 		ticks++;
 		activeBehavior = "idle";
@@ -167,6 +177,55 @@ public final class Bot {
 			}
 		}
 		if (running) controls.apply();
+	}
+
+	/** "Log off near players": another player (not a teammate) within the radius ends the session. */
+	private boolean playerAlert() {
+		Settings s = Settings.get();
+		if (!s.logoffNearPlayers) return false;
+		Set<String> team = new HashSet<>();
+		for (Team.MemberView m : Team.roster()) team.add(m.name());
+		for (Player other : mc.level.players()) {
+			if (other == mc.player || team.contains(other.getName().getString())) continue;
+			if (other.distanceTo(mc.player) > s.playerAlertRadius) continue;
+			Chat.warn(other.getName().getString() + " came within " + (int) other.distanceTo(mc.player) + " blocks; logging off.");
+			stop("player nearby");
+			mc.schedule(() -> mc.disconnectFromWorld(ClientLevel.DEFAULT_QUIT_MESSAGE)); // outside the tick
+			return true;
+		}
+		return false;
+	}
+
+	/** Log where we died; then respawn and go back for the items (setting), or stop. */
+	private void onDeath() {
+		if (respawnRequested) return; // the server hasn't respawned us yet
+		LocalPlayer p = mc.player;
+		BlockPos pos = p.blockPosition();
+		Dim dim = dimension();
+		String cause = p.getLastDamageSource() == null ? "unknown" : p.getLastDamageSource().getMsgId();
+		DeathLog.add(pos, dim, cause);
+		Chat.warn("Died at " + pos.toShortString() + " in the " + dim.name().toLowerCase() + " (" + cause + ").");
+		if (!Settings.get().recoverAfterDeath || mc.level.getLevelData().isHardcore()) {
+			stop("died");
+			return;
+		}
+		boolean burnt = p.isInLava() || cause.equals("lava") || cause.equals("onFire") || cause.equals("inFire");
+		resetBehaviors();
+		controls.releaseAll();
+		needs.clear();
+		recovery = burnt ? null : new Recovery(pos, dim);
+		Chat.info(burnt ? "The items burnt; respawning and carrying on with the job." : "Respawning; going back for the items, then carrying on.");
+		p.respawn();
+		mc.gui.setScreen(null);
+		respawnRequested = true;
+	}
+
+	public @Nullable Recovery recovery() {
+		return recovery;
+	}
+
+	public void setRecovery(@Nullable Recovery r) {
+		recovery = r;
 	}
 
 	private void tickFlight() {
@@ -262,6 +321,7 @@ public final class Bot {
 		fruitlessLegs.clear();
 		Procedures.reset();
 		resetBehaviors();
+		recovery = null;
 		running = true;
 		paused = false;
 		mc.options.pauseOnLostFocus = false; // keep ticking while the window is in the background
@@ -277,6 +337,7 @@ public final class Bot {
 		jobMaterials.clear();
 		needs.clear();
 		resetBehaviors();
+		recovery = null;
 		controls.releaseAll();
 		threatNet.save();
 		Chat.info("Stopped: " + reason);
@@ -442,9 +503,6 @@ public final class Bot {
 		base = pos;
 		baseDim = dimension();
 	}
-
-	public boolean logoffWhenDone() { return logoffWhenDone; }
-	public void setLogoffWhenDone(boolean v) { logoffWhenDone = v; }
 
 	/** The plan being built (rotated, wood-swapped world positions), for the ghost overlay; null when not building. */
 	public @Nullable BuildPlan buildPlan() { return buildPlan; }

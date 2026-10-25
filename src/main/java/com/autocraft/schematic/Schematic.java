@@ -20,10 +20,13 @@ public record Schematic(String name, Vec3i size, List<Cell> cells, @Nullable Far
 	/**
 	 * What a farm yields and how to harvest it.
 	 *
-	 * @param output harvest cell for {@link Mode#COBBLE}, relative
-	 * @param stand  where to stand while harvesting {@link Mode#COBBLE}, relative
+	 * @param provides resource name, or {@link #HOSTILE_MOBS} for mob farms (drops of the common hostile mobs)
+	 * @param output   harvest cell for {@link Mode#COBBLE}, landing cell for {@link Mode#MOBS}, relative
+	 * @param stand    where to stand while harvesting {@link Mode#COBBLE} / waiting at {@link Mode#MOBS}, relative
 	 */
 	public record Farm(String provides, Mode mode, @Nullable BlockPos output, @Nullable BlockPos stand) {
+		public static final String HOSTILE_MOBS = "hostile_mobs";
+
 		public enum Mode {
 			/** Mine the cobblestone that keeps forming at {@code output}. */
 			COBBLE,
@@ -34,7 +37,9 @@ public record Schematic(String name, Vec3i size, List<Cell> cells, @Nullable Far
 			/** Break fully grown crops, replant. */
 			CROP,
 			/** Automatic farm: take the product out of its chests/barrels/hoppers. */
-			CONTAINERS
+			CONTAINERS,
+			/** Mob farm: wait at {@code stand}, finish off what survives the fall at {@code output}, pick up the drops. */
+			MOBS
 		}
 	}
 

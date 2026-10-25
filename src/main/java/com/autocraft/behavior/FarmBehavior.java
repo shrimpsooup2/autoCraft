@@ -8,6 +8,7 @@ import com.autocraft.build.MaterialAdvisor;
 import com.autocraft.build.MaterialSettings;
 import com.autocraft.build.SiteFinder;
 import com.autocraft.build.StructureRegistry;
+import com.autocraft.combat.Melee;
 import com.autocraft.control.ContainerOpener;
 import com.autocraft.control.InvUtil;
 import com.autocraft.goal.Requirement;
@@ -26,7 +27,12 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.ItemTags;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.EntityTypes;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.inventory.ChestMenu;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -46,10 +52,11 @@ import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Uses farms for the job's current resource: harvest a registered farm nearby (cobblestone generator, cane,
- * trees, crops, or an automatic farm's chests) whenever it has something ready; otherwise the collector
- * keeps working. When exploring keeps coming up empty for a resource that has a farm design (built-in or a
- * user {@code farm-<resource>-*} schematic), it picks a site and builds one.
+ * Uses farms for the job's current resource (or a mob drop being hunted): harvest a registered farm nearby
+ * (cobblestone generator, cane, trees, crops, an automatic farm's chests, or a mob farm's landing) whenever it
+ * has something ready; otherwise the collector keeps working. When exploring keeps coming up empty for a resource
+ * that has a farm design (built-in or a user {@code farm-<resource>-*} schematic; {@code hostile_mobs} for the
+ * drops of common hostile mobs), it picks a site and builds one.
  */
 public final class FarmBehavior implements Behavior {
 	/** Fruitless exploration legs before building a farm instead. */
@@ -58,6 +65,9 @@ public final class FarmBehavior implements Behavior {
 	private static final double NEAR_FARM_DISTANCE = 48;
 	private static final double FAR_FARM_DISTANCE = 128;
 	private static final int CONTAINER_CHECK_EVERY = 20 * 120;
+	/** Mobs that spawn in a dark-room mob farm (the built-in one is 3 high, so endermen fit). */
+	private static final Set<EntityType<?>> FARM_MOBS = Set.of(EntityTypes.ZOMBIE, EntityTypes.SKELETON, EntityTypes.CREEPER,
+			EntityTypes.SPIDER, EntityTypes.WITCH, EntityTypes.ENDERMAN);
 
 	private final Set<String> autoTried = new HashSet<>();
 	private final Map<StructureRegistry.Entry, BuildPlan> geometry = new HashMap<>();
@@ -83,14 +93,25 @@ public final class FarmBehavior implements Behavior {
 	@Override
 	public boolean tick(Bot bot) {
 		tick++;
-		if (bot.job() == null || bot.buildOrder() != null || bot.activeNeed() != null) return false;
-		Requirement target = bot.job().nextUnmet(bot.player());
+		if (bot.job() == null || bot.buildOrder() != null) return false;
+		Requirement need = bot.activeNeed();
+		if (need != null && !need.isHunted()) return false; // tools/build materials: the collector's job
+		Requirement target = need != null ? need : bot.job().nextUnmet(bot.player());
 		if (target == null) return false;
+		List<String> keys = farmKeys(target);
 		double reach = bot.fruitlessLegs(target.name()) >= 1 ? FAR_FARM_DISTANCE : NEAR_FARM_DISTANCE;
-		StructureRegistry.Entry farm = nearestFarm(bot, target.name(), reach);
-		if (farm != null) return operate(bot, farm, target);
-		if (bot.fruitlessLegs(target.name()) >= AUTO_BUILD_AFTER && autoTried.add(target.name())) return autoBuild(bot, target);
+		for (String key : keys) {
+			StructureRegistry.Entry farm = nearestFarm(bot, key, reach);
+			if (farm != null) return operate(bot, farm, target);
+		}
+		if (bot.fruitlessLegs(target.name()) >= AUTO_BUILD_AFTER && autoTried.add(target.name())) return autoBuild(bot, target, keys);
 		return false;
+	}
+
+	/** Farm kinds that yield the target: its own name, plus mob farms for drops of the mobs that spawn in them. */
+	private static List<String> farmKeys(Requirement target) {
+		if (!target.isHunted() || target.mobs().stream().noneMatch(FARM_MOBS::contains)) return List.of(target.name());
+		return List.of(target.name(), Schematic.Farm.HOSTILE_MOBS);
 	}
 
 	/** {@code !ac farm} and the automatic case: choose a design and a site, start building. */
@@ -105,11 +126,14 @@ public final class FarmBehavior implements Behavior {
 		return false;
 	}
 
-	private boolean autoBuild(Bot bot, Requirement target) {
-		if (SchematicLibrary.farmsFor(target.name()).isEmpty()) return false;
-		Chat.info("Can't find enough " + target.name() + " around; building a farm for it.");
-		if (buildFarm(bot, target.name(), null, Rotation.NONE)) return true;
-		Chat.warn("No good spot for a " + target.name() + " farm here.");
+	private boolean autoBuild(Bot bot, Requirement target, List<String> keys) {
+		for (String key : keys) {
+			if (SchematicLibrary.farmsFor(key).isEmpty()) continue;
+			Chat.info("Can't find enough " + target.name() + " around; building a farm for it.");
+			if (buildFarm(bot, key, null, Rotation.NONE)) return true;
+			Chat.warn("No good spot for a " + target.name() + " farm here.");
+			return false;
+		}
 		return false;
 	}
 
@@ -146,6 +170,7 @@ public final class FarmBehavior implements Behavior {
 			case TREE -> trees(bot, plan);
 			case CROP -> crops(bot, plan);
 			case CONTAINERS -> containers(bot, plan, target);
+			case MOBS -> mobs(bot, plan, s.farm(), target);
 		};
 	}
 
@@ -164,6 +189,31 @@ public final class FarmBehavior implements Behavior {
 		}
 		bot.nav().stop();
 		if (bot.level().getBlockState(output).is(Blocks.COBBLESTONE)) bot.controls().mine(output);
+		return true;
+	}
+
+	/** Mob farm: wait in the doorway by the landing, finish off whatever survived the fall (drops are picked up above). */
+	private boolean mobs(Bot bot, BuildPlan plan, Schematic.Farm farm, Requirement target) {
+		LocalPlayer p = bot.player();
+		BlockPos stand = plan.toWorld(farm.stand()), landing = plan.toWorld(farm.output());
+		for (Entity e : bot.scanner().entities(6, e -> e instanceof Enemy && e instanceof LivingEntity le && le.isAlive())) {
+			if (e.blockPosition().distSqr(landing) > 4 || !(e instanceof LivingEntity mob)) continue;
+			if (Melee.strike(bot, mob)) {
+				bot.setStatus("finishing off a " + mob.getType().getDescription().getString() + " at the mob farm");
+				return true;
+			}
+		}
+		if (!Navigator.feet(p).equals(stand)) {
+			bot.setStatus("going to the mob farm");
+			bot.nav().setGoal(new Goal.Block(stand));
+			if (bot.nav().tick() == Navigator.Status.FAILED) {
+				bot.nav().stop();
+				return false;
+			}
+			return true;
+		}
+		bot.nav().stop();
+		bot.setStatus("waiting at the mob farm for " + target.name());
 		return true;
 	}
 

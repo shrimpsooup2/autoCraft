@@ -2,6 +2,7 @@ package com.autocraft.command;
 
 import com.autocraft.Bot;
 import com.autocraft.Chat;
+import com.autocraft.Settings;
 import com.autocraft.behavior.FarmBehavior;
 import com.autocraft.build.BuildOrder;
 import com.autocraft.build.MaterialAdvisor;
@@ -66,7 +67,8 @@ public final class Commands {
 			}
 			case "logoff" -> {
 				boolean on = args.length < 2 || !args[1].equalsIgnoreCase("off");
-				bot.setLogoffWhenDone(on);
+				Settings.get().logoffWhenDone = on;
+				Settings.get().save();
 				Chat.info("Log off when done: " + (on ? "on" : "off"));
 			}
 			case "goto" -> {

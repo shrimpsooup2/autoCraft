@@ -16,7 +16,7 @@ public final class BuiltinSchematics {
 	private BuiltinSchematics() {}
 
 	public static List<Schematic> all() {
-		return List.of(starterBase(), cobblestoneGenerator(), sugarCaneFarm(), treeFarm(), wheatFarm());
+		return List.of(starterBase(), cobblestoneGenerator(), sugarCaneFarm(), treeFarm(), wheatFarm(), mobFarm());
 	}
 
 	/**
@@ -107,6 +107,48 @@ public final class BuiltinSchematics {
 		String[] sown = {crops, crops, crops, crops, "hhhh.hhhh", crops, crops, crops, crops};
 		String[][] layers = {pad, land, sown};
 		return design("wheat_farm", legend, layers, new Schematic.Farm("wheat", Schematic.Farm.Mode.CROP, null, null), null);
+	}
+
+	/**
+	 * Dark-room mob farm: a roofed 9×9 room (3 high, so endermen fit) 26 blocks up, with a 2×2 hole in the floor
+	 * over an enclosed shaft. Mobs spawn in the dark, wander into the hole and die from the fall (26 blocks), so
+	 * their drops pile up on the lit landing at the bottom; the bot waits in the doorway beside it. Standing there
+	 * it is more than 24 blocks from the spawning floor, as spawning requires. Drops that need a player kill
+	 * (spider eyes) don't come from here.
+	 */
+	private static Schematic mobFarm() {
+		Map<Character, String> legend = Map.of(
+				'c', "minecraft:cobblestone",
+				't', "minecraft:torch",
+				'.', "minecraft:air");
+		int size = 11, floor = 26, roof = floor + 4;
+		String[][] layers = new String[roof + 1][size];
+		for (int y = 0; y <= roof; y++) {
+			for (int z = 0; z < size; z++) {
+				StringBuilder row = new StringBuilder();
+				for (int x = 0; x < size; x++) row.append(mobFarmCell(x, y, z, size, floor, roof));
+				layers[y][z] = row.toString();
+			}
+		}
+		Schematic.Farm farm = new Schematic.Farm(Schematic.Farm.HOSTILE_MOBS, Schematic.Farm.Mode.MOBS, new BlockPos(5, 1, 5), new BlockPos(8, 1, 5));
+		return design("mob_farm", legend, layers, farm, null);
+	}
+
+	private static char mobFarmCell(int x, int y, int z, int size, int floor, int roof) {
+		boolean hole = (x == 5 || x == 6) && (z == 5 || z == 6);
+		boolean shaft = x >= 4 && x <= 7 && z >= 4 && z <= 7;
+		boolean edge = x == 0 || z == 0 || x == size - 1 || z == size - 1;
+		if (y == 0) return shaft || x == 8 && (z == 5 || z == 6) ? 'c' : ' ';
+		if (y <= 2 && x == 8 && (z == 5 || z == 6)) return '.'; // where the bot waits
+		if (y < floor) {
+			if (!shaft) return ' ';
+			if (hole) return y == 1 && x == 5 && z == 5 ? 't' : '.';
+			if (x == 7 && (z == 5 || z == 6) && y <= 2) return '.'; // doorway onto the landing
+			return 'c';
+		}
+		if (y == floor) return hole ? '.' : 'c';
+		if (y < roof) return edge ? 'c' : '.';
+		return 'c';
 	}
 
 	private static Schematic design(String name, Map<Character, String> legend, String[][] layers, Schematic.@Nullable Farm farm,

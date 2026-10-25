@@ -81,7 +81,9 @@ public final class Stations {
 			for (BlockPos pos : BlockPos.betweenClosed(base.offset(-BASE_STATION_RADIUS, -4, -BASE_STATION_RADIUS),
 					base.offset(BASE_STATION_RADIUS, 4, BASE_STATION_RADIUS))) {
 				Block b = bot.level().getBlockState(pos).getBlock();
-				if (b == Blocks.CRAFTING_TABLE || b == Blocks.FURNACE) baseStations.computeIfAbsent(b, k -> new ArrayList<>()).add(pos.immutable());
+				if (b == Blocks.CRAFTING_TABLE || b == Blocks.FURNACE || b == Blocks.STONECUTTER) {
+					baseStations.computeIfAbsent(b, k -> new ArrayList<>()).add(pos.immutable());
+				}
 			}
 		}
 		List<BlockPos> out = new ArrayList<>(baseStations.getOrDefault(block, List.of()));
@@ -96,7 +98,8 @@ public final class Stations {
 
 	/** Planner with station availability decided by the same rule the crafter/smelter use. */
 	public static Planner planner(Bot bot, Predicate<ItemStack> protect) {
-		return new Planner(bot.player(), bot.dimension(), nearby(bot, Blocks.CRAFTING_TABLE) != null, nearby(bot, Blocks.FURNACE) != null, protect);
+		return new Planner(bot.player(), bot.dimension(), nearby(bot, Blocks.CRAFTING_TABLE) != null, nearby(bot, Blocks.FURNACE) != null,
+				nearby(bot, Blocks.STONECUTTER) != null, protect);
 	}
 
 	public static void notePlaced(Bot bot, BlockPos pos) {
@@ -120,7 +123,7 @@ public final class Stations {
 			if (d > bestDist) continue;
 			if (!bot.level().isLoaded(pos)) continue;
 			BlockState s = bot.level().getBlockState(pos);
-			if (!s.is(Blocks.CRAFTING_TABLE) && !s.is(Blocks.FURNACE)) {
+			if (!s.is(Blocks.CRAFTING_TABLE) && !s.is(Blocks.FURNACE) && !s.is(Blocks.STONECUTTER)) {
 				it.remove(); // already picked up or broken
 				continue;
 			}
