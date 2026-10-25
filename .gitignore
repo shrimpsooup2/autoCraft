@@ -1,9 +1,9 @@
-# gradle
+# gradle (anchored to the root: an unanchored "build/" also hid src/main/java/com/autocraft/build/)
 
-.gradle/
-build/
-out/
-classes/
+/.gradle/
+/build/
+/out/
+/classes/
 
 # eclipse
 
@@ -20,7 +20,7 @@ classes/
 
 .settings/
 .vscode/
-bin/
+/bin/
 .classpath
 .project
 
@@ -30,7 +30,7 @@ bin/
 
 # fabric
 
-run/
+/run/
 
 # java
 
