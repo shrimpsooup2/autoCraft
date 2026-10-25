@@ -236,6 +236,7 @@ quiet:
 Shrieks are counted: on the third (the fourth summons the warden) it walks back out the way it came and waits
 10 minutes for the warning level to drop. A warden in sight means run (no sneaking) and wait 20 minutes; the bot
 never fights one.
+
 ### Getting to the Nether
 Before travelling, rough time costs are compared and announced: walking to a remembered or visible portal, a
 **bucket portal** (no diamond pickaxe: at a lava pool, each frame block is cast in place — water poured into the
