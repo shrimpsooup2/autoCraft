@@ -25,6 +25,10 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.Holder;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.tags.BlockTags;
+import net.minecraft.tags.ItemTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.AgeableMob;
 import net.minecraft.world.entity.Entity;
@@ -33,6 +37,7 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -110,6 +115,7 @@ public final class CollectBehavior implements Behavior {
 			return hunt(bot, target);
 		}
 		bot.setHuntTargets(Set.of());
+		if (wreckWoodAllowed(bot, target)) target = withWreckWood(target);
 		Set<Block> harvestable = harvestableSources(p, target);
 		if (harvestable.isEmpty()) return false; // gear planner will bring the right tool
 		onTargetChange(bot, target);
@@ -199,18 +205,20 @@ public final class CollectBehavior implements Behavior {
 	private @Nullable BlockPos pickSource(Bot bot, Requirement target, Set<Block> harvestable) {
 		ClientLevel level = bot.mc().level;
 		BlockPos feet = Navigator.feet(bot.player());
-		String key = target.name() + "@" + target.dimension();
+		String key = target.name() + "@" + target.dimension() + "#" + harvestable.hashCode(); // tools and wreck wood change the set
 		List<BlockPos> found = bot.scanner().findBlocksCached(key, s -> harvestable.contains(s.getBlock()), SCAN_CHUNKS, SCAN_MAX, SCAN_MAX_AGE);
-		boolean allowWet = bot.fruitlessLegs(target.name()) >= 2;
+		boolean allowWet = bot.fruitlessLegs(target.name()) >= 2 || wreckWoodAllowed(bot, target);
 		BlockPos best = null;
 		double bestScore = Double.MAX_VALUE;
 		for (BlockPos pos : found) {
 			Long until = blacklist.get(pos);
 			if (until != null && until > tick) continue;
-			if (!BlockUtil.isBreakable(level, pos, level.getBlockState(pos))) continue;
+			BlockState state = level.getBlockState(pos);
+			if (!BlockUtil.isBreakable(level, pos, state)) continue;
 			// in or under water (a shipwreck's logs, a sunken tree): only when nothing dry turns up, and dry wins
 			boolean wet = BlockUtil.touchesWater(level, pos) || BlockUtil.underwater(level, pos);
 			if (wet && !allowWet) continue;
+			if (!wet && state.is(BlockTags.PLANKS)) continue; // planks only from a wreck, never from someone's house
 			double dx = pos.getX() - feet.getX(), dy = pos.getY() - feet.getY(), dz = pos.getZ() - feet.getZ();
 			double score = Math.sqrt(dx * dx + dz * dz) + Math.abs(dy) * 2 + (wet ? WET_PENALTY : 0);
 			if (score < bestScore) {
@@ -233,6 +241,7 @@ public final class CollectBehavior implements Behavior {
 				bot.nav().stop();
 				return;
 			}
+			if (!BoatTravel.hasBoat(p) && BoatTravel.waterAhead(bot, dest)) bot.wantBoat(); // the gear planner makes one
 		}
 		if (exploreGoal instanceof Goal.XZ(int x, int z) && bot.startFlight(new BlockPos(x, p.getBlockY(), z), () -> spotted(bot, target))) return;
 		bot.nav().setGoal(exploreGoal);
@@ -248,6 +257,22 @@ public final class CollectBehavior implements Behavior {
 			bot.noteFruitlessLeg(target.name());
 		}
 		bot.setStatus("exploring " + heading.getName() + " for " + target.name());
+	}
+
+	/**
+	 * Wood is a prerequisite (a table, tools, a boat) and there are no trees to be had — out at sea, on an iceberg,
+	 * or exploring has come up empty: shipwrecks are built of planks and logs.
+	 */
+	private static boolean wreckWoodAllowed(Bot bot, Requirement target) {
+		return target.name().equals("log") && bot.isNeed(target) && (bot.boatWanted() || bot.fruitlessLegs("log") >= 2);
+	}
+
+	/** The log need, with planks counting and minable too (only in or under water: see {@link #pickSource}). */
+	private static Requirement withWreckWood(Requirement logs) {
+		Set<Block> sources = new HashSet<>(logs.sources());
+		for (Holder<Block> h : BuiltInRegistries.BLOCK.getTagOrEmpty(BlockTags.PLANKS)) sources.add(h.value());
+		return new Requirement(logs.name(), logs.counts().or(s -> s.is(ItemTags.PLANKS)), Set.copyOf(sources), logs.amount(), logs.strategy(),
+				logs.preferredY(), logs.dimension(), logs.biomes(), logs.product(), logs.tool(), logs.mobs());
 	}
 
 	/** From the air: a source of the target (block or mob) in the loaded area below (ends an exploration flight). */

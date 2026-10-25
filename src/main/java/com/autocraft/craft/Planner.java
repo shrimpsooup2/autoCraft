@@ -113,6 +113,8 @@ public final class Planner {
 		Item best = null;
 		double bestCost = INF;
 		for (Holder<Item> h : BuiltInRegistries.ITEM.getTagOrEmpty(ItemTags.BOATS)) {
+			// planks of this kind on hand (mixed wreck planks: 5 of one kind): craft that one
+			if (next(h.value(), 1) instanceof Craft craft) return craft;
 			double c = cost(h.value(), false, 0, new HashSet<>());
 			if (c < bestCost) {
 				bestCost = c;

@@ -203,6 +203,8 @@ public final class GearBehavior implements Behavior {
 			// hunting means fighting on purpose: a real weapon first
 			if (target.isHunted() && Features.bestWeaponDamage(p) < 5) wants.add(Want.required(Items.STONE_SWORD));
 		}
+		// water or ice to cross (an ocean, a frozen sea): a boat beats swimming; made before any tool upgrade
+		if (bot.boatWanted()) wants.add(new Want(Planner::boat, true, item -> item.getDefaultInstance().is(ItemTags.BOATS)));
 		int[] dig = bot.buildDig(); // digging out a build site counts as work for the tools too
 		if (dig != null) {
 			pick += dig[0];

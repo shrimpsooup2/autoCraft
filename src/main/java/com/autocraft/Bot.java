@@ -36,6 +36,7 @@ import com.autocraft.team.Team;
 import com.autocraft.team.TeamRole;
 import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
+import com.autocraft.travel.BoatTravel;
 import com.autocraft.travel.ElytraTravel;
 import com.autocraft.world.WorldScanner;
 import java.util.EnumMap;
@@ -114,6 +115,8 @@ public final class Bot {
 
 	/** Progress is saved this often while running (and whenever work starts or stops). */
 	private static final int SAVE_EVERY = 20 * 5;
+	private static final int SWIM_TICKS_FOR_BOAT = 20 * 6;
+	private static final int BOAT_WANT_TICKS = 20 * 120;
 	/** Stop reasons for finished work (the task tree moves on after these). */
 	public static final String JOB_COMPLETE = "job complete";
 	public static final String BUILD_COMPLETE = "build complete";
@@ -133,6 +136,8 @@ public final class Bot {
 	private String status = "";
 	private @Nullable ElytraTravel flight;
 	private long ticks;
+	private int swimTicks;
+	private long boatWantedUntil = -1;
 	private long flightRetryAt;
 
 	private Bot(Minecraft mc) {
@@ -186,6 +191,7 @@ public final class Bot {
 		scanner.tick();
 		ticks++;
 		if (ticks % SAVE_EVERY == 0) TaskSave.save(this, true);
+		noteSwimming();
 		activeBehavior = "idle";
 		for (Behavior b : behaviors) {
 			// mid-flight only the lava/fall reflexes may interrupt; everything else waits for landing
@@ -201,6 +207,31 @@ public final class Bot {
 		if (activeBehavior.equals("idle")) status = "nothing to do right now"; // not the last thing it did
 		trace();
 		if (running) controls.apply();
+	}
+
+	/** In open water (not standing on anything) for a while: crossing water this way is slow; a boat is wanted. */
+	private void noteSwimming() {
+		LocalPlayer p = mc.player;
+		if (p.isInWater() && !p.onGround() && p.getVehicle() == null) {
+			if (++swimTicks > SWIM_TICKS_FOR_BOAT) wantBoat();
+		} else {
+			swimTicks = 0;
+		}
+	}
+
+	/** Water (or ice) to cross: the gear planner makes a boat for the next couple of minutes' travel. */
+	public void wantBoat() {
+		boatWantedUntil = ticks + BOAT_WANT_TICKS;
+	}
+
+	/** A boat would help right now and none is carried. */
+	public boolean boatWanted() {
+		return ticks < boatWantedUntil && mc.player != null && !BoatTravel.hasBoat(mc.player);
+	}
+
+	/** {@code r} is a prerequisite need (gear, build, make, travel), not a job requirement. */
+	public boolean isNeed(Requirement r) {
+		return needs.containsValue(r);
 	}
 
 	/** Record behavior/status/need changes (the last {@link #TRACE_SIZE}), for {@code !ac why}. */

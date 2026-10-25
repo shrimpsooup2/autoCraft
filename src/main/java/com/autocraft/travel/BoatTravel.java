@@ -62,8 +62,12 @@ public final class BoatTravel {
 
 	/** The straight line toward {@code target} is mostly water/ice and we carry a boat. */
 	public static boolean worthIt(Bot bot, BlockPos target) {
+		return hasBoat(bot.player()) && waterAhead(bot, target);
+	}
+
+	/** The straight line toward {@code target} is mostly water/ice: a boat would carry us (and beats swimming). */
+	public static boolean waterAhead(Bot bot, BlockPos target) {
 		LocalPlayer p = bot.player();
-		if (!hasBoat(p)) return false;
 		Level level = bot.mc().level;
 		double dx = target.getX() + 0.5 - p.getX(), dz = target.getZ() + 0.5 - p.getZ();
 		double len = Math.sqrt(dx * dx + dz * dz);
