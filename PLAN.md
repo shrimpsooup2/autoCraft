@@ -121,9 +121,9 @@ flowchart TD
 | `combat` | `Threats` (who's dangerous), `Melee` (weapon choice, approach, crits, strike timing) |
 | `ai` | `ThreatNet` MLP + online training, persisted to `config/autocraft/threatnet.json` |
 | `craft` | `RecipeBook` (all vanilla crafting/smelting/stonecutting recipes from the game data), cost-based `Planner` (craft / smelt / cut / mine / hunt / procedure), `Gatherable`, `Stations` (shared table/furnace/stonecutter rules, base stations, pickup), `Workshop` (crafter + multi-furnace smelter + `Cutter` + procedures) |
-| `loot` | `LootBook`: block and mob loot tables from the game data (chances, shears/silk-touch conditions) |
+| `loot` | `LootBook`: block, mob, chest and archaeology loot tables from the game data (chances, shears/silk-touch conditions); `LootSites`: where each structure is and how to recognise it |
 | `hunt` | `MobHints`: where each mob lives (dimension, biomes, tell-tale structure blocks) |
-| `procedure` | non-recipe items: `BeeNestProcedure` (honey bottles, honeycomb), `AnimalProcedure` (milk, wool, scutes, eggs), `BlockWorkProcedure` (stripped logs, carved pumpkins, mud, concrete), `OxidizeProcedure` (copper garden), `TrialChamberProcedure` (trial keys, ominous bottles, ominous keys, heavy core) |
+| `procedure` | non-recipe items: `BeeNestProcedure` (honey bottles, honeycomb), `AnimalProcedure` (milk, wool, scutes, eggs), `BlockWorkProcedure` (stripped logs, carved pumpkins, mud, concrete), `OxidizeProcedure` (copper garden), `TrialChamberProcedure` (trial keys, ominous bottles, ominous keys, heavy core), `ChestLootProcedure` + `SculkGuard` (structure loot, quiet ancient cities) |
 | `schematic` | `.litematic` / `.schem` / `.nbt` loading, built-in designs, `SchematicLibrary` (built-ins + user folder) |
 | `build` | `BuildPlan` (mirror, rotation, substitution, ordering, bill of materials), `Substitution` + `MaterialSettings` + `MaterialAdvisor` (wood swaps, stand-ins, filler, replacements), `Placement` (a schematic being positioned), `PlacementSolver` (orientation), `Builder`, `SiteFinder`, `FluidFill`, `BaseWithdraw`, `DepotDeposit`, `StructureRegistry` (built + protected areas) |
 | `team` | `Team` (roles, splitting work, schematic sharing), `TeamLink` (newline-delimited JSON over TCP), `TeamRole` |
@@ -147,8 +147,8 @@ else → 0; ~10 consistent outcomes flip a decision) and saved.
 - Missing materials come from base chests first (those known to hold the item, or a first look when the base
   chests haven't been seen), then the recipe planner (craft/smelt/cut/mine/hunt/procedure, including trips to
   the Nether, e.g. quartz for observers). A whole window of materials is gathered before placing resumes.
-  Items nothing can produce (chest-only loot, End items) are skipped with a message — put them in a base chest
-  to include them. Blocks whose material takes time (oxidized copper) are placed last.
+  Items nothing can produce (End items) are skipped with a message — put them in a base chest to include them.
+  Blocks whose material takes time (oxidized copper) are placed last.
 - Big builds (bill over 27 stacks): spare materials go to the base chests when the base is within 64 blocks,
   otherwise into a chest the bot puts down beside the site (crafted if needed), and come back out as needed.
   Pickaxe/shovel/axe tiers are chosen for the build's whole bill and the digging the site needs.
@@ -192,6 +192,50 @@ else → 0; ~10 consistent outcomes flip a decision) and saved.
 - Builds: the host places, one member digs out the site, the rest gather materials and bring them to a depot
   chest next to the build. Collect jobs are split by amount across members.
 
+### Structure loot
+Items that only come from where they generate are job targets too (the item picker says "Structure loot"): the
+loot tables in the game jar give each structure's chance per chest, and the planner picks the structure with the
+lowest effort ÷ chance. The bot searches for it (tunnelling at the structure's depth or walking toward its biomes;
+an explorer map in the inventory pointing at one is followed first), opens its containers one by one and takes the
+item. Opened containers and finished structures are remembered per world (`config/autocraft/structure_loot.json`);
+chests at your bases are never touched. Structures in the Nether trigger a portal trip (with the Nether kit).
+
+| Structure | Holds | Unique there (examples) |
+|---|---|---|
+| ancient city (quiet mode) | chests | echo shards, disc fragment 5, ward/silence trims |
+| bastion | chests | netherite upgrade, pigstep, snout trim |
+| nether fortress | chests | rib trim |
+| stronghold | chests | eye trim |
+| desert pyramid | chests (TNT trap avoided) + suspicious sand | dune trim, archer/miner/prize/skull sherds |
+| jungle temple | chests (tripwires avoided) | wild trim |
+| shipwreck | chests | coast trim, buried treasure maps |
+| buried treasure | chest dug up at the map's X | heart of the sea |
+| pillager outpost | chest | sentry trim, goat horns |
+| woodland mansion | chests | vex trim |
+| mineshaft | chest minecarts | music disc "bounce" |
+| trial chamber | chests/barrels (vaults: own procedure) | flow/guster patterns, creator/precipice discs |
+| abandoned camp | chests/barrels | explorer maps to other structures |
+| desert well, ocean ruins, trail ruins | suspicious sand/gravel (brushed) | sherds, sniffer egg, relic disc, wayfinder/raiser/shaper/host trims |
+| dungeon, ruined portal, village | chests | enchanted golden apples, music discs, horse armor... (also elsewhere) |
+
+Left out because nothing in them is unique: igloos, underwater ruin chests (their maps also come from shipwrecks),
+the spawn bonus chest. End cities (elytra, spire trim) would need End travel, which the bot doesn't do.
+
+**Traps**: the pathfinder never walks into pressure plates or tripwire (desert pyramid TNT, jungle temple arrows);
+it digs around them instead.
+
+**Ancient cities** (kit: 24 wool, plus the usual food and weapon). Once sculk is within 12 blocks the bot goes
+quiet:
+- it sneaks everywhere (footsteps, landings and swimming make no vibrations while sneaking) and never sprints;
+- it never steps on sculk sensors or shriekers (that sets them off even when sneaking);
+- it mines and places nothing but wool (wool makes no vibrations and blocks them);
+- it eats only when health or food get low (eating is heard);
+- before opening a chest — always heard — it puts wool on the line between the chest and every sculk sensor in
+  range, or leaves that chest.
+
+Shrieks are counted: on the third (the fourth summons the warden) it walks back out the way it came and waits
+10 minutes for the warning level to drop. A warden in sight means run (no sneaking) and wait 20 minutes; the bot
+never fights one.
 ### Getting to the Nether
 Before travelling, rough time costs are compared and announced: walking to a remembered or visible portal, a
 **bucket portal** (no diamond pickaxe: at a lava pool, each frame block is cast in place — water poured into the
@@ -261,9 +305,9 @@ has settled and reached the server; untargeted item use (buckets, food) finishes
 - Servers with anti-xray or strict anti-cheat will fight the bot (scanning sees hidden ores; reach and timing are
   vanilla but not humanized beyond the aim curves).
 - End travel, enchanting, villager trading and smithing recipes are out of scope.
-- Chest-only loot (enchanted golden apples, music discs, armor trims) is skipped with a message. The mob farm
-  gives no player-kill-only drops (spider eyes) and spawns slowly when caves nearby compete for mob spawns.
+- Chest-only loot from End cities isn't reachable (no End travel). The mob farm gives no player-kill-only drops
+  (spider eyes) and spawns slowly when caves nearby compete for mob spawns.
 - Lava escape needs solid ground within ~4 blocks (or the last safe spot) or a fire resistance potion; a fall
   into a wide lava lake with no water bucket, no blocks and no solid edge in reach can still be fatal.
 - Builder limits: block entity contents (chest items, sign text) aren't recreated; waterlogging isn't
-  placed; chest-only loot blocks must be supplied by you.
+  placed.
