@@ -29,6 +29,7 @@ import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
 import com.autocraft.goal.Requirement.Dim;
 import com.autocraft.procedure.Procedures;
+import com.autocraft.tasks.TaskTree;
 import com.autocraft.team.Team;
 import com.autocraft.team.TeamRole;
 import com.autocraft.path.Goal;
@@ -105,6 +106,11 @@ public final class Bot {
 
 	/** Progress is saved this often while running (and whenever work starts or stops). */
 	private static final int SAVE_EVERY = 20 * 5;
+	/** Stop reasons for finished work (the task tree moves on after these). */
+	public static final String JOB_COMPLETE = "job complete";
+	public static final String BUILD_COMPLETE = "build complete";
+
+	private String lastStop = "";
 
 	private @Nullable Job job;
 	private @Nullable BuildOrder build;
@@ -337,6 +343,7 @@ public final class Bot {
 
 	public void stop(String reason) {
 		if (!running) return;
+		lastStop = reason;
 		if (teamRole != TeamRole.SOLO || job != null) Team.stopAll();
 		running = false;
 		paused = false;
@@ -350,6 +357,12 @@ public final class Bot {
 		threatNet.save();
 		TaskSave.save(this, false);
 		Chat.info("Stopped: " + reason);
+		if (reason.equals(JOB_COMPLETE) || reason.equals(BUILD_COMPLETE)) TaskTree.completed();
+	}
+
+	/** Why the bot last stopped ({@link #JOB_COMPLETE}, {@link #BUILD_COMPLETE}, or something else). */
+	public String lastStop() {
+		return lastStop;
 	}
 
 	public void setPaused(boolean value) {

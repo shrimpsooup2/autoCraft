@@ -3,6 +3,7 @@ package com.autocraft.behavior;
 import com.autocraft.Bot;
 import com.autocraft.Chat;
 import com.autocraft.craft.Stations;
+import com.autocraft.tasks.TaskTree;
 import com.autocraft.goal.Job;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -42,8 +43,8 @@ public final class FinishBehavior implements Behavior {
 			bot.nav().stop();
 		}
 		Chat.info("Job complete: " + job.progress(bot.player()));
-		bot.stop("job complete");
-		if (com.autocraft.Settings.get().logoffWhenDone) {
+		bot.stop(Bot.JOB_COMPLETE);
+		if (com.autocraft.Settings.get().logoffWhenDone && !TaskTree.hasMore()) { // the task tree has more to do: stay
 			Minecraft mc = bot.mc();
 			Chat.info("Logging off.");
 			mc.schedule(() -> mc.disconnectFromWorld(ClientLevel.DEFAULT_QUIT_MESSAGE)); // outside the tick

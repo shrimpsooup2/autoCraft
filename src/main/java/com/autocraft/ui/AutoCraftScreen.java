@@ -39,13 +39,13 @@ import org.jspecify.annotations.Nullable;
 /**
  * The bot's control panel (default key K). Collect: search any item the bot can get, add it with an amount,
  * start the job. Build: pick a schematic (built-in or from the folder) and place it in the world as a ghost,
- * Litematica-style — exact coordinates, nudges, rotation, mirror — then build it. Team: host or join a team of
- * bots. Bot: live status, pause/stop, base. Settings: saved options (log off, overlay, smooth aim, players
- * nearby, after death).
+ * Litematica-style — exact coordinates, nudges, rotation, mirror — then build it. Tasks: a tree of big tasks and
+ * subtasks run in order ({@link TaskTreePanel}). Team: host or join a team of bots. Bot: live status, pause/stop,
+ * base. Settings: saved options (log off, overlay, smooth aim, players nearby, after death, base, resume).
  */
 public final class AutoCraftScreen extends Screen {
 	private enum Tab {
-		COLLECT("Collect"), BUILD("Build"), TEAM("Team"), BOT("Bot"), SETTINGS("Settings");
+		COLLECT("Collect"), BUILD("Build"), TASKS("Tasks"), TEAM("Team"), BOT("Bot"), SETTINGS("Settings");
 
 		final String label;
 
@@ -59,6 +59,8 @@ public final class AutoCraftScreen extends Screen {
 	private static final int ROW = 14;
 	private static final int LINE = 11;
 	private static final int CRAFTED_MARK = 0xFF4FA3FF;
+	/** Tab button pitch (6 tabs fit next to the title in the 420-wide panel). */
+	private static final int TAB_W = 50;
 
 	// remembered between openings
 	private static Tab tab = Tab.COLLECT;
@@ -105,6 +107,9 @@ public final class AutoCraftScreen extends Screen {
 	// bot tab
 	private @Nullable Button pauseButton;
 
+	// tasks tab
+	private @Nullable TaskTreePanel tasks;
+
 	// settings tab
 	private static final int[] PLAYER_RADII = {16, 32, 48, 64, 96, 128};
 	private final List<Runnable> settingLabels = new ArrayList<>();
@@ -138,17 +143,22 @@ public final class AutoCraftScreen extends Screen {
 		bottomY = top + panelH - 24;
 		colW = (panelW - 24) / 2;
 		rightX = left + 16 + colW;
-		int tabX = left + panelW - Tab.values().length * 56 - 4;
+		int tabX = left + panelW - Tab.values().length * TAB_W - 4;
 		for (Tab t : Tab.values()) {
 			Button b = addRenderableWidget(Button.builder(Component.literal(t.label), btn -> {
 				tab = t;
 				rebuildWidgets();
-			}).bounds(tabX + t.ordinal() * 56, top + 4, 54, 16).build());
+			}).bounds(tabX + t.ordinal() * TAB_W, top + 4, TAB_W - 2, 16).build());
 			b.active = t != tab;
 		}
+		tasks = null;
 		switch (tab) {
 			case COLLECT -> initCollect();
 			case BUILD -> initBuild();
+			case TASKS -> {
+				tasks = new TaskTreePanel(font, left, rightX, colW, contentY, bottomY, this::addRenderableWidget, this::rebuildWidgets);
+				tasks.init();
+			}
 			case TEAM -> initTeam();
 			case BOT -> initBot();
 			case SETTINGS -> initSettings();
@@ -162,6 +172,9 @@ public final class AutoCraftScreen extends Screen {
 			case BUILD -> updateBuildButtons();
 			case TEAM -> updateTeamButtons();
 			case BOT -> updateBotButtons();
+			case TASKS -> {
+				if (tasks != null) tasks.tick();
+			}
 			case SETTINGS -> {
 			}
 		}
@@ -175,10 +188,13 @@ public final class AutoCraftScreen extends Screen {
 		Bot bot = Bot.get();
 		String state = !bot.isRunning() ? "idle" : bot.isPaused() ? "paused" : bot.activeBehavior();
 		int stateX = left + 16 + font.width("autoCraft");
-		g.text(font, font.plainSubstrByWidth(state, left + panelW - Tab.values().length * 56 - 8 - stateX), stateX, top + 8, Widgets.GRAY);
+		g.text(font, font.plainSubstrByWidth(state, left + panelW - Tab.values().length * TAB_W - 8 - stateX), stateX, top + 8, Widgets.GRAY);
 		switch (tab) {
 			case COLLECT -> extractCollect(g, mouseX, mouseY);
 			case BUILD -> extractBuild(g, mouseX, mouseY);
+			case TASKS -> {
+				if (tasks != null) tasks.extract(g);
+			}
 			case TEAM -> extractTeam(g);
 			case BOT -> extractBot(g);
 			case SETTINGS -> extractSettings(g);
@@ -209,6 +225,8 @@ public final class AutoCraftScreen extends Screen {
 				select(schematics.get(i));
 				return true;
 			}
+		} else if (tab == Tab.TASKS && tasks != null) {
+			return tasks.click(mx, my);
 		}
 		return false;
 	}
@@ -233,6 +251,8 @@ public final class AutoCraftScreen extends Screen {
 				orderScroll = Math.max(0, Math.min(Math.max(0, order.size() - orderRows), orderScroll - dir));
 				return true;
 			}
+		} else if (tab == Tab.TASKS && tasks != null && tasks.scroll(x, y, dir)) {
+			return true;
 		} else if (tab == Tab.BUILD && inside(x, y, left + 8, listY, colW, listRows * LINE)) {
 			listScroll = Math.max(0, Math.min(Math.max(0, schematics.size() - listRows), listScroll - dir));
 			return true;

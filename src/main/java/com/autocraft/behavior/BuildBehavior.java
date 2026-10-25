@@ -428,7 +428,7 @@ public final class BuildBehavior implements Behavior {
 		}
 		reset();
 		bot.finishBuild();
-		if (bot.job() == null) bot.stop("build complete");
+		if (bot.job() == null) bot.stop(Bot.BUILD_COMPLETE);
 		return true;
 	}
 }

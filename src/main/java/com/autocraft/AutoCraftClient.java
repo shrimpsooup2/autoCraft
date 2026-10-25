@@ -6,6 +6,7 @@ import com.autocraft.ui.AutoCraftScreen;
 import com.autocraft.ui.GhostRenderer;
 import com.autocraft.ui.HudOverlay;
 import com.autocraft.ui.Placements;
+import com.autocraft.tasks.TaskTree;
 import com.autocraft.team.Team;
 import com.autocraft.world.ChestMemory;
 import com.mojang.blaze3d.platform.InputConstants;
@@ -39,6 +40,7 @@ public final class AutoCraftClient implements ClientModInitializer {
 			Team.tick(mc);
 			ChestMemory.tick(mc); // remembers what's in every chest screen that opens, ours or yours
 			TaskSave.tick(mc);
+			TaskTree.tick(mc);
 		});
 		LevelRenderEvents.COLLECT_SUBMITS.register(GhostRenderer::collect);
 		HudElementRegistry.addLast(Identifier.fromNamespaceAndPath(MOD_ID, "status"), HudOverlay::extract);
