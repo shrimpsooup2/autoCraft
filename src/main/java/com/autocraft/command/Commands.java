@@ -61,6 +61,13 @@ public final class Commands {
 			}
 			case "status" -> status(bot);
 			case "base" -> {
+				if (args.length >= 2 && args[1].equalsIgnoreCase("stocked")) {
+					boolean on = args.length < 3 || !args[2].equalsIgnoreCase("off");
+					Settings.get().materialsAtBase = on;
+					Settings.get().save();
+					Chat.info(on ? "OK: the base chests will be checked before gathering anything." : "OK: only base chests known to hold an item are visited.");
+					return;
+				}
 				BlockPos pos = player.blockPosition();
 				bot.setBase(pos);
 				Chat.info("Base set to " + pos.toShortString() + ". Chests within 8 blocks will be used for storage.");
@@ -235,8 +242,9 @@ public final class Commands {
 	}
 
 	private static void help() {
-		Chat.info("Press K for the control panel. Commands: !ac collect <item> <amount> ... (mined or crafted) | place <schematic> (ghost preview,"
-				+ " then position it) | build <schematic> <x y z|here> [rot] | farm <resource> [x y z|here] | team host|join|leave | schematics"
-				+ " | built | stop | pause | resume | status | base | logoff on|off | goto x y z | resources");
+		Chat.info("Press K for the control panel. Commands: !ac collect <item> <amount> ... (mined, crafted, hunted or special) | place"
+				+ " <schematic> (ghost preview, then position it) | build <schematic> <x y z|here> [rot] | farm <resource> [x y z|here] | team"
+				+ " host|join|leave | schematics | built | stop | pause | resume | status | base | base stocked on|off | logoff on|off | goto x y z"
+				+ " | resources");
 	}
 }

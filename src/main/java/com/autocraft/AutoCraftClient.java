@@ -7,6 +7,7 @@ import com.autocraft.ui.GhostRenderer;
 import com.autocraft.ui.HudOverlay;
 import com.autocraft.ui.Placements;
 import com.autocraft.team.Team;
+import com.autocraft.world.ChestMemory;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -36,12 +37,15 @@ public final class AutoCraftClient implements ClientModInitializer {
 			Placements.tick(mc);
 			GhostRenderer.tick(mc);
 			Team.tick(mc);
+			ChestMemory.tick(mc); // remembers what's in every chest screen that opens, ours or yours
+			TaskSave.tick(mc);
 		});
 		LevelRenderEvents.COLLECT_SUBMITS.register(GhostRenderer::collect);
 		HudElementRegistry.addLast(Identifier.fromNamespaceAndPath(MOD_ID, "status"), HudOverlay::extract);
 		HudElementRegistry.addLast(Identifier.fromNamespaceAndPath(MOD_ID, "placement"), Placements::extractHud);
 		// "!ac ..." chat lines are commands for us and never reach the server.
 		ClientSendMessageEvents.ALLOW_CHAT.register(message -> !Commands.handle(message));
+		ClientPlayConnectionEvents.JOIN.register((handler, sender, mc) -> TaskSave.onJoin());
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, mc) -> {
 			Bot.get().onDisconnect();
 			Placements.cancel();

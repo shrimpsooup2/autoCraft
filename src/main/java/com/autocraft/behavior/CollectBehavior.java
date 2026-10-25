@@ -67,6 +67,7 @@ public final class CollectBehavior implements Behavior {
 	private final BlockPos[] preyChase = new BlockPos[1];
 	private @Nullable LivingEntity prey;
 	private int preyTicks;
+	private final BaseFetch baseFetch = new BaseFetch();
 
 	@Override
 	public String name() {
@@ -88,6 +89,7 @@ public final class CollectBehavior implements Behavior {
 		prey = null;
 		preyTicks = 0;
 		cleanup.reset();
+		baseFetch.reset();
 	}
 
 	@Override
@@ -99,6 +101,8 @@ public final class CollectBehavior implements Behavior {
 			return false;
 		}
 		LocalPlayer p = bot.player();
+		// a prerequisite the base chests hold: fetch it when that's quicker than gathering (job loot is gathered)
+		if (target == bot.activeNeed() && baseFetch.tick(bot, target)) return true;
 		if (target.isHunted()) {
 			onTargetChange(bot, target);
 			return hunt(bot, target);

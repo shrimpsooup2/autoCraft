@@ -181,18 +181,30 @@ public final class GearBehavior implements Behavior {
 	 */
 	private static List<Want> wants(Bot bot, LocalPlayer p, @Nullable Requirement target) {
 		List<Want> wants = new ArrayList<>();
+		int pick = 0, axe = 0, shovel = 0;
 		if (target != null) {
 			Item tool = requiredPickaxe(target);
 			if (tool != null && !canHarvestAny(p, target)) wants.add(Want.required(tool));
 			boolean deep = target.strategy() == Requirement.Strategy.UNDERGROUND || target.dimension() == Requirement.Dim.NETHER;
 			int remaining = Math.max(0, target.amount() - InvUtil.count(p, target.counts()));
-			addToolTiers(wants, p, target, deep, remaining);
+			// a build's gathering comes in windows: the work ahead is the rest of the build
+			if (target == bot.need(Bot.NeedOwner.BUILD)) remaining = Math.max(remaining, bot.buildTotal() - bot.buildPlaced());
+			if (deep || target.sources().stream().anyMatch(b -> b.defaultBlockState().is(BlockTags.MINEABLE_WITH_PICKAXE))) pick = Math.max(1, remaining);
+			if (target.sources().stream().anyMatch(b -> b.defaultBlockState().is(BlockTags.MINEABLE_WITH_AXE))) axe = remaining;
+			if (target.sources().stream().anyMatch(b -> b.defaultBlockState().is(BlockTags.MINEABLE_WITH_SHOVEL))) shovel = remaining;
 			if (target.tool() == LootBook.ToolUse.SHEARS && InvUtil.find(p, s -> s.is(Items.SHEARS) && !InvUtil.nearlyBroken(s)) < 0) {
 				wants.add(Want.required(Items.SHEARS));
 			}
 			// hunting means fighting on purpose: a real weapon first
 			if (target.isHunted() && Features.bestWeaponDamage(p) < 5) wants.add(Want.required(Items.STONE_SWORD));
 		}
+		int[] dig = bot.buildDig(); // digging out a build site counts as work for the tools too
+		if (dig != null) {
+			pick += dig[0];
+			shovel += dig[1];
+			axe += dig[2];
+		}
+		addToolTiers(wants, p, pick, axe, shovel);
 		if (netherTripAhead(bot, p)) addNetherKit(wants, p);
 		// combat only takes quick kills, so a stone sword is plenty; never "upgrade" past something carried
 		if (Features.bestWeaponDamage(p) < 5) wants.add(Want.optional(Items.STONE_SWORD));
@@ -207,28 +219,25 @@ public final class GearBehavior implements Behavior {
 		return wants;
 	}
 
-	/** Better tools when the work ahead pays for them. */
-	private static void addToolTiers(List<Want> wants, LocalPlayer p, Requirement target, boolean deep, int remaining) {
-		boolean pickaxeWork = deep || target.sources().stream().anyMatch(b -> b.defaultBlockState().is(BlockTags.MINEABLE_WITH_PICKAXE));
-		if (pickaxeWork) {
+	/** Better tools when the work ahead (blocks per tool kind) pays for them. */
+	private static void addToolTiers(List<Want> wants, LocalPlayer p, int pick, int axe, int shovel) {
+		if (pick > 0) {
 			boolean stoneTier = InvUtil.canHarvest(p, Blocks.IRON_ORE.defaultBlockState());
 			boolean ironTier = InvUtil.canHarvest(p, Blocks.DIAMOND_ORE.defaultBlockState());
 			boolean diamondTier = InvUtil.canHarvest(p, Blocks.OBSIDIAN.defaultBlockState());
 			if (!stoneTier) {
 				wants.add(Want.required(Items.STONE_PICKAXE)); // 3 cobblestone, mined anyway: 50% faster than wood
-			} else if (!ironTier && (remaining >= 1024 || remaining >= 384 && carriedSpare(p, Items.IRON_INGOT, Items.RAW_IRON) >= 3)) {
+			} else if (!ironTier && (pick >= 1024 || pick >= 384 && carriedSpare(p, Items.IRON_INGOT, Items.RAW_IRON) >= 3)) {
 				wants.add(Want.required(Items.IRON_PICKAXE));
-			} else if (ironTier && !diamondTier && remaining >= 256 && carriedSpare(p, Items.DIAMOND) >= 3) {
+			} else if (ironTier && !diamondTier && pick >= 256 && carriedSpare(p, Items.DIAMOND) >= 3) {
 				wants.add(Want.optional(Items.DIAMOND_PICKAXE));
 			}
 		}
-		boolean axeWork = target.sources().stream().anyMatch(b -> b.defaultBlockState().is(BlockTags.MINEABLE_WITH_AXE));
-		if (axeWork && remaining >= 24 && InvUtil.find(p, s -> s.is(ItemTags.AXES) && !InvUtil.nearlyBroken(s)) < 0) {
-			wants.add(remaining >= 64 ? Want.required(Items.STONE_AXE) : Want.optional(Items.STONE_AXE));
+		if (axe >= 24 && InvUtil.find(p, s -> s.is(ItemTags.AXES) && !InvUtil.nearlyBroken(s)) < 0) {
+			wants.add(axe >= 64 ? Want.required(Items.STONE_AXE) : Want.optional(Items.STONE_AXE));
 		}
-		boolean shovelWork = target.sources().stream().anyMatch(b -> b.defaultBlockState().is(BlockTags.MINEABLE_WITH_SHOVEL));
-		if (shovelWork && remaining >= 48 && InvUtil.find(p, s -> s.is(ItemTags.SHOVELS) && !InvUtil.nearlyBroken(s)) < 0) {
-			wants.add(Want.optional(Items.STONE_SHOVEL));
+		if (shovel >= 48 && InvUtil.find(p, s -> s.is(ItemTags.SHOVELS) && !InvUtil.nearlyBroken(s)) < 0) {
+			wants.add(shovel >= 256 ? Want.required(Items.STONE_SHOVEL) : Want.optional(Items.STONE_SHOVEL));
 		}
 	}
 

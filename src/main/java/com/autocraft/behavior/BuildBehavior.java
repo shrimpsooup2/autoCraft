@@ -13,28 +13,34 @@ import com.autocraft.control.InvUtil;
 import com.autocraft.craft.Planner;
 import com.autocraft.craft.Stations;
 import com.autocraft.craft.Workshop;
+import com.autocraft.goal.Requirement;
 import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
 import com.autocraft.schematic.Schematic;
 import com.autocraft.team.Team;
 import com.autocraft.team.TeamRole;
+import com.autocraft.world.ChestMemory;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import org.jspecify.annotations.Nullable;
 
 /**
  * Builds the current {@link BuildOrder}: clear and place with {@link Builder}; whenever it runs out of an
  * item, get more — from base chests first, then by crafting/smelting (the recipe planner) or by asking the
- * collector to mine raw materials, buckets are filled at the nearest water/lava. Items nothing can produce
- * (mob drops, loot) are skipped with a message. Finished structures are registered (and protected); a
- * starter base also becomes the storage base.
+ * collector to mine raw materials (the whole window is gathered before placing resumes), buckets are filled at
+ * the nearest water/lava. Items nothing can produce (mob drops, loot) are skipped with a message. Finished
+ * structures are registered (and protected); a starter base also becomes the storage base. Big solo builds keep
+ * spare materials in a stash — the base when it's close, else a chest put down by the site.
  *
  * <p>In a team build the {@link TeamRole} decides the part: the placer builds and takes materials from the depot
  * chest, the digger clears the site and then gathers, gatherers fetch what the leader lists and deliver it.
@@ -48,6 +54,10 @@ public final class BuildBehavior implements Behavior {
 	private static final int DEPOT_PATIENCE_TICKS = 20 * 180;
 	/** Gatherer: deliver once this many stacks are carried even if the list isn't complete. */
 	private static final int TRIP_STACKS = 6;
+	/** A bill this big (stacks) doesn't fit in the inventory: spare materials go to a stash. */
+	private static final int BIG_BUILD_STACKS = 27;
+	/** The base serves as the stash when it's this close to the site. */
+	private static final int BASE_STASH_DISTANCE = 64;
 
 	private @Nullable BuildOrder current;
 	private @Nullable BuildPlan plan;
@@ -56,10 +66,16 @@ public final class BuildBehavior implements Behavior {
 	private @Nullable FluidFill fill;
 	private @Nullable BaseWithdraw withdraw;
 	private boolean triedBase;
+	private final Set<Item> triedBaseFor = new HashSet<>();
 	private boolean finishing;
 	private @Nullable Item lastMissing;
 	private @Nullable DepotDeposit delivery;
 	private @Nullable Map<Item, Integer> beforeDepotWithdraw;
+	/** Big solo builds: where spare materials wait, what we put there, and the deposit/withdrawal in progress. */
+	private @Nullable BlockPos stash;
+	private final Map<Item, Integer> stashed = new HashMap<>();
+	private @Nullable DepotDeposit stashing;
+	private @Nullable Map<Item, Integer> beforeStashWithdraw;
 	private long ticks;
 	private long nextDepotTry;
 	private long waitingSince = -1;
@@ -76,11 +92,17 @@ public final class BuildBehavior implements Behavior {
 		builder = null;
 		fill = null;
 		withdraw = null;
+		triedBase = false;
+		triedBaseFor.clear();
 		finishing = false;
 		delivery = null;
 		beforeDepotWithdraw = null;
 		waitingSince = -1;
 		nextDepotTry = 0;
+		stash = null;
+		stashed.clear();
+		stashing = null;
+		beforeStashWithdraw = null;
 		workshop.reset();
 		StructureRegistry.setUnderConstruction(null, null);
 	}
@@ -109,6 +131,14 @@ public final class BuildBehavior implements Behavior {
 			if (withdraw.tick(bot) == BaseWithdraw.Status.RUNNING) return true;
 			withdraw = null;
 			if (beforeDepotWithdraw != null) noteDepotWithdraw(bot);
+			if (beforeStashWithdraw != null) noteStashWithdraw(bot);
+		}
+		if (stashing != null) {
+			DepotDeposit.Status s = stashing.tick(bot);
+			if (s == DepotDeposit.Status.RUNNING) return true;
+			stashing.delivered().forEach((item, n) -> stashed.merge(item, n, Integer::sum));
+			stashing = null;
+			if (s == DepotDeposit.Status.NEED_CHEST) return step(bot, Items.CHEST, 1);
 		}
 		switch (workshop.tick(bot)) {
 			case RUNNING -> {
@@ -124,6 +154,11 @@ public final class BuildBehavior implements Behavior {
 
 		TeamRole role = bot.teamRole();
 		if (role == TeamRole.GATHER) return gather(bot);
+		LocalPlayer p = bot.player();
+		if (stash != null && InvUtil.freeSlots(p) <= 2 && stashSpare(bot)) return true;
+		// gather the whole window before going back to placing (no mine-one, place-one ping-pong)
+		Requirement gathering = bot.need(Bot.NeedOwner.BUILD);
+		if (gathering != null && InvUtil.count(p, gathering.counts()) < gathering.amount()) return false;
 		builder.setMode(role == TeamRole.CLEAR ? Builder.Mode.CLEAR_ONLY
 				: role == TeamRole.PLACE && Team.clearerActive() ? Builder.Mode.PLACE_ONLY : Builder.Mode.ALL);
 		Builder.Status status = builder.tick(bot);
@@ -161,6 +196,51 @@ public final class BuildBehavior implements Behavior {
 		Chat.info("Materials: " + bill.entrySet().stream().limit(12)
 				.map(e -> e.getValue() + " " + e.getKey().getDefaultInstance().getHoverName().getString())
 				.collect(Collectors.joining(", ")) + (bill.size() > 12 ? ", ..." : ""));
+		bot.setBuildDig(digWork(bot));
+		int stacks = bill.entrySet().stream().mapToInt(e -> (e.getValue() + e.getKey().getDefaultMaxStackSize() - 1) / e.getKey().getDefaultMaxStackSize())
+				.sum();
+		if (bot.teamRole() == TeamRole.SOLO && stacks >= BIG_BUILD_STACKS) {
+			BoundingBox box = plan.box();
+			BlockPos base = bot.base();
+			boolean baseClose = base != null && bot.baseDimension() == bot.dimension() && base.distSqr(box.getCenter()) <= BASE_STASH_DISTANCE * BASE_STASH_DISTANCE;
+			stash = baseClose ? base : new BlockPos(box.minX() - 2, box.minY(), box.minZ() - 2);
+			Chat.info("Big build (" + stacks + " stacks): spare materials go " + (baseClose ? "to the base chests" : "into a chest at " + stash.toShortString()) + ".");
+		}
+	}
+
+	/** Cells to dig out per tool (pickaxe, shovel, axe), so the gear planner can invest in better tools. */
+	private int[] digWork(Bot bot) {
+		int[] dig = new int[3];
+		for (BuildPlan.Task t : plan.clears()) {
+			BlockState s = bot.level().getBlockState(t.pos());
+			if (s.isAir() || !s.getFluidState().isEmpty()) continue;
+			if (s.is(BlockTags.MINEABLE_WITH_PICKAXE)) dig[0]++;
+			else if (s.is(BlockTags.MINEABLE_WITH_SHOVEL)) dig[1]++;
+			else if (s.is(BlockTags.MINEABLE_WITH_AXE)) dig[2]++;
+		}
+		return dig;
+	}
+
+	/** Inventory nearly full: put materials not needed for the next stretch into the stash. True if that started. */
+	private boolean stashSpare(Bot bot) {
+		Set<Item> spare = new HashSet<>(plan.bill(bot.level(), Integer.MAX_VALUE).keySet());
+		spare.removeAll(plan.bill(bot.level(), WINDOW_STACKS).keySet());
+		spare.removeIf(item -> InvUtil.count(bot.player(), s -> s.is(item)) == 0);
+		if (spare.isEmpty()) return false;
+		Chat.info("Inventory full: storing spare build materials at " + stash.toShortString() + ".");
+		stashing = new DepotDeposit(stash, spare);
+		return true;
+	}
+
+	private void noteStashWithdraw(Bot bot) {
+		Map<Item, Integer> after = snapshot(bot, beforeStashWithdraw.keySet());
+		beforeStashWithdraw.forEach((item, n) -> {
+			int got = after.getOrDefault(item, 0) - n;
+			if (!stashed.containsKey(item)) return;
+			if (got <= 0 || stashed.get(item) - got <= 0) stashed.remove(item); // emptied (or someone took it)
+			else stashed.merge(item, -got, Integer::sum);
+		});
+		beforeStashWithdraw = null;
 	}
 
 	/** Get more of {@code item} for the next stretch of the build. False when the collector should run. */
@@ -178,10 +258,21 @@ public final class BuildBehavior implements Behavior {
 		}
 		Map<Item, Integer> window = plan.bill(bot.level(), WINDOW_STACKS);
 		if (bot.teamRole() == TeamRole.PLACE && bot.depot() != null && Team.gathererCount() > 0 && waitForTeam(bot, item, window)) return true;
-		if (!triedBase && bot.base() != null && bot.baseDimension() == bot.dimension()) {
-			triedBase = true;
-			withdraw = new BaseWithdraw(bot.base(), window);
+		if (stash != null && stashed.getOrDefault(item, 0) > 0) {
+			beforeStashWithdraw = snapshot(bot, window.keySet());
+			withdraw = new BaseWithdraw(stash, window);
 			return true;
+		}
+		BlockPos base = bot.base();
+		if (base != null && bot.baseDimension() == bot.dimension()) {
+			// base chests known to hold it: one trip per item; never looked inside: one look per build
+			boolean known = ChestMemory.count(base, BaseWithdraw.BASE_RADIUS, bot.dimension(), s -> s.is(item)) > 0;
+			boolean unseen = !ChestMemory.surveyed(base, BaseWithdraw.BASE_RADIUS, bot.dimension());
+			if (known ? triedBaseFor.add(item) : unseen && !triedBase) {
+				triedBase = true;
+				withdraw = new BaseWithdraw(base, window);
+				return true;
+			}
 		}
 		return step(bot, item, Math.max(1, window.getOrDefault(item, 1)));
 	}

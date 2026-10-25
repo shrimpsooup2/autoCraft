@@ -1,6 +1,7 @@
 package com.autocraft.control;
 
 import com.autocraft.Bot;
+import com.autocraft.world.ChestMemory;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.inventory.AbstractContainerMenu;
@@ -25,7 +26,10 @@ public final class ContainerOpener {
 		LocalPlayer p = bot.player();
 		if (menu.isInstance(p.containerMenu)) return Status.OPEN;
 		if (!InvUtil.inventoryMenuActive(p)) p.closeContainer(); // some other screen is in the way
-		if (ticks % RETRY_EVERY == 0) bot.controls().interact(pos);
+		if (ticks % RETRY_EVERY == 0) {
+			ChestMemory.opening(pos);
+			bot.controls().interact(pos);
+		}
 		return ++ticks > TIMEOUT ? Status.FAILED : Status.WAITING;
 	}
 }

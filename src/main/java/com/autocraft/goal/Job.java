@@ -2,6 +2,7 @@ package com.autocraft.goal;
 
 import com.autocraft.control.InvUtil;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -63,6 +64,21 @@ public final class Job {
 
 	public boolean isSkipped(Requirement r) {
 		return skipped.contains(r.name());
+	}
+
+	/** Deposited counts per requirement name (for saving progress). */
+	public Map<String, Integer> stored() {
+		return Map.copyOf(stored);
+	}
+
+	public Set<String> skippedNames() {
+		return Set.copyOf(skipped);
+	}
+
+	/** Put saved progress back (after a relog). */
+	public void restore(Map<String, Integer> savedStored, Collection<String> savedSkipped) {
+		stored.putAll(savedStored);
+		skipped.addAll(savedSkipped);
 	}
 
 	/** Requirements that would be counted by an item stack, used when depositing. */

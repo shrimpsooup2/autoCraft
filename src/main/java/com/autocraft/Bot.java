@@ -90,6 +90,7 @@ public final class Bot {
 	private @Nullable BuildPlan buildPlan;
 	private int buildPlaced;
 	private int buildTotal;
+	private int @Nullable [] buildDig;
 	private TeamRole teamRole = TeamRole.SOLO;
 	private @Nullable BlockPos depot;
 	private Map<Item, Integer> teamNeeds = Map.of();
@@ -101,6 +102,9 @@ public final class Bot {
 
 	/** Death spot to return to. */
 	public record Recovery(BlockPos pos, Dim dim) {}
+
+	/** Progress is saved this often while running (and whenever work starts or stops). */
+	private static final int SAVE_EVERY = 20 * 5;
 
 	private @Nullable Job job;
 	private @Nullable BuildOrder build;
@@ -164,6 +168,7 @@ public final class Bot {
 		if (playerAlert()) return;
 		scanner.tick();
 		ticks++;
+		if (ticks % SAVE_EVERY == 0) TaskSave.save(this, true);
 		activeBehavior = "idle";
 		for (Behavior b : behaviors) {
 			// mid-flight only the lava/fall reflexes may interrupt; everything else waits for landing
@@ -262,6 +267,7 @@ public final class Bot {
 		List<Item> products = mine.requirements().stream().map(Requirement::product).filter(Objects::nonNull).toList();
 		if (!products.isEmpty()) jobMaterials.addAll(RecipeBook.get().ingredientTree(products, 3));
 		Chat.info("Job started: " + mine.requirements());
+		TaskSave.save(this, true);
 	}
 
 	/** Utility mode: only walk to {@code goal}; reflexes and combat still run. */
@@ -285,6 +291,7 @@ public final class Bot {
 		Chat.info("Building " + order.schematic().name() + " at " + order.origin().toShortString()
 				+ (order.rotation().ordinal() == 0 ? "" : " rotated " + order.rotation().ordinal() * 90 + "°")
 				+ (order.mirror() == Mirror.NONE ? "" : ", mirrored") + ".");
+		TaskSave.save(this, true);
 	}
 
 	/** One part of a shared build (placer, digger or gatherer); {@code depot} is where materials are exchanged. */
@@ -307,6 +314,7 @@ public final class Bot {
 		buildPlan = null;
 		buildMaterials.clear();
 		buildPlaced = buildTotal = 0;
+		buildDig = null;
 		teamRole = TeamRole.SOLO;
 		depot = null;
 		teamNeeds = Map.of();
@@ -340,6 +348,7 @@ public final class Bot {
 		recovery = null;
 		controls.releaseAll();
 		threatNet.save();
+		TaskSave.save(this, false);
 		Chat.info("Stopped: " + reason);
 	}
 
@@ -502,6 +511,13 @@ public final class Bot {
 	public void setBase(@Nullable BlockPos pos) {
 		base = pos;
 		baseDim = dimension();
+		TaskSave.save(this, running);
+	}
+
+	/** The base remembered for this world (after joining), without announcing it. */
+	public void restoreBase(BlockPos pos, Dim dim) {
+		base = pos;
+		baseDim = dim;
 	}
 
 	/** The plan being built (rotated, wood-swapped world positions), for the ghost overlay; null when not building. */
@@ -515,6 +531,10 @@ public final class Bot {
 		buildPlaced = placed;
 		buildTotal = total;
 	}
+
+	/** Blocks the current build must dig out per tool (pickaxe, shovel, axe); null when not building. */
+	public int @Nullable [] buildDig() { return buildDig; }
+	public void setBuildDig(int @Nullable [] dig) { buildDig = dig; }
 
 	/** This bot's part of a shared build ({@link TeamRole#SOLO} when working alone). */
 	public TeamRole teamRole() { return teamRole; }

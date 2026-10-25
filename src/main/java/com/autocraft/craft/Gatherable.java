@@ -175,7 +175,7 @@ public final class Gatherable {
 		return Dim.OVERWORLD;
 	}
 
-	static double cost(Requirement r, Dim here) {
+	public static double cost(Requirement r, Dim here) {
 		double base = Resources.isNamed(r.name()) || r.name().equals("stem") ? NAMED_COST : GENERIC_COST;
 		Item item = BuiltInRegistries.ITEM.getOptional(Identifier.withDefaultNamespace(r.name())).orElse(null);
 		if (item != null && r.isHunted()) {

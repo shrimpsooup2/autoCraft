@@ -763,6 +763,10 @@ public final class AutoCraftScreen extends Screen {
 				() -> s.recoverAfterDeath, v -> s.recoverAfterDeath = v);
 		toggle(rightX, y, "Log off near players", "Disconnect as soon as another player comes within the radius below",
 				() -> s.logoffNearPlayers, v -> s.logoffNearPlayers = v);
+		toggle(rightX, y + 44, "Materials at base", "The base chests hold materials: look there before gathering, even in chests not looked into yet",
+				() -> s.materialsAtBase, v -> s.materialsAtBase = v);
+		toggle(rightX, y + 66, "Resume after relog", "Pick the job or build back up after a relog or crash (progress is saved every few seconds)",
+				() -> s.resumeAfterRelog, v -> s.resumeAfterRelog = v);
 		Button radius = addRenderableWidget(Button.builder(Component.empty(), b -> {
 			int next = PLAYER_RADII[0];
 			for (int r : PLAYER_RADII) {

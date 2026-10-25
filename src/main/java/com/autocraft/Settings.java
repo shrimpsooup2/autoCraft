@@ -24,6 +24,10 @@ public final class Settings {
 	public int playerAlertRadius = 48;
 	/** After dying: go back for the dropped items, then carry on with the job (otherwise stop). */
 	public boolean recoverAfterDeath = true;
+	/** The base chests hold materials: look there before gathering even when we haven't seen inside yet. */
+	public boolean materialsAtBase = false;
+	/** Pick the job/build back up after a relog or crash. */
+	public boolean resumeAfterRelog = true;
 
 	public static Settings get() {
 		if (instance == null) instance = load();
