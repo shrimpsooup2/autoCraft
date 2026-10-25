@@ -17,6 +17,8 @@ public final class Job {
 	private final Map<String, Integer> stored = new HashMap<>();
 	/** Requirements given up on (nothing can produce them); the rest of the job continues. */
 	private final Set<String> skipped = new HashSet<>();
+	/** Requirements waiting on the world (copper oxidizing): attended once nothing else is left. */
+	private final Set<String> deferred = new HashSet<>();
 
 	public Job(List<Requirement> requirements) {
 		this.requirements = List.copyOf(requirements);
@@ -39,16 +41,24 @@ public final class Job {
 		return nextUnmet(p) == null;
 	}
 
-	/** First requirement still short (and not skipped), or null when the job is done. */
+	/** First requirement still short (and not skipped; deferred ones only when nothing else is), or null when done. */
 	public Requirement nextUnmet(Player p) {
+		Requirement firstDeferred = null;
 		for (Requirement r : requirements) {
-			if (!skipped.contains(r.name()) && missing(p, r) > 0) return r;
+			if (skipped.contains(r.name()) || missing(p, r) <= 0) continue;
+			if (!deferred.contains(r.name())) return r;
+			if (firstDeferred == null) firstDeferred = r;
 		}
-		return null;
+		return firstDeferred;
 	}
 
 	public void skip(Requirement r) {
 		skipped.add(r.name());
+	}
+
+	/** Put {@code r} behind everything else still to do. */
+	public void defer(Requirement r) {
+		deferred.add(r.name());
 	}
 
 	public boolean isSkipped(Requirement r) {

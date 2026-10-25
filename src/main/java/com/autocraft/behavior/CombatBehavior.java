@@ -3,6 +3,7 @@ package com.autocraft.behavior;
 import com.autocraft.Bot;
 import com.autocraft.ai.Features;
 import com.autocraft.ai.ThreatNet;
+import com.autocraft.combat.Melee;
 import com.autocraft.combat.Threats;
 import com.autocraft.control.Controls;
 import com.autocraft.control.InvUtil;
@@ -58,7 +59,7 @@ public final class CombatBehavior implements Behavior {
 	private int backoff;
 	private @Nullable Goal fleeGoal;
 	private int fleeGoalAge;
-	private @Nullable BlockPos chaseAt;
+	private final BlockPos[] chaseAt = new BlockPos[1];
 
 	@Override
 	public String name() {
@@ -75,7 +76,7 @@ public final class CombatBehavior implements Behavior {
 		fought = false;
 		givenUp.clear();
 		fleeGoal = null;
-		chaseAt = null;
+		chaseAt[0] = null;
 	}
 
 	@Override
@@ -97,8 +98,10 @@ public final class CombatBehavior implements Behavior {
 		boolean quick = target instanceof Creeper ? killTicks <= CREEPER_KILL_TICKS : killTicks <= QUICK_KILL_TICKS;
 		boolean oneHit = target != null && hitsToKill(p, target) <= 1;
 		boolean low = p.getHealth() <= LOW_HEALTH;
+		boolean hunted = target != null && bot.huntTargets().contains(target.getType()); // the job is killing these
 		Mode wanted = target == null || threats.stream().anyMatch(m -> m instanceof Warden) ? Mode.FLEE
 				: low && !oneHit ? Mode.FLEE
+				: hunted && netSays >= 0.2 ? Mode.FIGHT
 				: quick && netSays >= (engaged && mode == Mode.FIGHT ? 0.3 : 0.4) ? Mode.FIGHT
 				: Mode.FLEE;
 		if (!engaged) {
@@ -184,49 +187,24 @@ public final class CombatBehavior implements Behavior {
 	}
 
 	private static boolean canCrit(LocalPlayer p) {
-		return !p.isInWater() && !p.onClimbable() && !p.isPassenger();
+		return Melee.canCrit(p);
 	}
 
 	private void fight(Bot bot, LocalPlayer p, Mob target) {
 		fought = true;
 		Controls c = bot.controls();
-		selectWeapon(p);
+		Melee.selectWeapon(p);
 		if (backoff > 0) {
 			backoff--;
 			c.lookAt(target.getBoundingBox().getCenter());
 			c.back();
 			return;
 		}
-		if (p.isWithinEntityInteractionRange(target, 0) && p.hasLineOfSight(target)) {
-			bot.nav().stop();
-			c.lookAt(target.getBoundingBox().getCenter());
-			p.setSprinting(false); // sprint hits are knockback, not crits
-			if (p.getAttackStrengthScale(0.5F) < 0.95F) return; // no spam: wait for a full-strength swing
-			boolean crit = canCrit(p) && !(target instanceof Creeper);
-			if (crit && p.onGround()) {
-				c.jump(); // hit on the way down for 1.5x damage
-				return;
-			}
-			if (crit && !(p.fallDistance > 0 && p.getDeltaMovement().y < 0)) return; // still rising
-			c.attack(target);
-			if (target instanceof Creeper) backoff = CREEPER_BACKOFF;
+		if (Melee.strike(bot, target)) {
+			if (target instanceof Creeper && p.getAttackStrengthScale(0.5F) < 0.2F) backoff = CREEPER_BACKOFF; // just hit it
 			return;
 		}
-		if (p.hasLineOfSight(target) && Math.abs(target.getY() - p.getY()) < 1.5) {
-			bot.nav().stop();
-			c.faceHorizontally(target.position());
-			c.forward();
-			c.sprint();
-			if (p.horizontalCollision && p.onGround()) c.jump();
-			return;
-		}
-		BlockPos at = target.blockPosition();
-		if (chaseAt == null || chaseAt.distSqr(at) > 4) chaseAt = at;
-		bot.nav().setGoal(new Goal.Near(chaseAt, 1));
-		if (bot.nav().tick() == Navigator.Status.FAILED) {
-			givenUp.add(target.getId());
-			bot.nav().stop();
-		}
+		if (!Melee.approach(bot, target, chaseAt)) givenUp.add(target.getId());
 	}
 
 	private void flee(Bot bot, List<Mob> threats) {
@@ -245,23 +223,6 @@ public final class CombatBehavior implements Behavior {
 		}
 	}
 
-	/** Best melee weapon into the main hand (shared with hunting). */
-	static void selectWeapon(LocalPlayer p) {
-		int best = -1;
-		double bestDamage = 1;
-		for (int i = 0; i < InvUtil.MAIN_SIZE; i++) {
-			double d = Threats.attackDamage(p.getInventory().getItem(i));
-			if (d > bestDamage && !InvUtil.nearlyBroken(p.getInventory().getItem(i))) {
-				bestDamage = d;
-				best = i;
-			}
-		}
-		if (best >= 0) {
-			int slot = best;
-			InvUtil.select(p, s -> s == p.getInventory().getItem(slot));
-		}
-	}
-
 	private void endEngagement(Bot bot, LocalPlayer p) {
 		if (fought && startFeatures != null) {
 			boolean wentWell = p.isAlive() && startHealth - p.getHealth() < startHealth * 0.5F;
@@ -271,7 +232,7 @@ public final class CombatBehavior implements Behavior {
 		fought = false;
 		startFeatures = null;
 		fleeGoal = null;
-		chaseAt = null;
+		chaseAt[0] = null;
 		backoff = 0;
 		givenUp.clear();
 		bot.nav().stop();

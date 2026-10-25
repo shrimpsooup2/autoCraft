@@ -1,33 +1,54 @@
 package com.autocraft.craft;
 
 import com.autocraft.Bot;
+import com.autocraft.procedure.Procedure;
+import com.autocraft.procedure.Procedures;
+import net.minecraft.world.item.Item;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Runs crafting and smelting steps from the {@link Planner} and cleans up afterwards: crafting tables and
- * furnaces the bot placed nearby are picked back up when {@link #packUp} is called. Shared by the gear planner,
- * the maker and the builder.
+ * Runs crafting, smelting and special-procedure steps from the {@link Planner} and cleans up afterwards: crafting
+ * tables and furnaces the bot placed nearby are picked back up when {@link #packUp} is called. Shared by the gear
+ * planner, the maker and the builder.
  */
 public final class Workshop {
-	public enum Status { IDLE, RUNNING, DONE, FAILED }
+	public enum Status {
+		IDLE,
+		RUNNING,
+		DONE,
+		FAILED,
+		/** A procedure needs the world to take its time ({@link #waitingFor()}): do other work, come back later. */
+		WAITING
+	}
 
 	private @Nullable Crafter crafter;
 	private @Nullable Smelter smelter;
+	private Procedure.@Nullable Task special;
+	private @Nullable Item specialItem;
 	private final Stations.Cleanup cleanup = new Stations.Cleanup();
 	private boolean cleaning;
 
 	public boolean busy() {
-		return crafter != null || smelter != null || cleaning;
+		return crafter != null || smelter != null || special != null || cleaning;
 	}
 
-	/** Begin a Craft or Smelt step; other steps are ignored. */
+	/** Begin a Craft, Smelt or Special step; other steps are ignored. */
 	public void start(Planner.Step step) {
 		switch (step) {
 			case Planner.Craft c -> crafter = new Crafter(c.recipe());
 			case Planner.Smelt s -> smelter = new Smelter(s.input(), s.count());
+			case Planner.Special sp -> {
+				special = sp.procedure().start(sp.item(), sp.total());
+				specialItem = sp.item();
+			}
 			default -> {
 			}
 		}
+	}
+
+	/** The item of the procedure that last reported {@link Status#WAITING}. */
+	public @Nullable Item waitingFor() {
+		return specialItem;
 	}
 
 	public Status tick(Bot bot) {
@@ -43,6 +64,17 @@ public final class Workshop {
 			if (s == Smelter.Status.RUNNING) return Status.RUNNING;
 			smelter = null;
 			return s == Smelter.Status.DONE ? Status.DONE : Status.FAILED;
+		}
+		if (special != null) {
+			Procedure.Task.Status s = special.tick(bot);
+			if (s == Procedure.Task.Status.RUNNING) return Status.RUNNING;
+			special = null;
+			if (s == Procedure.Task.Status.FAILED) Procedures.failed(specialItem);
+			return switch (s) {
+				case DONE -> Status.DONE;
+				case WAITING -> Status.WAITING;
+				default -> Status.FAILED;
+			};
 		}
 		if (cleaning) {
 			if (cleanup.tick(bot)) return Status.RUNNING;
@@ -63,6 +95,8 @@ public final class Workshop {
 	public void reset() {
 		crafter = null;
 		smelter = null;
+		special = null;
+		specialItem = null;
 		cleaning = false;
 		cleanup.reset();
 	}

@@ -2,10 +2,12 @@ package com.autocraft.behavior;
 
 import com.autocraft.Bot;
 import com.autocraft.Chat;
+import com.autocraft.combat.Melee;
 import com.autocraft.control.InvUtil;
 import com.autocraft.craft.Stations;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
+import com.autocraft.hunt.MobHints;
 import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
 import com.autocraft.travel.BoatTravel;
@@ -13,6 +15,7 @@ import com.autocraft.travel.ElytraTravel;
 import com.autocraft.world.BiomeFinder;
 import com.autocraft.world.BlockUtil;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -23,6 +26,10 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.util.Mth;
+import net.minecraft.world.entity.AgeableMob;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Block;
@@ -42,6 +49,8 @@ public final class CollectBehavior implements Behavior {
 	private static final int WALK_LEG = 64;
 	private static final int BIOME_SEARCH_CHUNKS = 12;
 	private static final int FLY_LEG = 1000;
+	private static final double HUNT_RADIUS = 64;
+	private static final int PREY_TIMEOUT = 20 * 45;
 
 	private final Map<BlockPos, Long> blacklist = new HashMap<>();
 	private final Set<Integer> unreachableDrops = new HashSet<>();
@@ -54,6 +63,10 @@ public final class CollectBehavior implements Behavior {
 	private @Nullable ItemEntity chasing;
 	private final LongOpenHashSet exhaustedBiomeChunks = new LongOpenHashSet();
 	private final Stations.Cleanup cleanup = new Stations.Cleanup();
+	private final Set<Integer> blacklistedMobs = new HashSet<>();
+	private final BlockPos[] preyChase = new BlockPos[1];
+	private @Nullable LivingEntity prey;
+	private int preyTicks;
 
 	@Override
 	public String name() {
@@ -70,6 +83,10 @@ public final class CollectBehavior implements Behavior {
 		exploreGoal = null;
 		chasing = null;
 		exhaustedBiomeChunks.clear();
+		blacklistedMobs.clear();
+		preyChase[0] = null;
+		prey = null;
+		preyTicks = 0;
 		cleanup.reset();
 	}
 
@@ -77,8 +94,16 @@ public final class CollectBehavior implements Behavior {
 	public boolean tick(Bot bot) {
 		tick++;
 		Requirement target = bot.currentTarget();
-		if (target == null || target.dimension() != bot.dimension()) return false;
+		if (target == null || target.dimension() != bot.dimension()) {
+			bot.setHuntTargets(Set.of());
+			return false;
+		}
 		LocalPlayer p = bot.player();
+		if (target.isHunted()) {
+			onTargetChange(bot, target);
+			return hunt(bot, target);
+		}
+		bot.setHuntTargets(Set.of());
 		Set<Block> harvestable = harvestableSources(p, target);
 		if (harvestable.isEmpty()) return false; // gear planner will bring the right tool
 		onTargetChange(bot, target);
@@ -106,7 +131,7 @@ public final class CollectBehavior implements Behavior {
 		if (source != null) {
 			exploreGoal = null;
 			bot.noteFound(target.name());
-			harvest = new Harvest(source, target.counts());
+			harvest = new Harvest(source, target.counts(), target.tool());
 			harvest.tick(bot);
 			bot.setStatus("mining " + target.name() + " at " + source.toShortString());
 			return true;
@@ -217,10 +242,66 @@ public final class CollectBehavior implements Behavior {
 		bot.setStatus("exploring " + heading.getName() + " for " + target.name());
 	}
 
-	/** From the air: a harvestable source of the target in the loaded area below (ends an exploration flight). */
+	/** From the air: a source of the target (block or mob) in the loaded area below (ends an exploration flight). */
 	private static boolean spotted(Bot bot, Requirement target) {
+		if (target.isHunted()) return !bot.scanner().entities(48, e -> target.mobs().contains(e.getType()) && e.isAlive()).isEmpty();
 		Set<Block> harvestable = harvestableSources(bot.player(), target);
 		return !harvestable.isEmpty() && !bot.scanner().findBlocks(s -> harvestable.contains(s.getBlock()), 3, 1).isEmpty();
+	}
+
+	// ---- hunting --------------------------------------------------------------------------------
+
+	/**
+	 * Mob drops: pick up the drops, chase and kill the nearest huntable mob (adults, unnamed, not given up on),
+	 * walk to a tell-tale structure block (fortress bricks for blazes...), otherwise explore toward the hinted
+	 * biomes like for any resource.
+	 */
+	private boolean hunt(Bot bot, Requirement target) {
+		bot.setHuntTargets(target.mobs());
+		if (chaseDrops(bot, target)) return true;
+		if (prey == null || !prey.isAlive() || prey.isRemoved() || ++preyTicks > PREY_TIMEOUT) {
+			if (prey != null && prey.isAlive() && preyTicks > PREY_TIMEOUT) blacklistedMobs.add(prey.getId());
+			prey = nearestPrey(bot, target);
+			preyTicks = 0;
+			preyChase[0] = null;
+		}
+		if (prey != null) {
+			exploreGoal = null;
+			bot.noteFound(target.name());
+			bot.setStatus("hunting " + prey.getType().getDescription().getString() + " for " + target.name());
+			if (!Melee.strike(bot, prey) && !Melee.approach(bot, prey, preyChase)) {
+				blacklistedMobs.add(prey.getId());
+				prey = null;
+			}
+			return true;
+		}
+		BlockPos structure = structureNearby(bot, target);
+		if (structure != null && structure.distSqr(bot.player().blockPosition()) > 64) {
+			bot.setStatus("heading to the structure at " + structure.toShortString() + " for " + target.name());
+			bot.nav().setGoal(new Goal.Near(structure, 4));
+			if (bot.nav().tick() == Navigator.Status.FAILED) {
+				bot.nav().stop();
+				explore(bot, target);
+			}
+			return true;
+		}
+		explore(bot, target);
+		return true;
+	}
+
+	private @Nullable LivingEntity nearestPrey(Bot bot, Requirement target) {
+		List<Entity> found = bot.scanner().entities(HUNT_RADIUS, e -> target.mobs().contains(e.getType()) && e instanceof LivingEntity le
+				&& le.isAlive() && !(le instanceof AgeableMob a && a.isBaby()) && !e.hasCustomName() && !blacklistedMobs.contains(e.getId()));
+		return (LivingEntity) found.stream().min(Comparator.comparingDouble(e -> e.distanceToSqr(bot.player()))).orElse(null);
+	}
+
+	/** A block that gives away the hunted mob's structure (nether bricks for blazes), if one is in view. */
+	private static @Nullable BlockPos structureNearby(Bot bot, Requirement target) {
+		Set<Block> tell = new HashSet<>();
+		for (EntityType<?> t : target.mobs()) tell.addAll(MobHints.of(t).structureBlocks());
+		if (tell.isEmpty()) return null;
+		List<BlockPos> found = bot.scanner().findBlocks(s -> tell.contains(s.getBlock()), SCAN_CHUNKS, 1);
+		return found.isEmpty() ? null : found.getFirst();
 	}
 
 	private Goal nextLeg(Bot bot, Requirement target, BlockPos feet) {

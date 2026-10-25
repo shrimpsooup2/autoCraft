@@ -1,6 +1,7 @@
 package com.autocraft.behavior;
 
 import com.autocraft.Bot;
+import com.autocraft.loot.LootBook;
 import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
 import com.autocraft.world.BlockUtil;
@@ -28,13 +29,20 @@ public final class Harvest {
 
 	private final BlockPos target;
 	private final Predicate<ItemStack> drops;
+	private final LootBook.ToolUse tool;
 	private Phase phase = Phase.WALK;
 	private int phaseTicks;
 	private @Nullable ItemEntity chasing;
 
 	public Harvest(BlockPos target, Predicate<ItemStack> drops) {
+		this(target, drops, LootBook.ToolUse.ANY);
+	}
+
+	/** @param tool shears when the drop needs them, NO_SHEARS when shears would give the wrong drop */
+	public Harvest(BlockPos target, Predicate<ItemStack> drops, LootBook.ToolUse tool) {
 		this.target = target.immutable();
 		this.drops = drops;
+		this.tool = tool;
 	}
 
 	public BlockPos target() {
@@ -63,7 +71,7 @@ public final class Harvest {
 			}
 			case MINE -> {
 				if (!canMineFromHere(bot)) return enter(Phase.WALK);
-				if (bot.controls().mine(target)) {
+				if (bot.controls().mine(target, tool)) {
 					return level.getBlockState(target).isAir() ? enter(Phase.PICKUP) : Status.FAILED;
 				}
 				if (phaseTicks > MINE_TIMEOUT) return Status.FAILED;

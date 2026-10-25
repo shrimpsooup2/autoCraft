@@ -3,17 +3,28 @@ package com.autocraft.craft;
 import com.autocraft.goal.Requirement;
 import com.autocraft.goal.Requirement.Dim;
 import com.autocraft.goal.Resources;
+import com.autocraft.hunt.MobHints;
+import com.autocraft.loot.LootBook;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.ItemTags;
+import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.AbstractSkullBlock;
+import net.minecraft.world.level.block.BaseEntityBlock;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.CropBlock;
+import net.minecraft.world.level.block.StemBlock;
+import net.minecraft.world.level.block.VegetationBlock;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -36,15 +47,23 @@ public final class Gatherable {
 	private static final Map<Item, Integer> MIN_BATCH = Map.of(
 			Items.COBBLESTONE, 16, Items.RAW_IRON, 5, Items.RAW_GOLD, 5, Items.RAW_COPPER, 5, Items.COAL, 4, Items.SAND, 8);
 	private static final int MIN_LOGS = 6;
+	/** Natural-looking blocks that are only ever built by players or found in structures. */
+	private static final Set<Block> PLAYER_MADE = Set.of(Blocks.BOOKSHELF, Blocks.CRAFTER, Blocks.TNT, Blocks.CAKE, Blocks.HAY_BLOCK,
+			Blocks.TARGET, Blocks.REDSTONE_LAMP, Blocks.SEA_LANTERN, Blocks.JACK_O_LANTERN, Blocks.CARVED_PUMPKIN, Blocks.INFESTED_STONE,
+			Blocks.INFESTED_DEEPSLATE, Blocks.SPAWNER, Blocks.TRIAL_SPAWNER, Blocks.TRIPWIRE, Blocks.REDSTONE_WIRE);
 	/** Rough relative effort, used by the planner to compare gathering with crafting/smelting. */
 	static final double NAMED_COST = 8;
 	static final double GENERIC_COST = 20;
 	static final double OTHER_DIMENSION_PENALTY = 40;
+	static final double HUNT_COST = 30;
+	/** Blocks that are seldom near: their loot is worth hunting for instead when a mob drops it too. */
+	private static final Set<Block> RARE = Set.of(Blocks.COBWEB);
 
 	private Gatherable() {}
 
 	/**
-	 * Requirement for having {@code total} of {@code item} in the inventory by mining, or null.
+	 * Requirement for having {@code total} of {@code item} in the inventory by mining or hunting, or null.
+	 * Between mining loot and hunting the cheaper one wins (string: spiders rather than searching for cobwebs).
 	 *
 	 * @param flexible any item of the same family would do (e.g. any log for "some planks")
 	 */
@@ -61,19 +80,115 @@ public final class Gatherable {
 			return named.withAmount(Math.max(total, MIN_BATCH.getOrDefault(item, 0)));
 		}
 		Block block = Block.byItem(item);
-		if (block == Blocks.AIR || !isNatural(block, item)) return null;
-		return Resources.get(path, Math.max(total, MIN_BATCH.getOrDefault(item, 0)));
+		if (block != Blocks.AIR && isNatural(block, item)) return Resources.get(path, Math.max(total, MIN_BATCH.getOrDefault(item, 0)));
+		Requirement mined = fromLoot(item, total, here);
+		Requirement hunted = fromMobs(item, total, here);
+		if (mined == null || hunted == null) return mined != null ? mined : hunted;
+		return cost(hunted, here) < cost(mined, here) ? hunted : mined;
 	}
 
-	/** A block found in the world that drops itself when mined. */
+	/** A block found in the world that drops itself when mined (tripwire is string, but string comes from spiders). */
 	public static boolean isNatural(Block block, Item item) {
-		if (NOT_SELF_DROPPING.contains(block) || block instanceof AbstractSkullBlock || block.defaultBlockState().is(BlockTags.LEAVES)) return false;
+		if (NOT_SELF_DROPPING.contains(block) || PLAYER_MADE.contains(block) || block instanceof AbstractSkullBlock
+				|| block.defaultBlockState().is(BlockTags.LEAVES)) {
+			return false;
+		}
 		if (BuiltInRegistries.BLOCK.getKey(block).getPath().contains("_ore")) return false; // ores drop raw items: named resources
 		return !RecipeBook.get().isMade(item);
 	}
 
+	/**
+	 * Mining loot: world blocks whose loot table includes the item — flint from gravel, string from cobwebs (not
+	 * with shears), seeds from grass, sticks from dead bushes, leaves with shears. Null if no block gives it.
+	 */
+	public static @Nullable Requirement fromLoot(Item item, int total, Dim here) {
+		Set<Block> plain = new HashSet<>();
+		Set<Block> withShears = new HashSet<>();
+		boolean avoidShears = false;
+		boolean anyHere = false;
+		for (LootBook.BlockDrop d : LootBook.get().blockSources(item)) {
+			Block b = d.block();
+			if (!isWorldBlock(b) || dimensionOf(b) == null) continue;
+			anyHere |= dimensionOf(b) == here;
+			switch (d.tool()) {
+				case ANY -> plain.add(b);
+				case NO_SHEARS -> {
+					plain.add(b);
+					avoidShears = true;
+				}
+				case SHEARS -> withShears.add(b);
+				case SILK -> {
+				}
+			}
+		}
+		Set<Block> sources = plain.isEmpty() ? withShears : plain;
+		if (sources.isEmpty()) return null;
+		Dim dim = anyHere ? here : dimensionOf(sources.iterator().next());
+		sources.removeIf(b -> dimensionOf(b) != dim);
+		LootBook.ToolUse tool = plain.isEmpty() ? LootBook.ToolUse.SHEARS : avoidShears ? LootBook.ToolUse.NO_SHEARS : LootBook.ToolUse.ANY;
+		boolean surface = sources.stream().allMatch(b -> b.defaultBlockState().is(BlockTags.LEAVES) || b.defaultBlockState().canBeReplaced()
+				|| b instanceof VegetationBlock);
+		String name = BuiltInRegistries.ITEM.getKey(item).getPath();
+		return new Requirement(name, s -> s.is(item), Set.copyOf(sources), total, surface ? Requirement.Strategy.SURFACE : Requirement.Strategy.ANYWHERE,
+				0, dim, Set.of(), null, tool, Set.of());
+	}
+
+	/** Hunting: mobs whose loot includes the item, in this dimension if any live here. */
+	public static @Nullable Requirement fromMobs(Item item, int total, Dim here) {
+		Set<EntityType<?>> local = new HashSet<>();
+		Set<EntityType<?>> elsewhere = new HashSet<>();
+		for (LootBook.MobDrop d : LootBook.get().mobSources(item)) {
+			MobHints.Hint h = MobHints.of(d.type());
+			if (h.unreachable()) continue;
+			(h.dimension() == here ? local : elsewhere).add(d.type());
+		}
+		Set<EntityType<?>> mobs = local.isEmpty() ? elsewhere : local;
+		if (mobs.isEmpty()) return null;
+		Dim dim = MobHints.of(mobs.iterator().next()).dimension();
+		mobs.removeIf(t -> MobHints.of(t).dimension() != dim);
+		Set<ResourceKey<Biome>> biomes = new HashSet<>();
+		for (EntityType<?> t : mobs) {
+			Set<ResourceKey<Biome>> b = MobHints.of(t).biomes();
+			if (b.isEmpty()) {
+				biomes.clear(); // one of them lives anywhere: no need to travel
+				break;
+			}
+			biomes.addAll(b);
+		}
+		return Requirement.hunted(BuiltInRegistries.ITEM.getKey(item).getPath(), item, total, Set.copyOf(mobs), dim, Set.copyOf(biomes));
+	}
+
+	/** Blocks that occur in the world: not furniture/containers, placed string/redstone, or someone's crops. */
+	private static boolean isWorldBlock(Block b) {
+		return !(b instanceof BaseEntityBlock) && !(b instanceof CropBlock) && !(b instanceof StemBlock) && !PLAYER_MADE.contains(b);
+	}
+
+	/** Where a block is found (null: the End or nowhere the bot goes). */
+	private static @Nullable Dim dimensionOf(Block b) {
+		String path = BuiltInRegistries.BLOCK.getKey(b).getPath();
+		if (path.contains("end_stone") || path.contains("chorus") || path.contains("purpur")) return null;
+		if (path.contains("nether") || path.contains("crimson") || path.contains("warped") || path.contains("soul_") || path.contains("basalt")
+				|| path.contains("blackstone") || b == Blocks.GLOWSTONE || b == Blocks.MAGMA_BLOCK || b == Blocks.SHROOMLIGHT
+				|| b == Blocks.ANCIENT_DEBRIS) {
+			return Dim.NETHER;
+		}
+		return Dim.OVERWORLD;
+	}
+
 	static double cost(Requirement r, Dim here) {
 		double base = Resources.isNamed(r.name()) || r.name().equals("stem") ? NAMED_COST : GENERIC_COST;
+		Item item = BuiltInRegistries.ITEM.getOptional(Identifier.withDefaultNamespace(r.name())).orElse(null);
+		if (item != null && r.isHunted()) {
+			double chance = LootBook.get().mobSources(item).stream().filter(d -> r.mobs().contains(d.type()))
+					.mapToDouble(LootBook.MobDrop::chance).max().orElse(1);
+			base = HUNT_COST / Math.max(0.05, Math.min(1, chance));
+		} else if (item != null && !r.sources().isEmpty() && !Resources.isNamed(r.name())) {
+			// loot that only sometimes drops (flint from gravel) costs more per item; rare blocks cost more to find
+			double chance = LootBook.get().blockSources(item).stream().filter(d -> r.sources().contains(d.block()))
+					.mapToDouble(LootBook.BlockDrop::chance).max().orElse(1);
+			base /= Math.max(0.05, Math.min(1, chance));
+			if (r.sources().stream().allMatch(RARE::contains)) base *= 3;
+		}
 		return r.dimension() == here ? base : base + OTHER_DIMENSION_PENALTY;
 	}
 

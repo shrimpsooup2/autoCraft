@@ -1,5 +1,6 @@
 package com.autocraft.control;
 
+import com.autocraft.loot.LootBook;
 import java.util.function.Predicate;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Options;
@@ -111,10 +112,15 @@ public final class Controls {
 	 * (block gone or not breakable from here).
 	 */
 	public boolean mine(BlockPos pos) {
+		return mine(pos, LootBook.ToolUse.ANY);
+	}
+
+	/** As {@link #mine(BlockPos)} with the tool a loot drop needs (shears, or anything but shears). */
+	public boolean mine(BlockPos pos, LootBook.ToolUse tool) {
 		BlockState state = mc.level.getBlockState(pos);
 		if (state.isAir() || state.canBeReplaced() && !state.getFluidState().isEmpty()) return true; // gone, or plain fluid
 		if (state.getDestroySpeed(mc.level, pos) < 0) return true; // unbreakable: caller must route around
-		InvUtil.selectBestTool(mc.player, state);
+		InvUtil.selectTool(mc.player, state, tool);
 		Direction side = faceToward(pos);
 		lookAt(Vec3.atCenterOf(pos).add(Vec3.atLowerCornerOf(side.getUnitVec3i()).scale(0.5)));
 		mining = true;

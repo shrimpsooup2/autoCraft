@@ -10,11 +10,12 @@ import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.world.item.Item;
+import org.jspecify.annotations.Nullable;
 
 /**
- * Job requirements that are crafted or smelted (torches, glass, pistons, iron ingots...): the recipe planner
- * picks the next craft or smelt; raw materials it lacks are posted as a {@link Bot.NeedOwner#MAKE} need for the
- * collector (which may mean a Nether trip, e.g. quartz for comparators).
+ * Job requirements that are crafted, smelted, hunted or made by a special procedure (torches, glass, iron ingots,
+ * ender pearls, honey, oxidized copper...): the recipe planner picks the next step; raw materials it lacks are
+ * posted as a {@link Bot.NeedOwner#MAKE} need for the collector (which may mean a Nether trip or a hunt).
  */
 public final class MakeBehavior implements Behavior {
 	/** While the collector gathers, re-plan this often (counts change as items come in). */
@@ -22,6 +23,7 @@ public final class MakeBehavior implements Behavior {
 
 	private final Workshop workshop = new Workshop();
 	private int sincePlan = REPLAN_TICKS;
+	private @Nullable Requirement working;
 
 	@Override
 	public String name() {
@@ -32,6 +34,7 @@ public final class MakeBehavior implements Behavior {
 	public void reset() {
 		workshop.reset();
 		sincePlan = REPLAN_TICKS;
+		working = null;
 	}
 
 	@Override
@@ -45,7 +48,11 @@ public final class MakeBehavior implements Behavior {
 			}
 			case DONE -> sincePlan = REPLAN_TICKS;
 			case FAILED -> {
-				Chat.warn("Crafting failed; retrying.");
+				Chat.warn("Making failed; retrying.");
+				sincePlan = REPLAN_TICKS;
+			}
+			case WAITING -> {
+				if (working != null) job.defer(working); // the world needs time: do the rest of the job first
 				sincePlan = REPLAN_TICKS;
 			}
 			case IDLE -> {
@@ -72,6 +79,13 @@ public final class MakeBehavior implements Behavior {
 			case Planner.Smelt s -> {
 				bot.setNeed(Bot.NeedOwner.MAKE, null);
 				workshop.start(s);
+				return true;
+			}
+			case Planner.Special sp -> {
+				if (workshop.packUp(bot)) return true;
+				bot.setNeed(Bot.NeedOwner.MAKE, null);
+				workshop.start(sp);
+				working = target;
 				return true;
 			}
 			case Planner.Gather g -> {

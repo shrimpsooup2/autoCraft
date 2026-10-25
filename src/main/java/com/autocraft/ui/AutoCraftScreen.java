@@ -302,7 +302,7 @@ public final class AutoCraftScreen extends Screen {
 		String typed = searchText.trim().toLowerCase().replace(' ', '_');
 		Requirement r = typed.isEmpty() ? null : Resources.forJob(typed, 1);
 		if (r != null) {
-			add(new ItemCatalog.Entry(typed, ItemCatalog.iconOf(r), typed, r.isCrafted()), amountValue());
+			add(new ItemCatalog.Entry(typed, ItemCatalog.iconOf(r), typed, r.isCrafted(), ItemCatalog.how(ItemCatalog.iconOf(r), r)), amountValue());
 		} else if (!results.isEmpty()) {
 			add(results.getFirst(), amountValue());
 		}
@@ -351,7 +351,7 @@ public final class AutoCraftScreen extends Screen {
 				if (e.crafted()) g.fill(sx + 14, sy + 1, sx + 17, sy + 4, CRAFTED_MARK);
 				if (hover) {
 					g.setComponentTooltipForNextFrame(font, List.of(Component.literal(e.name()),
-							Component.literal(e.crafted() ? "Crafted / smelted" : "Mined").withStyle(ChatFormatting.GRAY),
+							Component.literal(e.how()).withStyle(ChatFormatting.GRAY),
 							Component.literal("Click: add " + amountValue() + " · Right-click: add a stack").withStyle(ChatFormatting.DARK_GRAY)),
 							mouseX, mouseY);
 				}
@@ -762,7 +762,7 @@ public final class AutoCraftScreen extends Screen {
 			y += 2;
 			for (Requirement r : job.requirements()) {
 				if (y > bottomY - 30) break;
-				Widgets.progressRow(g, font, x, y, colW, ItemCatalog.iconOf(r), r.name() + (r.isCrafted() ? " (craft)" : ""),
+				Widgets.progressRow(g, font, x, y, colW, ItemCatalog.iconOf(r), r.name() + (r.isCrafted() ? " (make)" : ""),
 						Math.min(job.have(p, r), r.amount()), r.amount(), job.isSkipped(r));
 				y += 12;
 			}

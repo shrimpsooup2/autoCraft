@@ -12,6 +12,7 @@ import com.autocraft.craft.Workshop;
 import com.autocraft.goal.Requirement;
 import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
+import com.autocraft.loot.LootBook;
 import com.autocraft.travel.ElytraTravel;
 import com.autocraft.world.BlockUtil;
 import java.util.ArrayList;
@@ -95,7 +96,7 @@ public final class GearBehavior implements Behavior {
 			case RUNNING -> {
 				return true;
 			}
-			case FAILED -> {
+			case FAILED, WAITING -> {
 				onFailure();
 				sincePlan = PLAN_EVERY;
 				return true;
@@ -120,6 +121,12 @@ public final class GearBehavior implements Behavior {
 			case Planner.Smelt s -> {
 				bot.setNeed(Bot.NeedOwner.GEAR, null);
 				workshop.start(s);
+				return true;
+			}
+			case Planner.Special sp -> {
+				if (workshop.packUp(bot)) return true;
+				bot.setNeed(Bot.NeedOwner.GEAR, null);
+				workshop.start(sp);
 				return true;
 			}
 			case Planner.Gather g -> {
@@ -175,6 +182,11 @@ public final class GearBehavior implements Behavior {
 			boolean deep = target.strategy() == Requirement.Strategy.UNDERGROUND || target.dimension() == Requirement.Dim.NETHER;
 			int remaining = Math.max(0, target.amount() - InvUtil.count(p, target.counts()));
 			addToolTiers(wants, p, target, deep, remaining);
+			if (target.tool() == LootBook.ToolUse.SHEARS && InvUtil.find(p, s -> s.is(Items.SHEARS) && !InvUtil.nearlyBroken(s)) < 0) {
+				wants.add(Want.required(Items.SHEARS));
+			}
+			// hunting means fighting on purpose: a real weapon first
+			if (target.isHunted() && Features.bestWeaponDamage(p) < 5) wants.add(Want.required(Items.STONE_SWORD));
 		}
 		if (netherTripAhead(bot, p)) addNetherKit(wants, p);
 		// combat only takes quick kills, so a stone sword is plenty; never "upgrade" past something carried

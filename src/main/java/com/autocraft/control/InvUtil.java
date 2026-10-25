@@ -1,5 +1,6 @@
 package com.autocraft.control;
 
+import com.autocraft.loot.LootBook;
 import java.util.Set;
 import java.util.function.Predicate;
 import net.minecraft.client.Minecraft;
@@ -14,6 +15,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.BundleContents;
 import net.minecraft.world.item.component.ItemContainerContents;
+import net.minecraft.world.item.enchantment.Enchantments;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
@@ -203,6 +205,46 @@ public final class InvUtil {
 		if (idx < 0) return;
 		ItemStack tool = get(p, idx);
 		select(p, s -> s == tool);
+	}
+
+	/**
+	 * Tool for a loot policy: shears when the drop needs them; anything but shears/silk touch when shears would
+	 * give the wrong drop (string from cobwebs, seeds from grass) — switching to another slot if they're in hand.
+	 */
+	public static void selectTool(Player p, BlockState state, LootBook.ToolUse use) {
+		switch (use) {
+			case ANY, SILK -> selectBestTool(p, state);
+			case SHEARS -> select(p, s -> s.is(Items.SHEARS));
+			case NO_SHEARS -> {
+				Inventory inv = p.getInventory();
+				int best = -1;
+				float bestSpeed = 1.0F;
+				for (int i = 0; i < MAIN_SIZE; i++) {
+					ItemStack s = inv.getItem(i);
+					if (s.isEmpty() || !plainTool(s) || nearlyBroken(s)) continue;
+					if (state.requiresCorrectToolForDrops() && !s.isCorrectToolForDrops(state)) continue;
+					float speed = s.getDestroySpeed(state);
+					if (speed > bestSpeed) {
+						bestSpeed = speed;
+						best = i;
+					}
+				}
+				if (best >= 0) {
+					ItemStack tool = inv.getItem(best);
+					select(p, s -> s == tool);
+				} else if (!plainTool(inv.getSelectedItem())) {
+					select(p, s -> s.isEmpty() || plainTool(s) && !s.isDamageableItem()); // bare hand or a plain item
+				}
+			}
+		}
+	}
+
+	private static boolean plainTool(ItemStack s) {
+		if (s.is(Items.SHEARS)) return false;
+		for (var e : s.getEnchantments().keySet()) {
+			if (e.is(Enchantments.SILK_TOUCH)) return false;
+		}
+		return true;
 	}
 
 	/** Keep a few uses in reserve so tools are never fully destroyed mid-job. */

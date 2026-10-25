@@ -1,6 +1,7 @@
 package com.autocraft.behavior;
 
 import com.autocraft.Bot;
+import com.autocraft.combat.Melee;
 import com.autocraft.control.InvUtil;
 import com.autocraft.goal.Requirement;
 import com.autocraft.path.Goal;
@@ -43,7 +44,7 @@ public final class FoodBehavior implements Behavior {
 	private static final int LOOT_TIMEOUT = 20 * 5;
 
 	private @Nullable Animal prey;
-	private @Nullable BlockPos chaseAt;
+	private final BlockPos[] chaseAt = new BlockPos[1];
 	private int huntTicks;
 	private int lootTicks = -1;
 	private int sinceLook = LOOK_EVERY;
@@ -72,7 +73,7 @@ public final class FoodBehavior implements Behavior {
 			prey = nearestPrey(bot, radius);
 			if (prey == null) return false;
 			huntTicks = 0;
-			chaseAt = null;
+			chaseAt[0] = null;
 		}
 		if (!prey.isAlive()) {
 			prey = null;
@@ -85,17 +86,8 @@ public final class FoodBehavior implements Behavior {
 			return false;
 		}
 		bot.setStatus("hunting " + prey.getType().getDescription().getString());
-		CombatBehavior.selectWeapon(p);
-		if (p.isWithinEntityInteractionRange(prey, 0) && p.hasLineOfSight(prey)) {
-			bot.nav().stop();
-			bot.controls().lookAt(prey.getBoundingBox().getCenter());
-			if (p.getAttackStrengthScale(0.5F) >= 0.9F) bot.controls().attack(prey);
-			return true;
-		}
-		BlockPos at = prey.blockPosition();
-		if (chaseAt == null || chaseAt.distSqr(at) > 4) chaseAt = at;
-		bot.nav().setGoal(new Goal.Near(chaseAt, 1));
-		if (bot.nav().tick() == Navigator.Status.FAILED) {
+		if (Melee.strike(bot, prey)) return true;
+		if (!Melee.approach(bot, prey, chaseAt)) {
 			prey = null;
 			bot.nav().stop();
 		}

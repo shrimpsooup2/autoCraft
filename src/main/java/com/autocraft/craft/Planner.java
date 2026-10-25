@@ -4,6 +4,8 @@ import com.autocraft.control.InvUtil;
 import com.autocraft.craft.RecipeBook.Ingredient;
 import com.autocraft.craft.RecipeBook.Recipe;
 import com.autocraft.goal.Requirement;
+import com.autocraft.procedure.Procedure;
+import com.autocraft.procedure.Procedures;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -21,13 +23,15 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * Works out the next concrete action toward carrying some items, using every vanilla crafting and furnace
- * recipe: craft something, smelt something, gather a raw material, or nothing (already have it). Routes
- * are compared by a rough effort cost (carried = free, mining a named resource = 8, other natural blocks
- * = 20, other dimension +40, each craft +1, each smelt +4), so e.g. iron ingots come from smelting raw
- * iron, not from an iron block. Re-run after every action: the inventory is the only state.
+ * recipe, mining and mob loot, and special procedures: craft something, smelt something, gather (mine or hunt)
+ * a raw material, run a procedure (honey, shearing, oxidizing copper, trial chambers...), or nothing (already
+ * have it). Routes are compared by a rough effort cost (carried = free, mining a named resource = 8, other
+ * natural blocks = 20, hunting = 30, other dimension +40, each craft +1, each smelt +4, procedures their own),
+ * so e.g. iron ingots come from smelting raw iron, not from an iron block. Re-run after every action: the
+ * inventory is the only state.
  */
 public final class Planner {
-	public sealed interface Step permits Craft, Smelt, Gather, Unavailable, Done {}
+	public sealed interface Step permits Craft, Smelt, Gather, Special, Unavailable, Done {}
 
 	public record Craft(Recipe recipe) implements Step {}
 
@@ -35,7 +39,10 @@ public final class Planner {
 
 	public record Gather(Requirement requirement) implements Step {}
 
-	/** Needs something the bot can't mine, craft or smelt (mob drops, loot). */
+	/** Run a procedure until {@code total} of {@code item} are carried (its needs are already carried). */
+	public record Special(Procedure procedure, Item item, int total) implements Step {}
+
+	/** Needs something the bot can't get any way it knows (loot only, the End). */
 	public record Unavailable(String what) implements Step {}
 
 	public record Done() implements Step {}
@@ -46,8 +53,8 @@ public final class Planner {
 	private static final double CRAFT_COST = 1;
 	private static final double SMELT_COST = 4;
 
-	/** Cheapest way to make or mine more of an item. */
-	private record Route(@Nullable Requirement gather, @Nullable Recipe recipe, double cost) {}
+	/** Cheapest way to make or get more of an item. */
+	private record Route(@Nullable Requirement gather, @Nullable Recipe recipe, @Nullable Procedure procedure, double cost) {}
 
 	private final LocalPlayer p;
 	private final Requirement.Dim dimension;
@@ -109,6 +116,14 @@ public final class Planner {
 				int total = InvUtil.count(p, route.gather.counts()) + missing; // requirement amounts are absolute
 				Requirement g = Gatherable.requirementFor(want, total, dimension, flexible);
 				return g == null ? new Unavailable(name(want)) : new Gather(g);
+			}
+			if (route.procedure != null) {
+				for (Map.Entry<Item, Integer> need : route.procedure.needs(want, missing).entrySet()) {
+					if (need.getValue() <= 0) continue;
+					Step s = obtain(need.getKey(), need.getValue(), false, depth + 1, visiting);
+					if (!(s instanceof Done)) return s;
+				}
+				return new Special(route.procedure, want, count);
 			}
 			if (route.recipe.isSmelting()) return smelt(route.recipe, missing, depth, visiting);
 			return craft(route.recipe, missing, depth, visiting);
@@ -197,14 +212,23 @@ public final class Planner {
 	private @Nullable Route bestRoute(Item item, boolean flexible, int depth, Set<Item> visiting) {
 		Route best = null;
 		Requirement gather = Gatherable.requirementFor(item, carried(item) + 1, dimension, flexible);
-		if (gather != null) best = new Route(gather, null, Gatherable.cost(gather, dimension));
+		if (gather != null) best = new Route(gather, null, null, Gatherable.cost(gather, dimension));
 		for (Recipe r : book.crafting(item)) {
 			double c = CRAFT_COST + recipeInputs(r, depth, visiting);
-			if (best == null || c < best.cost) best = new Route(null, r, c);
+			if (best == null || c < best.cost) best = new Route(null, r, null, c);
 		}
 		for (Recipe r : book.smelting(item)) {
 			double c = SMELT_COST + optionCost(r.smeltInput(), depth, visiting);
-			if (best == null || c < best.cost) best = new Route(null, r, c);
+			if (best == null || c < best.cost) best = new Route(null, r, null, c);
+		}
+		Procedure proc = Procedures.forItem(item);
+		if (proc != null) {
+			double c = proc.cost(item);
+			for (Item need : proc.needs(item, 1).keySet()) {
+				c += cost(need, false, depth + 1, visiting) * 0.25; // tools and containers are reused across items
+				if (c >= INF) break;
+			}
+			if (best == null || c < best.cost) best = new Route(null, null, proc, c);
 		}
 		return best == null || best.cost >= INF ? null : best;
 	}

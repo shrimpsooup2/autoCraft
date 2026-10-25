@@ -1,8 +1,9 @@
 # autoCraft — build plan
 
-Client-side Fabric mod. You give it items + amounts — mined resources or anything craftable/smeltable; it
-survives, paths, mines, crafts tools and the requested items, travels to the Nether when a resource lives
-there, builds farms or your own schematics, stores loot and logs off when the goal is met.
+Client-side Fabric mod. You give it items + amounts — mined resources, mob drops, anything craftable/smeltable,
+or things that need a procedure (honey, wool, oxidized copper, trial keys, the heavy core); it survives, paths,
+mines, hunts, crafts tools and the requested items, travels to the Nether when a resource lives there, builds
+farms or your own schematics (alone or as a team of bots), stores loot and logs off when the goal is met.
 
 ## Stack
 - Minecraft **26.3**, Fabric Loader 0.19.5, Fabric API, Java 25, Loom (`./gradlew build`, `./gradlew runClient`).
@@ -10,13 +11,19 @@ there, builds farms or your own schematics, stores loot and logs off when the go
 - No external AI libs: the neural net is a tiny MLP in plain Java. Recipes come from the game jar's own data.
 
 ## Control panel (key **K**, rebindable under Controls → autoCraft)
-- **Collect**: search every item the bot can mine or craft (blue corner = crafted/smelted), click to add with the
-  amount in the box (right-click adds a stack), scroll over a job line to change it, × / right-click removes;
-  Enter adds the typed name (also groups like `log`). *Start job* (or *Replace job*).
+- **Collect**: search every item the bot can get (blue corner = made: crafted, smelted, hunted or by a procedure;
+  the tooltip says how), click to add with the amount in the box (right-click adds a stack), scroll over a job
+  line to change it, × / right-click removes; Enter adds the typed name (also groups like `log`). *Start job*
+  (or *Replace job*).
 - **Build**: schematic list (built-ins + `config/autocraft/schematics/`, *Open folder*, *Reload*), size and
   material preview; *Place in world* (ghost at the crosshair) or *Find a spot* (bot-picked ground, then
   adjust). While placing, the tab becomes placement settings: X/Y/Z with −/+ (shift: 8), rotation, mirror,
-  *Move to me*, *To crosshair*, *Cancel*, *In world*, *Build*.
+  *Move to me*, *To crosshair*, *Materials...*, *Cancel*, *In world*, *Build*.
+- **Materials** (from the Build tab): wood type (auto = what grows here, or a chosen wood), a stand-in for
+  structural wood (auto = only where no trees grow, e.g. sandstone in deserts), filler blocks for cells nobody
+  sees, and explicit block replacements (pick a schematic block, then any block). The ghost updates live;
+  *Save as default* stores the choices in `config/autocraft/materials.json`.
+- **Team**: host a team (shows the address and a 5-character code) or join one; lists members and their roles.
 - **Bot**: live state, job progress bars, build progress, current prerequisite, health/food/position;
   *Pause/Resume*, *Stop*, *Set base here*, log-off and status-overlay toggles, list of built structures.
 - A small status overlay (top left) shows activity and progress bars while the bot runs.
@@ -51,9 +58,10 @@ hidden, blocks in the way get red outlines, water/lava and chest-like blocks get
 | `!ac stop` / `!ac pause` / `!ac resume` | control the job |
 | `!ac status` | progress, current behavior, build, prerequisite, health/food |
 | `!ac base` | mark current position as the storage base (chests near it are used) |
+| `!ac team host` / `!ac team join <host[:port]> <code>` / `!ac team leave` | team mode (see below) |
 | `!ac logoff on\|off` | disconnect when the job is done (default on) |
 | `!ac goto <x> <y> <z>` | debug: pathfind to a block |
-| `!ac resources` | list named resources (any natural block's item id and any craftable/smeltable item also work) |
+| `!ac resources` | list named resources (any natural block's item id, craftable/smeltable item, mob drop or procedure item also works) |
 
 ## Architecture
 One client-tick loop. Every tick the `Bot` releases all inputs, then asks behaviors **in priority
@@ -66,39 +74,45 @@ reflexes can interrupt) until landing.
 ```mermaid
 flowchart TD
   T[client tick] --> R0[LavaReflex: swim out toward solid ground, fire resistance]
-  R0 --> R1[FallReflex: lava landing: steer, water/block into the lava; high fall: water clutch]
+  R0 --> RD[DrowningReflex: surface for air]
+  RD --> R1[FallReflex: lava landing: steer, water/block into the lava; high fall: water clutch]
   R1 --> R2[DefenseReflex: shield arrows, deflect/dodge ghast fireballs, back off lit creepers]
   R2 --> R3[EatReflex]
   R3 --> R4[EffectReflex: milk / honey]
-  R4 --> C[Combat: ThreatNet decides fight or flee; neutral mobs left alone]
+  R4 --> C[Combat: quick kills only, jump crits; hunted mobs fought on purpose; flee at low health]
   C --> M[Mending: swap damaged mending gear into the offhand while XP is around]
   M --> GO[Goto: debug walk]
-  GO --> F[Finish: goal met -> store + log off]
-  F --> G[Gear: armor, shield, tools, rockets, nether kit via the recipe planner]
-  G --> FO[Food: hunt animals when the food supply is low]
+  GO --> F[Finish: goal met -> pick up stations, store + log off]
+  F --> G[Gear: armor, shield, tools scaled to the work, shears/sword when needed, rockets, nether kit]
+  G --> FO[Food: hunt animals when hungry and food is low]
   FO --> ST[Storage: junk drop, bundles, shulkers, base chests]
-  ST --> B[Build: schematic orders, materials, placement]
+  ST --> B[Build: schematic orders, materials, placement, team roles]
   B --> FA[Farm: harvest registered farms, auto-build one when searching fails]
-  FA --> MK[Make: craft/smelt requested items, ask for raw materials]
+  FA --> MK[Make: craft/smelt/run procedures for requested items, ask for raw materials and hunts]
   MK --> P[Portal: find/build/light portal, change dimension]
-  P --> CO[Collect: scan -> path -> mine -> pick up, else explore by biome / boat / elytra]
+  P --> CO[Collect: scan -> path -> mine/hunt -> pick up, else explore by biome / structure / boat / elytra]
 ```
 
 | Package | Responsibility |
 |---|---|
 | `com.autocraft` | entrypoint, `Bot` (job, build order, needs, behavior loop, flights), chat logging |
 | `command` | `!ac` chat command parser |
-| `goal` | `Job` (+ skipped requirements), `Requirement` (mined: items, sources, strategy, Y level, dimension, biomes; or crafted product), `Resources` registry |
+| `goal` | `Job` (+ skipped and deferred requirements), `Requirement` (mined or hunted: items, sources, mobs, tool, strategy, Y level, dimension, biomes; or a made product), `Resources` registry |
 | `world` | `WorldScanner` (nearest-ring, section-skipping block scan; entities), `BlockUtil`, `BiomeFinder` |
 | `control` | `Controls` (keys, rotation, mine/attack/place/use), `InvUtil`, `ContainerOpener`, `Placement` |
 | `path` | incremental A* `Pathfinder` (walk, diagonal, jump-up, staircase, safe fall, dig-down, pillar, bridge, mine-through, swim), goals, executor, `Navigator` |
 | `behavior` | the priority behaviors above + `Harvest`, `BaseDeposit` |
+| `combat` | `Threats` (who's dangerous), `Melee` (weapon choice, approach, crits, strike timing) |
 | `ai` | `ThreatNet` MLP + online training, persisted to `config/autocraft/threatnet.json` |
-| `craft` | `RecipeBook` (all vanilla crafting/smelting recipes from the game data), cost-based `Planner`, `Gatherable`, `Workshop` (crafter + smelter + station pickup) |
+| `craft` | `RecipeBook` (all vanilla crafting/smelting recipes from the game data), cost-based `Planner` (craft / smelt / mine / hunt / procedure), `Gatherable`, `Stations` (shared table/furnace rules, base stations, pickup), `Workshop` (crafter + multi-furnace smelter + procedures) |
+| `loot` | `LootBook`: block and mob loot tables from the game data (chances, shears/silk-touch conditions) |
+| `hunt` | `MobHints`: where each mob lives (dimension, biomes, tell-tale structure blocks) |
+| `procedure` | non-recipe items: `BeeNestProcedure` (honey bottles, honeycomb), `AnimalProcedure` (milk, wool, scutes, eggs), `BlockWorkProcedure` (stripped logs, carved pumpkins, mud, concrete), `OxidizeProcedure` (copper garden), `TrialChamberProcedure` (trial keys, ominous bottles, ominous keys, heavy core) |
 | `schematic` | `.litematic` / `.schem` / `.nbt` loading, built-in designs, `SchematicLibrary` (built-ins + user folder) |
-| `build` | `BuildPlan` (mirror, rotation, wood swap, ordering, bill of materials), `Placement` (a schematic being positioned), `PlacementSolver` (orientation), `Builder`, `SiteFinder`, `FluidFill`, `BaseWithdraw`, `StructureRegistry` (built + protected areas) |
+| `build` | `BuildPlan` (mirror, rotation, substitution, ordering, bill of materials), `Substitution` + `MaterialSettings` + `MaterialAdvisor` (wood swaps, stand-ins, filler, replacements), `Placement` (a schematic being positioned), `PlacementSolver` (orientation), `Builder`, `SiteFinder`, `FluidFill`, `BaseWithdraw`, `DepotDeposit`, `StructureRegistry` (built + protected areas) |
+| `team` | `Team` (roles, splitting work, schematic sharing), `TeamLink` (newline-delimited JSON over TCP), `TeamRole` |
 | `travel` | boats over water/ice, elytra flights, nether portals (find, build, light, enter, return) |
-| `ui` | `AutoCraftScreen` control panel, `HudOverlay` status overlay, `ItemCatalog` (what jobs can ask for), `Placements` (placement keys), `GhostRenderer` (in-world schematic preview) |
+| `ui` | `AutoCraftScreen` control panel, `MaterialsScreen`, `HudOverlay` status overlay, `ItemCatalog` (what jobs can ask for), `Placements` (placement keys), `GhostRenderer` (in-world schematic preview) |
 | `mixin` | keep the bot's block breaking alive; Alt + wheel nudges a placement instead of switching hotbar slots |
 
 ### Neural net (ThreatNet)
@@ -114,9 +128,10 @@ else → 0; ~10 consistent outcomes flip a decision) and saved.
 - The builder clears the space, then places full blocks bottom-up, then partial/attached blocks, water,
   lava and finally plants. Orientation (stairs, logs, hoppers, observers, doors...) is solved by asking
   the block's own placement logic which view angle and clicked face give the wanted state.
-- Missing materials come from base chests first, then the recipe planner (craft/smelt/mine, including
-  trips to the Nether, e.g. quartz for observers). Items nothing can produce (string, slime, loot) are
-  skipped with a message — put them in a base chest to include them.
+- Missing materials come from base chests first, then the recipe planner (craft/smelt/mine/hunt/procedure,
+  including trips to the Nether, e.g. quartz for observers). Items nothing can produce (chest-only loot, End
+  items) are skipped with a message — put them in a base chest to include them. Blocks whose material takes
+  time (oxidized copper) are placed last.
 - Farms: name a file `farm-<resource>-<anything>.litematic` and jobs for that resource can build and use
   it. Automatic farms (with chests/barrels) are emptied every couple of minutes; manual cane/tree/crop
   farms are harvested and replanted.
@@ -124,6 +139,35 @@ else → 0; ~10 consistent outcomes flip a decision) and saved.
   `cobblestone_generator`, `sugar_cane_farm`, `tree_farm`, `wheat_farm`. Community farm schematics found
   online (redstone-schematics.org, Planet Minecraft, GitHub archives) mostly carry no clear license, so none
   are bundled — download the ones you like into the folder.
+
+### Mob drops, loot and special procedures
+- Mining loot and mob drops are read from the game's loot tables: flint from gravel, string from spiders (or
+  cobwebs without shears), gunpowder from creepers, ender pearls from endermen, blaze rods in fortresses.
+  The planner compares mining, hunting, crafting and procedures by effort and takes the cheapest.
+- Hunting: chase and kill the nearest adult, unnamed mob of the wanted kind, pick up the drops; otherwise head
+  for tell-tale structure blocks (nether bricks for blazes) or explore toward the mob's biomes. Gear makes a
+  sword first.
+- Procedures (`procedure` package), each run until the amount is carried:
+  - honey bottles (glass bottle) and honeycomb (shears) from full bee nests/hives;
+  - milk (bucket on a cow/mooshroom/goat), wool (shears; dyed sheep or white wool + dye, whichever is cheaper),
+    armadillo scutes (brush), eggs / brown eggs / blue eggs (wait by chickens of that variant);
+  - stripped logs/wood (axe), carved pumpkins (shears), mud (water bottle on dirt), concrete (powder next to
+    water; a bucket is poured and scooped back if no water is near);
+  - exposed / weathered / oxidized copper: a copper garden by the base (or here), remembered in
+    `config/autocraft/copper_garden.json`. Copper oxidizes only in loaded chunks (about an hour per stage), so
+    the rest of the job goes first and the bot then waits by the garden; overshot blocks are scraped back;
+  - waxed copper comes from the normal honeycomb recipe;
+  - trial chambers: tunnel at Y −30 to find one, beat trial spawners (their mobs become hunt targets), collect
+    the keys, open vaults (ominous bottles come from normal vaults); for ominous keys and the heavy core,
+    drink an ominous bottle, walk in for Trial Omen, beat ominous spawners and open ominous vaults. Opened
+    vaults are remembered in `config/autocraft/trial_chambers.json`; a spent chamber means searching for the next.
+- A procedure that fails twice for an item is dropped for the rest of the job (the planner falls back or skips).
+
+### Team mode
+- One computer hosts (`!ac team host` or the Team tab): the mod opens a small TCP server on port 25590 and
+  shows a 5-character code. Others join with `!ac team join <host[:port]> <code>` (127.0.0.1 on the same PC).
+- Builds: the host places, one member digs out the site, the rest gather materials and bring them to a depot
+  chest next to the build. Collect jobs are split by amount across members.
 
 ## Phases
 | # | Phase | Status |
@@ -140,22 +184,26 @@ else → 0; ~10 consistent outcomes flip a decision) and saved.
 | 10 | **Schematics & farms** — user schematics, built-in starter base and farms, farm operation and auto-build | code complete |
 | 11 | **Crafted jobs & UI** — any craftable/smeltable item as a job target (unobtainable ones skipped); control panel (K) and status overlay | code complete |
 | 12 | **Litematica-style placement** — ghost preview in the world, keyboard/mouse positioning, rotate + mirror, build progress overlay | code complete |
-| 13 | **Hardening** — in-game testing, stuck recovery, tuning thresholds from logs | next |
+| 13 | **Materials & team** — substitution (wood swaps, stand-ins, filler, replacements); team mode over TCP with build roles and split jobs | code complete |
+| 14 | **Fixes** — shared station rules, multi-furnace smelting, station pickup, faster pathing, quick-kill combat with crits, drowning reflex, tool tiers scaled to work | code complete |
+| 15 | **Mob drops & procedures** — loot tables, hunting, honey/wool/milk/eggs, block work, copper garden, trial chambers | code complete |
+| 16 | **Hardening** — in-game testing, stuck recovery, tuning thresholds from logs | next |
 
 "Code complete" = compiles against the real 26.3 client jar; not yet run in-game (see Build).
 
 ## Build & test
 - `./gradlew build` → `build/libs/autocraft-<version>.jar` (drop into `.minecraft/mods` with Fabric API).
 - `./gradlew runClient` starts a dev client; press K, or try `!ac goto`, `!ac build starter_base here`,
-  `!ac collect log 16`, `!ac collect iron 8`, `!ac collect torch 32`, `!ac farm cobblestone`.
+  `!ac collect log 16`, `!ac collect iron 8`, `!ac collect torch 32`, `!ac collect ender_pearl 4`,
+  `!ac collect honeycomb 6`, `!ac farm cobblestone`.
 - Loom must download Minecraft's libraries from `libraries.minecraft.net`; build on a network that allows it.
 
 ## Known limits
 - Servers with anti-xray or strict anti-cheat will fight the bot (scanning sees hidden ores; rotations snap).
 - End travel, enchanting, villager trading, stonecutter/smithing recipes are out of scope.
-- Job targets are mined items or items made by vanilla crafting/smelting; things that need mob drops or loot
-  (string, ender pearls, blaze powder...) are skipped with a message unless you carry the ingredients.
+- Mob farms aren't built automatically yet (hunting covers mob drops); chest-only loot (enchanted golden apples,
+  music discs, armor trims) is skipped with a message.
 - Lava escape needs solid ground within ~4 blocks (or the last safe spot) or a fire resistance potion; a fall
   into a wide lava lake with no water bucket, no blocks and no solid edge in reach can still be fatal.
 - Builder limits: block entity contents (chest items, sign text) aren't recreated; waterlogging isn't
-  placed; mob drops / loot blocks must be supplied by you.
+  placed; chest-only loot blocks must be supplied by you.

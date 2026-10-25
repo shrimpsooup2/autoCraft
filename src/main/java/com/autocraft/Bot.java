@@ -27,6 +27,7 @@ import com.autocraft.craft.RecipeBook;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
 import com.autocraft.goal.Requirement.Dim;
+import com.autocraft.procedure.Procedures;
 import com.autocraft.team.Team;
 import com.autocraft.team.TeamRole;
 import com.autocraft.path.Goal;
@@ -45,6 +46,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Mirror;
@@ -89,6 +91,8 @@ public final class Bot {
 	private TeamRole teamRole = TeamRole.SOLO;
 	private @Nullable BlockPos depot;
 	private Map<Item, Integer> teamNeeds = Map.of();
+	/** Mobs the collector is hunting right now (combat fights these instead of avoiding them). */
+	private Set<EntityType<?>> huntTargets = Set.of();
 
 	private @Nullable Job job;
 	private @Nullable BuildOrder build;
@@ -256,6 +260,7 @@ public final class Bot {
 		jobMaterials.clear();
 		needs.clear();
 		fruitlessLegs.clear();
+		Procedures.reset();
 		resetBehaviors();
 		running = true;
 		paused = false;
@@ -300,6 +305,7 @@ public final class Bot {
 	private void resetBehaviors() {
 		nav.stop();
 		flight = null;
+		huntTargets = Set.of();
 		for (Behavior b : behaviors) b.reset();
 	}
 
@@ -460,6 +466,8 @@ public final class Bot {
 	/** Gatherer: items to have on hand before the next delivery (sent by the leader). */
 	public Map<Item, Integer> teamNeeds() { return teamNeeds; }
 	public void setTeamNeeds(Map<Item, Integer> needs) { teamNeeds = Map.copyOf(needs); }
+	public Set<EntityType<?>> huntTargets() { return huntTargets; }
+	public void setHuntTargets(Set<EntityType<?>> mobs) { huntTargets = mobs; }
 
 	public String activeBehavior() { return activeBehavior; }
 	public String status() { return status; }

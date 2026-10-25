@@ -4,6 +4,7 @@ import com.autocraft.craft.Gatherable;
 import com.autocraft.craft.RecipeBook;
 import com.autocraft.goal.Requirement.Dim;
 import com.autocraft.goal.Requirement.Strategy;
+import com.autocraft.procedure.Procedures;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -113,14 +114,19 @@ public final class Resources {
 	}
 
 	/**
-	 * What a job asks for: a mined resource if the name is one, else any item a crafting or smelting recipe
-	 * makes (torches, glass, pistons, iron ingots...). Null if neither.
+	 * What a job asks for: a mined resource if the name is one, else any item the planner can produce — by a
+	 * crafting or smelting recipe (torches, glass, iron ingots...), mining loot or hunting (flint, string, ender
+	 * pearls), or a special procedure (honey, wool, oxidized copper, trial keys). Null if none.
 	 */
 	public static @Nullable Requirement forJob(String name, int amount) {
 		Requirement mined = get(name, amount);
 		if (mined != null) return mined;
 		Item item = item(name);
-		if (item == null || !RecipeBook.get().isMade(item)) return null;
+		if (item == null) return null;
+		if (!RecipeBook.get().isMade(item) && Procedures.forItem(item) == null
+				&& Gatherable.requirementFor(item, amount, Dim.OVERWORLD, false) == null) {
+			return null;
+		}
 		return Requirement.crafted(BuiltInRegistries.ITEM.getKey(item).getPath(), item, amount);
 	}
 

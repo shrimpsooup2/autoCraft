@@ -114,7 +114,10 @@ public final class BuildBehavior implements Behavior {
 			case RUNNING -> {
 				return true;
 			}
-			case FAILED -> Chat.warn("Crafting for the build failed; retrying.");
+			case FAILED -> Chat.warn("Making materials for the build failed; retrying.");
+			case WAITING -> {
+				if (workshop.waitingFor() != null) builder.deferItem(workshop.waitingFor()); // place the rest first
+			}
 			default -> {
 			}
 		}
@@ -279,6 +282,12 @@ public final class BuildBehavior implements Behavior {
 			case Planner.Smelt s -> {
 				bot.setNeed(Bot.NeedOwner.BUILD, null);
 				workshop.start(s);
+				return true;
+			}
+			case Planner.Special sp -> {
+				if (workshop.packUp(bot)) return true;
+				bot.setNeed(Bot.NeedOwner.BUILD, null);
+				workshop.start(sp);
 				return true;
 			}
 			case Planner.Gather g -> {
