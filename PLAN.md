@@ -5,6 +5,11 @@ or things that need a procedure (honey, wool, oxidized copper, trial keys, the h
 mines, hunts, crafts tools and the requested items, travels to the Nether when a resource lives there, builds
 farms or your own schematics (alone or as a team of bots), stores loot and logs off when the goal is met.
 
+**How it works, animated:** `docs/how-it-works/how-it-works.mp4` (2.6 min), or open `docs/how-it-works/index.html`
+in a browser to scrub through it scene by scene (tick loop, planner, scanner + A*, survival, water, task tree).
+The mod icon (`src/main/resources/assets/autocraft/icon.png`, enlarged in `docs/logo-512.png`) is a player head
+that is half face, half circuitry.
+
 ## Stack
 - Minecraft **26.3**, Fabric Loader 0.19.5, Fabric API, Java 25, Loom (`./gradlew build`, `./gradlew runClient`).
 - Mojang names (26.x is unobfuscated — no mappings).

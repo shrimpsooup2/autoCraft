@@ -1,0 +1,1180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>autoCraft — how the bot works</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+	html, body { margin: 0; background: #0b0f14; color: #c9d1d9; font-family: "Segoe UI", system-ui, sans-serif; }
+	#stage { max-width: 1280px; margin: 0 auto; padding: 16px; }
+	canvas { width: 100%; aspect-ratio: 16 / 9; display: block; border-radius: 10px; background: #0e131a; }
+	#controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+	button { background: #1b2430; color: #e6edf3; border: 1px solid #2b3646; border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer; }
+	button.on { background: #1f6feb; border-color: #1f6feb; }
+	input[type=range] { flex: 1; min-width: 200px; }
+	#time { font-family: Consolas, monospace; font-size: 13px; color: #8d9aab; min-width: 92px; text-align: right; }
+	body.capture #controls { display: none; }
+	body.capture #stage { padding: 0; max-width: none; }
+	body.capture canvas { border-radius: 0; width: 1280px; }
+</style>
+</head>
+<body>
+<div id="stage">
+	<canvas id="c" width="1280" height="720"></canvas>
+	<div id="controls">
+		<button id="play">Pause</button>
+		<span id="chips"></span>
+		<input id="scrub" type="range" min="0" max="1000" value="0">
+		<span id="time">0.0 s</span>
+	</div>
+</div>
+<script>
+'use strict';
+// autoCraft explainer: every frame is a pure function of time (renderAt(t)), so it can be scrubbed and rendered to video.
+const W = 1280, H = 720;
+const cv = document.getElementById('c');
+const g = cv.getContext('2d');
+const C = {
+	bg: '#0e131a', panel: '#151c26', panel2: '#1b2430', line: '#2b3646', text: '#e6edf3', muted: '#8d9aab', dim: '#566273',
+	blue: '#58a6ff', green: '#56d364', amber: '#f2cc60', red: '#ff7b72', purple: '#bc8cff', cyan: '#39c5cf', orange: '#ffa657'
+};
+const FONT = '"Segoe UI", system-ui, sans-serif';
+const MONO = 'Consolas, "Cascadia Mono", monospace';
+
+// ---- math -------------------------------------------------------------------------------------
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const seg = (t, a, b) => clamp((t - a) / (b - a));
+const ease = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+const back = t => { const c = 1.70158; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); };
+const blink = (t, period = 0.5) => Math.floor(t / period) % 2 === 0;
+function rng(seed) {
+	return () => {
+		seed = seed + 0x6D2B79F5 | 0;
+		let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+		t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+		return ((t ^ t >>> 14) >>> 0) / 4294967296;
+	};
+}
+
+// ---- drawing helpers --------------------------------------------------------------------------
+function font(o) { return `${o.weight || 400} ${o.size || 18}px ${o.mono ? MONO : FONT}`; }
+function txt(s, x, y, o = {}) {
+	g.save();
+	g.globalAlpha *= o.alpha ?? 1;
+	g.font = font(o);
+	g.fillStyle = o.color || C.text;
+	g.textAlign = o.align || 'left';
+	g.textBaseline = o.baseline || 'middle';
+	g.fillText(s, x, y);
+	g.restore();
+}
+function measure(s, o = {}) { g.save(); g.font = font(o); const w = g.measureText(s).width; g.restore(); return w; }
+function wrapLines(s, maxW, o) {
+	const lines = [];
+	let cur = '';
+	for (const word of s.split(' ')) {
+		const next = cur ? cur + ' ' + word : word;
+		if (cur && measure(next, o) > maxW) { lines.push(cur); cur = word; } else cur = next;
+	}
+	if (cur) lines.push(cur);
+	return lines;
+}
+function para(s, x, y, maxW, lh, o = {}) { const lines = wrapLines(s, maxW, o); lines.forEach((l, i) => txt(l, x, y + i * lh, o)); return lines.length; }
+function rrect(x, y, w, h, r, fill, stroke, lw = 1.5) {
+	g.beginPath();
+	g.roundRect(x, y, w, h, r);
+	if (fill) { g.fillStyle = fill; g.fill(); }
+	if (stroke) { g.strokeStyle = stroke; g.lineWidth = lw; g.stroke(); }
+}
+function line(x1, y1, x2, y2, color, lw = 2, dash) {
+	g.save();
+	g.strokeStyle = color; g.lineWidth = lw; g.lineCap = 'round';
+	if (dash) g.setLineDash(dash);
+	g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
+	g.restore();
+}
+function arrow(x1, y1, x2, y2, color, lw = 2, p = 1, dash) {
+	if (p <= 0) return;
+	const x = lerp(x1, x2, p), y = lerp(y1, y2, p);
+	line(x1, y1, x, y, color, lw, dash);
+	const a = Math.atan2(y2 - y1, x2 - x1), s = 6 + lw * 2;
+	g.save();
+	g.fillStyle = color;
+	g.beginPath(); g.moveTo(x, y);
+	g.lineTo(x - s * Math.cos(a - 0.45), y - s * Math.sin(a - 0.45));
+	g.lineTo(x - s * Math.cos(a + 0.45), y - s * Math.sin(a + 0.45));
+	g.closePath(); g.fill();
+	g.restore();
+}
+function circle(x, y, r, fill, stroke, lw = 2) {
+	g.beginPath(); g.arc(x, y, Math.max(0, r), 0, Math.PI * 2);
+	if (fill) { g.fillStyle = fill; g.fill(); }
+	if (stroke) { g.strokeStyle = stroke; g.lineWidth = lw; g.stroke(); }
+}
+function alpha(a, fn) { if (a <= 0) return; g.save(); g.globalAlpha *= clamp(a); fn(); g.restore(); }
+function hexA(hex, a) {
+	const n = parseInt(hex.slice(1), 16);
+	return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`;
+}
+function pill(s, x, y, color, o = {}) {
+	const size = o.size || 15, w = measure(s, { size, weight: 600 }) + 22;
+	const left = o.align === 'center' ? x - w / 2 : x;
+	rrect(left, y - size, w, size * 2, size, 'rgba(14,19,26,0.88)', null); // readable over any background
+	rrect(left, y - size, w, size * 2, size, hexA(color, 0.18), color, 1.5);
+	txt(s, left + w / 2, y + 1, { size, weight: 600, color, align: 'center' });
+	return w;
+}
+function badge(n, x, y, color) { circle(x, y, 13, color); txt(String(n), x, y + 1, { size: 15, weight: 700, color: '#0b0f14', align: 'center' }); }
+
+// ---- blocks, items, mobs -----------------------------------------------------------------------
+const BLOCKS = {
+	stone: { base: ['#7f7f7f', '#8c8c8c', '#737373', '#969696'] },
+	cobble: { base: ['#6e6e6e', '#8a8a8a', '#5c5c5c', '#9a9a9a', '#4f4f4f'] },
+	grass: { base: ['#5d9b3a', '#6aae44', '#518a32', '#63a23e'] },
+	dirt: { base: ['#7a5534', '#8b6440', '#6a482b'] },
+	sand: { base: ['#dccf9a', '#e6d9a6', '#cfc28c'] },
+	log: { base: ['#6a4e2a', '#5a4123', '#7a5b34'], stripes: true },
+	planks: { base: ['#b48b55', '#a57d49', '#c19861'], planks: true },
+	iron_ore: { base: ['#7f7f7f', '#8c8c8c', '#737373'], speck: '#d9a46f' },
+	diamond_ore: { base: ['#7f7f7f', '#8c8c8c', '#737373'], speck: '#4ff0e6' },
+	iron_block: { base: ['#d8d8d8', '#e4e4e4', '#cbcbcb'], frame: '#a8a8a8' },
+	water: { base: ['#2c63b0', '#3672c2', '#2958a3'] },
+	lava: { base: ['#e8601c', '#f39a2a', '#cf4313', '#ffb53b'] },
+	leaves: { base: ['#2f6b22', '#3b7f2b', '#25561b', '#47913a'] },
+	glass: { glass: true },
+	bricks: { bricks: true },
+};
+const blockCache = new Map();
+function blockImg(kind) {
+	if (blockCache.has(kind)) return blockCache.get(kind);
+	const c = document.createElement('canvas');
+	c.width = c.height = 8;
+	const b = c.getContext('2d');
+	const d = BLOCKS[kind];
+	const r = rng([...kind].reduce((a, ch) => a * 31 + ch.charCodeAt(0), 7));
+	if (d.glass) {
+		b.fillStyle = 'rgba(190,230,255,0.28)'; b.fillRect(0, 0, 8, 8);
+		b.fillStyle = '#eaf7ff'; b.fillRect(0, 0, 8, 1); b.fillRect(0, 7, 8, 1); b.fillRect(0, 0, 1, 8); b.fillRect(7, 0, 1, 8);
+		b.fillRect(2, 2, 1, 1); b.fillRect(3, 3, 1, 1); b.fillRect(5, 5, 1, 1);
+	} else if (d.bricks) {
+		b.fillStyle = '#9c4a3a'; b.fillRect(0, 0, 8, 8);
+		b.fillStyle = '#cdbfae';
+		for (let y = 0; y < 8; y += 2) { b.fillRect(0, y + 1, 8, 1); b.fillRect(y % 4 === 0 ? 3 : 7, y, 1, 1); }
+	} else {
+		for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) { b.fillStyle = d.base[Math.floor(r() * d.base.length)]; b.fillRect(x, y, 1, 1); }
+		if (d.stripes) { b.fillStyle = '#4a3519'; for (let y = 0; y < 8; y++) { b.fillRect(1, y, 1, 1); if (y % 3) b.fillRect(5, y, 1, 1); } }
+		if (d.planks) { b.fillStyle = '#7d5c33'; b.fillRect(0, 3, 8, 1); b.fillRect(0, 7, 8, 1); b.fillRect(5, 0, 1, 3); b.fillRect(2, 4, 1, 3); }
+		if (d.speck) { b.fillStyle = d.speck; [[1, 1], [2, 1], [5, 2], [6, 3], [2, 5], [3, 6], [6, 6]].forEach(([x, y]) => b.fillRect(x, y, 1, 1)); }
+		if (d.frame) { b.fillStyle = d.frame; b.fillRect(0, 0, 8, 1); b.fillRect(0, 7, 8, 1); b.fillRect(0, 0, 1, 8); b.fillRect(7, 0, 1, 8); }
+	}
+	blockCache.set(kind, c);
+	return c;
+}
+function block(kind, x, y, s, a = 1) {
+	g.save();
+	g.globalAlpha *= a;
+	g.imageSmoothingEnabled = false;
+	g.drawImage(blockImg(kind), x, y, s, s);
+	g.restore();
+}
+const PICK_HEAD = { pick_wood: '#a07a45', pick_stone: '#8f8f8f', pick_iron: '#e6e6e6', pick_diamond: '#4ff0e6' };
+/** Item icon in an s×s box at (x, y). */
+function item(kind, x, y, s, a = 1) {
+	if (BLOCKS[kind]) { block(kind, x + s * 0.12, y + s * 0.12, s * 0.76, a); return; }
+	g.save();
+	g.globalAlpha *= a;
+	g.translate(x, y);
+	g.scale(s / 32, s / 32);
+	g.lineCap = 'round'; g.lineJoin = 'round';
+	if (kind.startsWith('pick_')) {
+		g.strokeStyle = '#6b4a23'; g.lineWidth = 4; g.beginPath(); g.moveTo(7, 27); g.lineTo(23, 9); g.stroke();
+		g.strokeStyle = PICK_HEAD[kind]; g.lineWidth = 5; g.beginPath(); g.moveTo(8, 7); g.quadraticCurveTo(20, 2, 28, 15); g.stroke();
+	} else if (kind === 'ingot') {
+		g.fillStyle = '#d9d9d9'; g.beginPath(); g.moveTo(5, 23); g.lineTo(10, 12); g.lineTo(26, 12); g.lineTo(29, 23); g.closePath(); g.fill();
+		g.fillStyle = '#f7f7f7'; g.fillRect(11, 13, 14, 3); g.fillStyle = '#a9a9a9'; g.fillRect(5, 22, 24, 2);
+	} else if (kind === 'raw_iron') {
+		g.fillStyle = '#c9946a'; g.beginPath(); g.ellipse(16, 17, 11, 8, 0.3, 0, Math.PI * 2); g.fill();
+		g.fillStyle = '#e3bb94'; g.fillRect(10, 12, 6, 3); g.fillStyle = '#9c6c48'; g.fillRect(18, 19, 6, 3);
+	} else if (kind === 'diamond') {
+		g.fillStyle = '#4ff0e6'; g.beginPath(); g.moveTo(16, 4); g.lineTo(28, 14); g.lineTo(16, 28); g.lineTo(4, 14); g.closePath(); g.fill();
+		g.fillStyle = '#c8fffb'; g.beginPath(); g.moveTo(16, 6); g.lineTo(22, 13); g.lineTo(16, 13); g.closePath(); g.fill();
+	} else if (kind === 'stick') {
+		g.strokeStyle = '#7a5530'; g.lineWidth = 4; g.beginPath(); g.moveTo(8, 26); g.lineTo(24, 6); g.stroke();
+	} else if (kind === 'bread') {
+		g.fillStyle = '#c98b3c'; g.beginPath(); g.ellipse(16, 18, 12, 7, 0, 0, Math.PI * 2); g.fill();
+		g.strokeStyle = '#8a5a22'; g.lineWidth = 2;
+		for (const xx of [11, 16, 21]) { g.beginPath(); g.moveTo(xx - 2, 14); g.lineTo(xx + 2, 21); g.stroke(); }
+	} else if (kind === 'boat') {
+		g.fillStyle = '#9c7444'; g.beginPath(); g.moveTo(2, 14); g.lineTo(30, 14); g.lineTo(25, 25); g.lineTo(7, 25); g.closePath(); g.fill();
+		g.fillStyle = '#6b4a23'; g.fillRect(2, 12, 28, 3); g.fillRect(14, 15, 4, 9);
+	} else if (kind === 'torch') {
+		g.fillStyle = '#7a5530'; g.fillRect(14, 12, 4, 16); g.fillStyle = '#ffd25e'; g.fillRect(13, 5, 6, 8); g.fillStyle = '#fff3b0'; g.fillRect(15, 7, 2, 4);
+	} else if (kind === 'book') {
+		g.fillStyle = '#7b3f22'; g.fillRect(7, 4, 19, 24); g.fillStyle = '#efe6d2'; g.fillRect(10, 6, 15, 20);
+		g.fillStyle = '#7b3f22'; g.fillRect(12, 10, 10, 2); g.fillRect(12, 15, 8, 2);
+	} else if (kind === 'chest') {
+		g.fillStyle = '#a2702f'; g.fillRect(4, 8, 24, 18); g.fillStyle = '#6f4a1c'; g.fillRect(4, 14, 24, 2); g.fillStyle = '#d8d8d8'; g.fillRect(14, 13, 4, 5);
+	}
+	g.restore();
+}
+const FACES = {
+	creeper: { skin: '#4fae4a', dark: '#14280f', px: [[1, 2], [2, 2], [5, 2], [6, 2], [1, 3], [2, 3], [5, 3], [6, 3], [3, 4], [4, 4], [2, 5], [3, 5], [4, 5], [5, 5], [2, 6], [5, 6]] },
+	zombie: { skin: '#3f8f6a', dark: '#16302a', px: [[1, 3], [2, 3], [5, 3], [6, 3], [3, 5], [4, 5]] },
+	skeleton: { skin: '#cfcfcf', dark: '#3a3a3a', px: [[1, 3], [2, 3], [5, 3], [6, 3], [2, 6], [3, 6], [4, 6], [5, 6]] },
+	bot: { skin: '#c99868', dark: '#6b4128', px: [[3, 6], [4, 6]], hair: '#4a3020' },
+};
+/** A mob's head (front view), centred at (x, y). */
+function mob(kind, x, y, s, a = 1) {
+	g.save();
+	g.globalAlpha *= a;
+	const p = s / 8, ox = x - s / 2, oy = y - s / 2, f = FACES[kind];
+	g.fillStyle = f.skin; g.fillRect(ox, oy, s, s);
+	if (f.hair) { g.fillStyle = f.hair; g.fillRect(ox, oy, s, 2 * p); g.fillRect(ox, oy, p, 3 * p); g.fillRect(ox + 7 * p, oy, p, 3 * p); }
+	g.fillStyle = f.dark;
+	for (const [i, j] of f.px) g.fillRect(ox + i * p, oy + j * p, p, p);
+	if (kind === 'bot') {
+		g.fillStyle = '#ffffff'; g.fillRect(ox + p, oy + 4 * p, p, p); g.fillRect(ox + 5 * p, oy + 4 * p, p, p);
+		g.fillStyle = '#3b6fd8'; g.fillRect(ox + 2 * p, oy + 4 * p, p, p); g.fillRect(ox + 6 * p, oy + 4 * p, p, p);
+	}
+	g.strokeStyle = 'rgba(0,0,0,0.55)'; g.lineWidth = 1; g.strokeRect(ox + 0.5, oy + 0.5, s - 1, s - 1);
+	g.restore();
+}
+function hearts(x, y, hp, size = 14) {
+	for (let i = 0; i < 10; i++) {
+		const fill = clamp(hp / 2 - i);
+		const cx = x + i * (size + 3);
+		heart(cx, y, size, '#3a1f22');
+		if (fill > 0) { g.save(); g.beginPath(); g.rect(cx - size / 2, y - size, size * fill, size * 2); g.clip(); heart(cx, y, size, '#ff4b4b'); g.restore(); }
+	}
+}
+function heart(x, y, s, color) {
+	g.fillStyle = color;
+	g.beginPath();
+	g.moveTo(x, y + s * 0.42);
+	g.bezierCurveTo(x - s * 0.7, y - s * 0.05, x - s * 0.45, y - s * 0.62, x, y - s * 0.22);
+	g.bezierCurveTo(x + s * 0.45, y - s * 0.62, x + s * 0.7, y - s * 0.05, x, y + s * 0.42);
+	g.fill();
+}
+function bubbles(x, y, air, size = 12) {
+	for (let i = 0; i < 10; i++) {
+		const on = air / 30 > i;
+		circle(x + i * (size + 3), y, size / 2, on ? '#7fd3ff' : 'rgba(127,211,255,0.15)', on ? '#d8f3ff' : null, 1.2);
+	}
+}
+function poof(x, y, p) {
+	if (p <= 0 || p >= 1) return;
+	const r = rng(7);
+	for (let i = 0; i < 9; i++) {
+		const a = r() * Math.PI * 2, d = 8 + 26 * easeOut(p) * (0.6 + r() * 0.6);
+		circle(x + Math.cos(a) * d, y + Math.sin(a) * d, (1 - p) * (6 + r() * 6), `rgba(230,230,230,${0.8 * (1 - p)})`);
+	}
+}
+
+// ---- frame chrome -----------------------------------------------------------------------------
+function header(n, title, sub) {
+	txt(String(n).padStart(2, '0'), 60, 52, { size: 16, color: C.blue, weight: 700, mono: true });
+	txt(title, 96, 50, { size: 30, weight: 700 });
+	if (sub) txt(sub, 96 + measure(title, { size: 30, weight: 700 }) + 18, 53, { size: 17, color: C.muted });
+}
+function caption(s, a = 1) {
+	alpha(a, () => {
+		const o = { size: 18 };
+		const lines = wrapLines(s, W - 176, o);
+		const h = 24 * lines.length + 22;
+		rrect(60, 702 - h, W - 120, h, 12, 'rgba(21,28,38,0.94)', C.line);
+		lines.forEach((l, i) => txt(l, 88, 702 - h + 22 + i * 24, o));
+	});
+}
+/** Caption that changes during a scene: [[startTime, text], ...], cross-faded. */
+function captions(t, list) {
+	for (let i = 0; i < list.length; i++) {
+		const [start, s] = list[i];
+		const end = i + 1 < list.length ? list[i + 1][0] : 1e9;
+		if (t >= start - 0.3 && t < end) caption(s, Math.min(seg(t, start - 0.3, start + 0.2), 1 - seg(t, end - 0.3, end)));
+	}
+}
+function panel(x, y, w, h, title, a = 1) {
+	alpha(a, () => {
+		rrect(x, y, w, h, 14, C.panel, C.line);
+		if (title) txt(title, x + 18, y + 22, { size: 14, weight: 700, color: C.muted });
+	});
+}
+
+// ---- scene 0: title ---------------------------------------------------------------------------
+/** The mod's icon (src/main/resources/assets/autocraft/icon.png): half a player's face, half circuitry. */
+const LOGO = [
+	'################.###############', '################.###############', '################.##.#########.##', '################.###############',
+	'################.########...####', '################..........#.####', '################.########...####', '################.###############',
+	'###..............###############', '###.############.###############', '###.############.###############', '###.############......##########',
+	'....############.####.####...###', '################.####......#.###', '################.#########...###', '################.###############',
+	'####....########.###........####', '####....########.###...##...####', '####....########.###...##...####', '####....########.###........####',
+	'################.###############', '################.########...####', '################..........#.####', '################.########...####',
+	'########.........###############', '########.........##.........####', '########.........###############', '########.........##.........####',
+	'################.###############', '################.##.#########.##', '################.###############', '################.###############',
+];
+/** The logo at (x, y), `px` screen pixels per logo pixel; `reveal` 0..1 grows it outward from the split. */
+function logo(x, y, px, color, reveal = 1) {
+	g.fillStyle = color;
+	for (let r = 0; r < 32; r++) for (let c = 0; c < 32; c++) {
+		if (LOGO[r][c] !== '#') continue;
+		if (Math.abs(c - 16) / 16 > reveal) continue;
+		g.fillRect(x + c * px, y + r * px, px, px);
+	}
+}
+const CHAIN = ['log', 'planks', 'stick', 'pick_wood', 'cobble', 'pick_stone', 'raw_iron', 'ingot', 'pick_iron', 'diamond'];
+function sceneIntro(t) {
+	const a = easeOut(seg(t, 0.1, 1.0));
+	logo(W / 2 - 48, 92, 3, C.blue, easeOut(seg(t, 0.05, 0.9)));
+	alpha(a, () => {
+		txt('autoCraft', W / 2, 254 - 20 * (1 - a), { size: 84, weight: 800, align: 'center' });
+		txt('how the bot thinks', W / 2, 322 - 12 * (1 - a), { size: 30, color: C.blue, align: 'center', weight: 600 });
+		txt('a client-side Fabric mod for Minecraft 26.3 that gathers, crafts, builds and survives on its own', W / 2, 368, { size: 18, color: C.muted, align: 'center' });
+	});
+	const x0 = W / 2 - (CHAIN.length * 74 - 26) / 2;
+	CHAIN.forEach((k, i) => {
+		const p = back(seg(t, 1.0 + i * 0.22, 1.45 + i * 0.22));
+		if (p <= 0) return;
+		const x = x0 + i * 74, y = 470;
+		alpha(clamp(p), () => {
+			rrect(x, y - 24 * p, 48, 48, 10, C.panel2, C.line);
+			item(k, x + 4, y + 4 - 24 * p, 40);
+			if (i > 0) arrow(x - 22, y + 24 - 24 * p, x - 6, y + 24 - 24 * p, C.dim, 2, clamp(p));
+		});
+	});
+	alpha(seg(t, 3.3, 3.8), () => txt('from a log to a diamond — planned, gathered and crafted without help', W / 2, 560, { size: 17, color: C.dim, align: 'center' }));
+}
+
+// ---- scene 1: the tick loop -------------------------------------------------------------------
+const BEHAVIORS = [['LavaReflex', 'reflex'], ['DrowningReflex', 'reflex'], ['FallReflex', 'reflex'], ['DefenseReflex', 'reflex'], ['EatReflex', 'reflex'],
+	['EffectReflex', 'reflex'], ['Combat', 'fight'], ['Recover', 'fight'], ['Mending', 'util'], ['Goto', 'util'], ['Fetch', 'work'], ['Finish', 'work'],
+	['Gear', 'work'], ['Food', 'work'], ['Storage', 'work'], ['Build', 'work'], ['Farm', 'work'], ['Make', 'work'], ['Portal', 'work'], ['Collect', 'work']];
+const GROUP = { reflex: C.red, fight: C.amber, util: C.purple, work: C.blue };
+const TICKS = [
+	{ t: 0.8, c: 19, s: 'mining iron ore', keys: ['LMB'] },
+	{ t: 2.5, c: 19, s: 'mining iron ore', keys: ['LMB'] },
+	{ t: 4.2, c: 6, s: 'zombie 3 blocks away: fighting', keys: ['W', 'Space', 'LMB'] },
+	{ t: 5.9, c: 6, s: 'zombie down (took 9 damage)', keys: ['LMB'] },
+	{ t: 7.6, c: 4, s: 'hurt: eating bread', keys: ['RMB'] },
+	{ t: 9.3, c: 12, s: 'pickaxe worn out: crafting a stone one', keys: ['RMB'] },
+	{ t: 11.0, c: 19, s: 'back to mining iron ore', keys: ['LMB'] },
+];
+function tickAt(t) { let k = -1; for (let i = 0; i < TICKS.length; i++) if (t >= TICKS[i].t) k = i; return k; }
+function sceneLoop(t) {
+	header(1, 'The tick loop', 'subsumption: the first behavior that wants the tick owns it');
+	const x = 60, y0 = 104, rowH = 25, w = 420;
+	panel(x - 16, y0 - 16, w + 32, rowH * 20 + 30, null, seg(t, 0, 0.4));
+	const k = tickAt(t);
+	const tick = TICKS[k];
+	const local = k >= 0 ? t - tick.t : 0;
+	const scan = k >= 0 ? easeOut(seg(local, 0, 0.55)) * tick.c : -1;
+	BEHAVIORS.forEach(([name, grp], i) => {
+		const y = y0 + i * rowH;
+		const a = seg(t, 0.05 * i * 0.3, 0.3 + 0.05 * i * 0.3);
+		alpha(a, () => {
+			const claimed = k >= 0 && i === tick.c && local >= 0.55;
+			const passed = k >= 0 && i < tick.c && scan >= i;
+			const below = k >= 0 && i > tick.c && local >= 0.55;
+			const fill = claimed ? hexA(GROUP[grp], 0.28) : C.panel2;
+			rrect(x, y, w, rowH - 4, 6, fill, claimed ? GROUP[grp] : null, 2);
+			g.fillStyle = GROUP[grp];
+			g.fillRect(x, y + 3, 4, rowH - 10);
+			txt(String(i + 1).padStart(2, ' '), x + 26, y + rowH / 2 - 2, { size: 13, mono: true, color: C.dim, align: 'right' });
+			txt(name, x + 38, y + rowH / 2 - 2, { size: 15, mono: true, color: below ? C.dim : C.text, weight: claimed ? 700 : 400 });
+			if (passed) txt('pass', x + w - 12, y + rowH / 2 - 2, { size: 12, mono: true, color: C.dim, align: 'right' });
+			if (below) txt('waits, keeps its state', x + w - 12, y + rowH / 2 - 2, { size: 12, color: C.dim, align: 'right' });
+			if (claimed) txt('owns the tick', x + w - 12, y + rowH / 2 - 2, { size: 13, weight: 700, color: GROUP[grp], align: 'right' });
+		});
+	});
+	if (k >= 0 && local < 0.6) { // the question travelling down the list
+		const y = y0 + scan * rowH + rowH / 2 - 2;
+		alpha(1 - seg(local, 0.45, 0.6), () => { circle(x - 10, y, 5, C.text); line(x - 10, y, x - 2, y, C.text, 2); });
+	}
+	// legend
+	alpha(seg(t, 0.6, 1.2), () => {
+		const ly = y0 + rowH * 20 + 4;
+		[['reflexes', 'reflex'], ['fights', 'fight'], ['utility', 'util'], ['work', 'work']].forEach(([s, grp], i) => {
+			g.fillStyle = GROUP[grp]; g.fillRect(x + i * 104, ly - 5, 10, 10);
+			txt(s, x + 16 + i * 104, ly, { size: 13, color: C.muted });
+		});
+	});
+
+	// right: the world this tick and the keys pressed
+	const rx = 540, ry = 88;
+	panel(rx, ry, 680, 500, null, seg(t, 0.2, 0.6));
+	alpha(seg(t, 0.3, 0.8), () => {
+		const n = k < 0 ? 0 : 4810 + k;
+		txt(`tick #${n}`, rx + 22, ry + 30, { size: 16, mono: true, color: C.muted });
+		txt('20 per second · 50 ms each', rx + 140, ry + 30, { size: 14, color: C.dim });
+		if (k >= 0) {
+			const [name, grp] = BEHAVIORS[tick.c];
+			alpha(seg(local, 0.5, 0.75), () => pill(`${name}: ${tick.s}`, rx + 22, ry + 66, GROUP[grp], { size: 15 }));
+		}
+		lootWorld(rx + 40, ry + 104, t, k, local);
+		keysRow(rx + 40, ry + 456, k >= 0 && local >= 0.55 ? tick.keys : []);
+	});
+	captions(t, [
+		[0.3, 'Every tick (20 a second) the bot asks its behaviors in priority order — reflexes first, then fights, then work. The first that wants the tick owns it.'],
+		[7.4, 'The others simply wait and keep their state, so the job picks up exactly where it stopped once the fight, the meal or the new pickaxe is done.'],
+	]);
+}
+/** The little top-down world for the tick loop: the bot mines, a zombie comes, the bot eats, crafts, mines on. */
+function lootWorld(x, y, t, k, local) {
+	const ts = 30, cols = 20, rows = 11;
+	for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) block(j < 2 || i > 15 ? 'stone' : 'grass', x + i * ts, y + j * ts, ts);
+	block('iron_ore', x + 16 * ts, y + 5 * ts, ts);
+	block('iron_ore', x + 16 * ts, y + 6 * ts, ts);
+	const bx = x + 14.5 * ts, by = y + 5.5 * ts;
+	mob('bot', bx, by, 26);
+	// zombie walks in, gets hit, dies
+	if (t > 3.2 && t < 6.9) {
+		const p = seg(t, 3.2, 4.5);
+		const zx = lerp(x + 4 * ts, bx - 3 * ts, ease(p)), zy = lerp(y + 9 * ts, by + ts * 0.3, ease(p));
+		const knock = t > 5.0 ? 18 * easeOut(seg(t, 5.0, 5.3)) : 0;
+		alpha(1 - seg(t, 6.2, 6.4), () => mob('zombie', zx - knock, zy, 26));
+		poof(zx - knock, zy, seg(t, 6.2, 6.9));
+		if (t > 4.6 && t < 6.1) {
+			const swing = (t * 2.2) % 1;
+			alpha(swing < 0.5 ? 1 : 0, () => { g.strokeStyle = '#ffffff'; g.lineWidth = 3; g.beginPath(); g.arc(bx - 10, by, 20, Math.PI * 0.7, Math.PI * 1.25); g.stroke(); });
+			if (swing < 0.25) txt('crit!', bx - 50, by - 28, { size: 14, weight: 700, color: C.amber });
+		}
+	}
+	if (t < 4.0 || t > 10.9) { // mining: crack on the ore
+		const p = (t % 1.2) / 1.2;
+		alpha(0.7, () => { g.strokeStyle = '#1b1b1b'; g.lineWidth = 2; g.beginPath(); g.moveTo(x + 16.2 * ts, y + 5.2 * ts); g.lineTo(x + (16.2 + 0.6 * p) * ts, y + (5.2 + 0.6 * p) * ts); g.stroke(); });
+	}
+	if (k === 4 && local > 0.55) { // eating
+		const p = (local * 3) % 1;
+		item('bread', bx - 12, by - 52 - 6 * Math.sin(p * Math.PI), 26);
+	}
+	if (k === 5 && local > 0.55) { // crafting
+		rrect(bx - 70, by - 82, 140, 40, 8, 'rgba(14,19,26,0.9)', C.line);
+		item('cobble', bx - 64, by - 78, 30); txt('+', bx - 26, by - 62, { size: 18, color: C.muted, align: 'center' });
+		item('stick', bx - 16, by - 78, 30); txt('→', bx + 22, by - 62, { size: 18, color: C.muted, align: 'center' });
+		item('pick_stone', bx + 34, by - 78, 30);
+	}
+	// health over time: 20 → 11 after the zombie, back up after eating
+	const hp = t < 5.0 ? 20 : t < 6.0 ? lerp(20, 11, seg(t, 5.0, 5.8)) : t < 8.2 ? 11 : lerp(11, 18, seg(t, 8.2, 9.6));
+	hearts(x + 10, y + rows * ts - 14, hp, 13);
+}
+function keysRow(x, y, down) {
+	const keys = ['W', 'A', 'S', 'D', 'Space', 'Shift', 'LMB', 'RMB'];
+	let cx = x;
+	txt('keys', cx, y, { size: 14, color: C.dim });
+	cx += 50;
+	for (const k of keys) {
+		const w = Math.max(34, measure(k, { size: 14, mono: true }) + 18);
+		const on = down.includes(k);
+		rrect(cx, y - 15, w, 30, 6, on ? hexA(C.green, 0.25) : C.panel2, on ? C.green : C.line, 1.5);
+		txt(k, cx + w / 2, y + 1, { size: 14, mono: true, color: on ? C.green : C.muted, align: 'center' });
+		cx += w + 8;
+	}
+}
+
+// ---- scene 2: needs and the planner -----------------------------------------------------------
+const PNODES = [
+	{ id: 'pick', label: 'Iron Pickaxe', icon: 'pick_iron', x: 820, y: 132, at: 1.6 },
+	{ id: 'ingot', label: '3 × Iron Ingot', icon: 'ingot', x: 650, y: 226, at: 2.4 },
+	{ id: 'stick', label: '2 × Stick', icon: 'stick', x: 1020, y: 226, at: 2.4 },
+	{ id: 'smelt', label: 'smelt Raw Iron', icon: 'raw_iron', x: 545, y: 322, at: 3.2, cost: '17' },
+	{ id: 'block', label: 'Iron Block ÷ 9', icon: 'iron_block', x: 790, y: 322, at: 3.2, cost: '3', bad: 'crafted block: never mined' },
+	{ id: 'ore', label: 'mine Iron Ore', icon: 'iron_ore', x: 545, y: 418, at: 4.8, note: 'needs a stone pickaxe' },
+	{ id: 'stone', label: 'Stone Pickaxe', icon: 'pick_stone', x: 545, y: 514, at: 5.4, note: '3 cobblestone carried' },
+	{ id: 'planks', label: 'Planks', icon: 'planks', x: 1020, y: 322, at: 6.0 },
+	{ id: 'logs', label: 'Logs', icon: 'log', x: 1020, y: 418, at: 6.6, note: 'gather' },
+];
+const PEDGES = [['pick', 'ingot'], ['pick', 'stick'], ['ingot', 'smelt'], ['ingot', 'block'], ['smelt', 'ore'], ['ore', 'stone'], ['stick', 'planks'], ['planks', 'logs'], ['stone', 'stick', true]];
+const ORDER = [['logs', 'gather logs', 9.3], ['planks', 'craft planks', 10.0], ['stick', 'craft sticks', 10.7], ['stone', 'craft stone pickaxe', 11.4],
+	['ore', 'mine iron ore', 12.1], ['smelt', 'smelt iron', 12.8], ['pick', 'craft iron pickaxe', 13.5]];
+const node = id => PNODES.find(n => n.id === id);
+function scenePlanner(t) {
+	header(2, 'Needs and the planner', 'every route costed, the cheapest one worked bottom-up');
+	// left column: job → gear → collector
+	const card = (x, y, w, h, tag, body, icon, a, glow) => alpha(a, () => {
+		rrect(x, y, w, h, 12, glow ? hexA(C.green, 0.15) : C.panel, glow ? C.green : C.line, glow ? 2.5 : 1.5);
+		txt(tag, x + 16, y + 20, { size: 12, weight: 700, color: C.muted });
+		if (icon) item(icon, x + w - 50, y + 10, 38);
+		para(body, x + 16, y + 44, w - (icon ? 80 : 32), 20, { size: 16 });
+	});
+	const jobGlow = t > 14.2;
+	card(60, 104, 320, 78, 'JOB', jobGlow ? 'Back to 10 × Diamond' : 'Collect 10 × Diamond', 'diamond', seg(t, 0.2, 0.6), jobGlow);
+	arrow(220, 184, 220, 210, C.dim, 2, seg(t, 0.8, 1.1));
+	card(60, 214, 320, 98, 'GEAR PLANNER', 'Diamond ore needs an iron pickaxe — none carried.', 'pick_iron', seg(t, 1.0, 1.4));
+	card(60, 470, 320, 98, 'COLLECTOR', 'Serves needs first (here or in the Nether), then the job.', null, seg(t, 9.0, 9.4));
+	if (t > 9.2) {
+		const p = ease(seg(t, 9.3, 10.1));
+		const y = lerp(320, 456, p);
+		alpha(t < 10.6 ? 1 : 1 - seg(t, 10.6, 10.9), () => pill('need: 6 logs', 220, y, C.amber, { align: 'center' }));
+	}
+	alpha(seg(t, 1.2, 1.6), () => arrow(384, 262, 700, 140, C.dim, 2, seg(t, 1.2, 1.7), [6, 6]));
+	// edges
+	for (const [a, b, dashed] of PEDGES) {
+		const na = node(a), nb = node(b);
+		const p = seg(t, nb.at - 0.3, nb.at + 0.2);
+		const chosen = t > 7.4 && !nb.bad;
+		const color = nb.bad ? (t > 4.4 ? hexA(C.red, 0.6) : C.dim) : chosen ? C.green : C.dim;
+		if (dashed) arrow(na.x + 100, na.y, nb.x - 118, nb.y + 8, color, 2, seg(t, 5.6, 6.1), [5, 6]);
+		else arrow(na.x, na.y + 28, nb.x, nb.y - 30, color, chosen ? 2.5 : 2, p);
+	}
+	alpha(seg(t, 5.8, 6.2), () => txt('+2 sticks', 790, 432, { size: 13, color: C.muted }));
+	// nodes
+	for (const n of PNODES) {
+		const p = back(seg(t, n.at, n.at + 0.45));
+		if (p <= 0) continue;
+		const doneId = n.id === 'ingot' ? 'smelt' : n.id; // smelting makes the ingots
+		const done = ORDER.find(o => o[0] === doneId && t > o[2] + 0.5);
+		const chosen = t > 7.4 && !n.bad;
+		alpha(clamp(p), () => {
+			g.save();
+			g.translate(n.x, n.y); g.scale(0.85 + 0.15 * p, 0.85 + 0.15 * p);
+			const stroke = n.bad && t > 4.4 ? C.red : done ? C.green : chosen ? hexA(C.green, 0.8) : C.line;
+			rrect(-110, -28, 220, 56, 12, done ? hexA(C.green, 0.18) : C.panel2, stroke, chosen || done ? 2.5 : 1.5);
+			item(n.icon, -102, -20, 40);
+			txt(n.label, -54, n.note || n.bad ? -8 : 0, { size: 16, weight: 600 });
+			if (n.note) txt(n.note, -54, 12, { size: 13, color: C.muted });
+			if (n.bad) alpha(seg(t, 4.4, 4.8), () => txt(n.bad, -54, 12, { size: 13, color: C.red }));
+			g.restore();
+			if (n.cost) alpha(seg(t, 3.8, 4.2), () => txt(`cost ${n.cost}`, n.x + 102, n.y - 15, { size: 12, mono: true, color: n.bad ? C.red : C.amber, align: 'right' }));
+			if (n.bad && t > 4.4) {
+				const q = seg(t, 4.4, 4.8);
+				line(n.x - 104, n.y, n.x - 104 + 208 * q, n.y, C.red, 3);
+			}
+		});
+	}
+	// execution order
+	ORDER.forEach(([id, label, at], i) => {
+		const n = node(id);
+		const p = back(seg(t, at, at + 0.4));
+		if (p <= 0) return;
+		g.save(); g.translate(n.x - 110, n.y - 28); g.scale(clamp(p, 0, 1.3), clamp(p, 0, 1.3)); badge(i + 1, 0, 0, C.amber); g.restore();
+	});
+	alpha(seg(t, 9.0, 9.4), () => {
+		const x = 1100, y0 = 470;
+		rrect(x - 40, y0 - 20, 180, 170, 12, C.panel, C.line);
+		txt('ORDER', x - 24, y0, { size: 12, weight: 700, color: C.muted });
+		ORDER.forEach(([, label, at], i) => {
+			alpha(seg(t, at, at + 0.3), () => txt(`${i + 1}  ${label}`, x - 24, y0 + 20 + i * 19, { size: 13, color: t > at + 0.5 ? C.green : C.text }));
+		});
+	});
+	alpha(seg(t, 14.2, 14.6), () => badge(8, 72, 106, C.green));
+	captions(t, [
+		[0.3, 'What the bot can\'t do yet becomes a need. The planner prices every way to get each part — mine, craft, smelt, stonecutter, hunt or a special procedure.'],
+		[4.3, 'Crafted blocks are never searched for in the world (none generate), so the iron comes from smelting raw iron, not from iron blocks.'],
+		[7.4, 'It takes the cheapest route and works it bottom-up. Gathering steps go to the collector as needs; the job resumes the moment the tool exists.'],
+	]);
+}
+
+// ---- scene 3: finding blocks and paths --------------------------------------------------------
+const SCAN = (() => {
+	const player = [45, 40], K = 6;
+	const ores = [[36, 34], [38, 45], [41, 33], [34, 40], [40, 46], [35, 37], [43, 35], [49, 41], [52, 38], [60, 44], [51, 27], [58, 20], [40, 22], [44, 29],
+		[50, 50], [57, 60], [37, 55], [46, 51], [20, 20], [27, 25], [25, 40], [18, 44], [22, 58], [6, 38], [12, 8], [70, 12], [75, 66], [10, 70], [66, 30],
+		[30, 4], [55, 74], [3, 60], [77, 47], [62, 9]];
+	const dist = ([x, z]) => Math.hypot(x - player[0], z - player[1]);
+	const chunkOf = ([x, z]) => [x >> 4, z >> 4];
+	const gap = (v, min) => v < min ? min - v : v > min + 15 ? v - (min + 15) : 0;
+	const chunkDist = (cx, cz) => Math.hypot(gap(player[0], cx * 16), gap(player[1], cz * 16));
+	const events = []; // {cx, cz, scanned, bound, best}
+	let best = [];
+	const bound = () => best.length < K ? Infinity : best[K - 1].d;
+	for (let r = 0; r <= 2; r++) {
+		for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) {
+			if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+			const cx = 2 + dx, cz = 2 + dz;
+			const scanned = chunkDist(cx, cz) < bound();
+			if (scanned) {
+				for (const o of ores) { const [ocx, ocz] = chunkOf(o); if (ocx === cx && ocz === cz) best.push({ o, d: dist(o) }); }
+				best.sort((a, b) => a.d - b.d);
+				best = best.slice(0, K);
+			}
+			events.push({ cx, cz, r, scanned, bound: bound(), best: best.map(b => b.o) });
+		}
+	}
+	return { player, K, ores, events, dist };
+})();
+const SCAN_T = (() => { // when each chunk event happens in scene time
+	const out = [];
+	let ring1 = 0;
+	for (const e of SCAN.events) {
+		if (e.r === 0) out.push(1.0);
+		else if (e.r === 1) out.push(4.2 + 0.35 * ring1++);
+		else out.push(7.0);
+	}
+	return out;
+})();
+const AMAP = [
+	'..............S.......',
+	'..TT..........S.......',
+	'..TT..........S.......',
+	'..............S.......',
+	'......WWWW....S.......',
+	'....WWWWWWWW..S.......',
+	'...WWWWWWWWWW.S..LL...',
+	'P..WWWWWWWWWW.S..LL..G',
+	'...WWWWWWWWWW.S.......',
+	'....WWWWWWWW..S.......',
+	'......WWWW....S..TT...',
+	'..............S..TT...',
+	'..T...........S.......',
+	'..TT..................',
+	'......................',
+];
+const ASTAR = (() => {
+	const Wd = AMAP[0].length, Hd = AMAP.length;
+	const at = (x, y) => x < 0 || y < 0 || x >= Wd || y >= Hd ? 'T' : AMAP[y][x];
+	let start, goal;
+	for (let y = 0; y < Hd; y++) for (let x = 0; x < Wd; x++) { if (AMAP[y][x] === 'P') start = [x, y]; if (AMAP[y][x] === 'G') goal = [x, y]; }
+	const nearLava = (x, y) => { for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (at(x + dx, y + dy) === 'L') return true; return false; };
+	const enter = (x, y) => {
+		const c = at(x, y);
+		if (c === 'T' || c === 'L') return Infinity;
+		return (c === 'W' ? 5 : 4.6) + (c === 'S' ? 15 : 0) + (nearLava(x, y) ? 12 : 0);
+	};
+	const key = (x, y) => y * Wd + x;
+	const gs = new Map([[key(...start), 0]]), parent = new Map(), closed = new Set(), order = [];
+	const h = (x, y) => Math.hypot(x - goal[0], y - goal[1]) * 4.6 * 1.4; // weighted like the bot's own A*
+	let open = [[h(...start), ...start]];
+	while (open.length) {
+		open.sort((a, b) => a[0] - b[0]);
+		const [, x, y] = open.shift();
+		const k = key(x, y);
+		if (closed.has(k)) continue;
+		closed.add(k);
+		order.push([x, y, gs.get(k)]);
+		if (x === goal[0] && y === goal[1]) break;
+		for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+			if (!dx && !dy) continue;
+			const nx = x + dx, ny = y + dy;
+			let c = enter(nx, ny);
+			if (c === Infinity) continue;
+			if (dx && dy) { // diagonal: both sides open, no mining
+				if (at(nx, ny) === 'S' || enter(x + dx, y) === Infinity || enter(x, y + dy) === Infinity || at(x + dx, y) === 'S' || at(x, y + dy) === 'S') continue;
+				c *= Math.SQRT2;
+			}
+			const ng = gs.get(k) + c, nk = key(nx, ny);
+			if (ng < (gs.get(nk) ?? Infinity)) { gs.set(nk, ng); parent.set(nk, k); open.push([ng + h(nx, ny), nx, ny]); }
+		}
+	}
+	const path = [];
+	for (let k = key(...goal); k !== undefined; k = parent.get(k)) path.unshift([k % Wd, Math.floor(k / Wd)]);
+	const maxG = Math.max(...order.map(o => o[2]));
+	// walking schedule: seconds per step (water slower to show, stone = mining pause)
+	const times = [0];
+	for (let i = 1; i < path.length; i++) {
+		const [x, y] = path[i], c = at(x, y);
+		times.push(times[i - 1] + (c === 'S' ? 0.95 : c === 'W' ? 0.17 : 0.15) * (path[i][0] !== path[i - 1][0] && path[i][1] !== path[i - 1][1] ? 1.4 : 1));
+	}
+	return { Wd, Hd, at, start, goal, order, path, maxG, times };
+})();
+function sceneScan(t) {
+	header(3, 'Finding blocks, then a way there', 'nearest-k chunk scan · A* with costs in ticks');
+	// left: nearest-k scan
+	const ox = 92, oy = 132, cs = 96, bs = 6;
+	panel(60, 92, 560, 540, 'NEAREST 6 IRON ORE', seg(t, 0, 0.4));
+	const P = SCAN.player, px = ox + (P[0] + 0.5) * bs, pz = oy + (P[1] + 0.5) * bs;
+	let state = null;
+	SCAN.events.forEach((e, i) => { if (t >= SCAN_T[i] + (e.r === 0 ? 1.2 : 0.2)) state = e; });
+	for (let cz = 0; cz < 5; cz++) for (let cx = 0; cx < 5; cx++) {
+		const i = SCAN.events.findIndex(e => e.cx === cx && e.cz === cz);
+		const e = SCAN.events[i], at = SCAN_T[i];
+		const x = ox + cx * cs, y = oy + cz * cs;
+		rrect(x + 1, y + 1, cs - 2, cs - 2, 4, '#121922', C.line, 1);
+		if (t > at) {
+			if (e.scanned) {
+				const sweep = e.r === 0 ? seg(t, at, at + 1.2) : seg(t, at, at + 0.3);
+				g.fillStyle = hexA(C.blue, 0.13);
+				g.fillRect(x + 1, y + 1, cs - 2, (cs - 2) * sweep);
+				if (sweep < 1) line(x + 2, y + 1 + (cs - 2) * sweep, x + cs - 2, y + 1 + (cs - 2) * sweep, C.blue, 2);
+			} else {
+				alpha(seg(t, at, at + 0.25), () => {
+					g.fillStyle = 'rgba(0,0,0,0.45)'; g.fillRect(x + 1, y + 1, cs - 2, cs - 2);
+					line(x + 30, y + 30, x + cs - 30, y + cs - 30, C.dim, 2); line(x + cs - 30, y + 30, x + 30, y + cs - 30, C.dim, 2);
+					if (e.r === 1) txt('skipped', x + cs / 2, y + cs - 14, { size: 12, color: C.dim, align: 'center' });
+				});
+			}
+		}
+	}
+	// ores
+	const best = state ? state.best : [];
+	for (const o of SCAN.ores) {
+		const x = ox + o[0] * bs, y = oy + o[1] * bs;
+		const rank = best.findIndex(b => b === o);
+		block('iron_ore', x - 2, y - 2, bs + 4);
+		if (rank >= 0) {
+			g.strokeStyle = C.amber; g.lineWidth = 2; g.strokeRect(x - 4, y - 4, bs + 8, bs + 8);
+			if (t > 7.8) alpha(seg(t, 7.8 + rank * 0.12, 8.0 + rank * 0.12), () => txt(String(rank + 1), x + bs + 8, y + 2, { size: 12, weight: 700, color: C.amber }));
+		}
+	}
+	// bound circle
+	if (state && state.bound < Infinity) {
+		let r = state.bound;
+		const prev = SCAN.events[SCAN.events.indexOf(state) - 1];
+		const changeAt = SCAN_T[SCAN.events.indexOf(state)] + (state.r === 0 ? 1.2 : 0.2);
+		if (prev && prev.bound < Infinity && prev.bound !== r) r = lerp(prev.bound, r, easeOut(seg(t, changeAt, changeAt + 0.5)));
+		const grow = state.r === 0 ? easeOut(seg(t, 2.2, 2.8)) : 1;
+		circle(px, pz, r * bs * grow, hexA(C.amber, 0.06), C.amber, 1.5);
+		alpha(seg(t, 2.5, 2.9), () => txt(`bound = 6th nearest = ${r.toFixed(1)} blocks`, 600, 113, { size: 14, color: C.amber, align: 'right' }));
+	}
+	if (t > 7.8) {
+		const n = best[0];
+		alpha(seg(t, 7.8, 8.2), () => {
+			const x = ox + (n[0] + 0.5) * bs, y = oy + (n[1] + 0.5) * bs;
+			line(px, pz, x, y, C.green, 3);
+			txt('target: 4.1 blocks', x + 14, y + 16, { size: 13, weight: 700, color: C.green });
+		});
+	}
+	// the old scan's mistake
+	alpha(Math.min(seg(t, 2.8, 3.2), 1 - seg(t, 4.0, 4.4)), () => {
+		const wrong = [43, 35], right = [49, 41];
+		const wx = ox + (wrong[0] + 0.5) * bs, wy = oy + (wrong[1] + 0.5) * bs, rx = ox + (right[0] + 0.5) * bs, ry = oy + (right[1] + 0.5) * bs;
+		line(px, pz, wx, wy, C.red, 2, [4, 4]);
+		circle(rx, ry, 12, null, C.red, 2);
+		rrect(ox + 290, oy + 24, 186, 62, 8, 'rgba(14,19,26,0.95)', C.red);
+		para('old scan stopped after this chunk and missed a closer ore', ox + 302, oy + 44, 166, 17, { size: 13, color: C.red });
+	});
+	mob('bot', px, pz, 16);
+	if (t > 7.0) alpha(seg(t, 7.0, 7.4), () => pill('ring 2: every chunk is beyond the bound → stop', ox + 2.5 * cs, oy + 4.5 * cs, C.muted, { align: 'center', size: 13 }));
+
+	// right: A*
+	const ax = 680, ay = 132, ts = 24;
+	panel(660, 92, 560, 540, 'A* PATH (costs in ticks)', seg(t, 0.2, 0.6));
+	for (let y = 0; y < ASTAR.Hd; y++) for (let x = 0; x < ASTAR.Wd; x++) {
+		const c = ASTAR.at(x, y);
+		block(c === 'W' ? 'water' : c === 'L' ? 'lava' : c === 'S' ? 'stone' : c === 'T' ? 'leaves' : 'grass', ax + x * ts, ay + y * ts, ts);
+	}
+	const goal = ASTAR.goal;
+	block('iron_ore', ax + goal[0] * ts, ay + goal[1] * ts, ts);
+	const expandP = seg(t, 7.8, 10.8);
+	const shown = Math.floor(expandP * ASTAR.order.length);
+	for (let i = 0; i < shown; i++) {
+		const [x, y, gc] = ASTAR.order[i];
+		const hue = 210 + 80 * (gc / ASTAR.maxG);
+		const frontier = i > shown - 12;
+		g.fillStyle = `hsla(${hue}, 80%, 68%, ${frontier ? 0.85 : 0.5})`;
+		const r = frontier ? 6 : 3.5;
+		g.beginPath(); g.arc(ax + (x + 0.5) * ts, ay + (y + 0.5) * ts, r, 0, Math.PI * 2); g.fill();
+	}
+	const pathP = seg(t, 10.9, 11.7);
+	if (pathP > 0) {
+		g.save();
+		g.strokeStyle = C.amber; g.lineWidth = 4; g.lineCap = 'round'; g.lineJoin = 'round';
+		g.beginPath();
+		const n = Math.max(1, Math.floor(pathP * ASTAR.path.length));
+		ASTAR.path.slice(0, n).forEach(([x, y], i) => { const X = ax + (x + 0.5) * ts, Y = ay + (y + 0.5) * ts; if (i) g.lineTo(X, Y); else g.moveTo(X, Y); });
+		g.stroke();
+		g.restore();
+	}
+	// the bot walks it
+	const walkT = (t - 11.8) * (ASTAR.times[ASTAR.times.length - 1] / 3.6 > 1 ? ASTAR.times[ASTAR.times.length - 1] / 3.6 : 1);
+	let bx = ASTAR.start[0], by = ASTAR.start[1], mining = null;
+	if (t > 11.8) {
+		const T = ASTAR.times;
+		let i = 1;
+		while (i < T.length - 1 && walkT > T[i]) i++;
+		const p = clamp((walkT - T[i - 1]) / (T[i] - T[i - 1]));
+		const [x0, y0] = ASTAR.path[i - 1], [x1, y1] = ASTAR.path[i];
+		if (ASTAR.at(x1, y1) === 'S' && p < 0.75) { mining = { x: x1, y: y1, p: p / 0.75 }; bx = x0; by = y0; }
+		else { const q = ASTAR.at(x1, y1) === 'S' ? (p - 0.75) / 0.25 : p; bx = lerp(x0, x1, q); by = lerp(y0, y1, q); }
+	}
+	if (mining && ASTAR.at(mining.x, mining.y) === 'S') {
+		const X = ax + mining.x * ts, Y = ay + mining.y * ts;
+		g.fillStyle = `rgba(0,0,0,${0.15 + 0.5 * mining.p})`; g.fillRect(X, Y, ts, ts);
+		rrect(X - 6, Y - 12, ts + 12, 6, 3, '#222', null); rrect(X - 6, Y - 12, (ts + 12) * mining.p, 6, 3, C.amber, null);
+	}
+	const brokenAt = ASTAR.path.findIndex(([x, y]) => ASTAR.at(x, y) === 'S');
+	if (brokenAt > 0 && t > 11.8 && walkT > ASTAR.times[brokenAt] - 0.95 * 0.25) {
+		const [x, y] = ASTAR.path[brokenAt];
+		block('grass', ax + x * ts, ay + y * ts, ts);
+	}
+	mob('bot', ax + (bx + 0.5) * ts, ay + (by + 0.5) * ts, 18);
+	// legend
+	alpha(seg(t, 0.6, 1.0), () => {
+		const lx = 680, ly = 516;
+		const rows = [['grass', 'walk', '4.6 / block'], ['water', 'sprint-swim (fed) · paddle', '5 · 9'], ['stone', 'mine through', '+ break time'], ['lava', 'keep away', '+12 beside it']];
+		rows.forEach(([b, s, c], i) => {
+			const y = ly + Math.floor(i / 2) * 34, x = lx + (i % 2) * 262;
+			block(b, x, y, 22);
+			txt(s, x + 32, y + 8, { size: 13 });
+			txt(c, x + 32, y + 24, { size: 12, mono: true, color: C.muted });
+		});
+	});
+	captions(t, [
+		[0.3, 'The scanner visits chunks in rings outward and keeps the 6 nearest. A chunk that can\'t beat the 6th nearest is skipped, and the scan stops at the first ring that is all too far.'],
+		[7.6, 'A* then plans the walk in ticks: walking, sprint-swimming, mining through, bridging — and it keeps clear of lava. The executor walks the plan and mines what was planned.'],
+	]);
+}
+
+// ---- scene 4: survival ------------------------------------------------------------------------
+const ARENA = { x: 70, y: 112, ts: 26, cols: 26, rows: 16 };
+function aPos(c, r) { return [ARENA.x + (c + 0.5) * ARENA.ts, ARENA.y + (r + 0.5) * ARENA.ts]; }
+function sceneSurvival(t) {
+	header(4, 'Fights, flight and healing', 'only threats that matter get a reaction');
+	const { x, y, ts, cols, rows } = ARENA;
+	for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) block('grass', x + i * ts, y + j * ts, ts);
+	for (let j = 2; j < 10; j++) block('cobble', x + 12 * ts, y + j * ts, ts);
+	block('iron_ore', x + 5 * ts, y + 8 * ts, ts);
+	// bot path: mining → fight in place → flee → heal → walk back
+	const home = aPos(6, 8), far = aPos(1, 14);
+	let [bx, by] = home;
+	if (t > 8.5 && t < 11.3) { const p = ease(seg(t, 8.5, 9.9)); bx = lerp(home[0], far[0], p); by = lerp(home[1], far[1], p); }
+	if (t >= 11.3) { const p = ease(seg(t, 11.3, 12.8)); bx = lerp(far[0], home[0], p); by = lerp(far[1], home[1], p); }
+	// zombie behind the wall
+	const [zx, zy] = aPos(15, 6);
+	mob('zombie', zx, zy, 24, 1 - seg(t, 12.5, 13));
+	alpha(Math.min(seg(t, 0.4, 0.8), 1 - seg(t, 3.0, 3.4)), () => {
+		line(home[0], home[1], zx, zy, C.red, 2, [6, 6]);
+		const [wx, wy] = [x + 12.5 * ts, lerp(home[1], zy, (x + 12.5 * ts - home[0]) / (zx - home[0]))];
+		line(wx - 9, wy - 9, wx + 9, wy + 9, C.red, 3); line(wx + 9, wy - 9, wx - 9, wy + 9, C.red, 3);
+		pill('behind a wall: ignored', zx + 20, zy - 34, C.muted);
+	});
+	// creeper: approaches, gets hit twice, dies
+	if (t > 3.0 && t < 6.8) {
+		const p = ease(seg(t, 3.0, 4.6));
+		let [cx, cy] = [lerp(x + 20 * ts, home[0] + 80, p), lerp(y + 15 * ts, home[1] + 30, p)];
+		const k1 = 22 * easeOut(seg(t, 5.0, 5.25)), k2 = 22 * easeOut(seg(t, 5.8, 6.05));
+		cx += k1 + k2;
+		alpha(1 - seg(t, 6.1, 6.3), () => mob('creeper', cx, cy, 24));
+		poof(cx, cy, seg(t, 6.1, 6.8));
+		alpha(seg(t, 3.8, 4.2) * (1 - seg(t, 6.0, 6.3)), () => circle(home[0], home[1], 4 * ts, hexA(C.amber, 0.06), C.amber, 1.5));
+		for (const hit of [5.0, 5.8]) {
+			if (t > hit - 0.15 && t < hit + 0.2) {
+				g.strokeStyle = '#ffffff'; g.lineWidth = 3; g.beginPath(); g.arc(home[0] + 14, home[1] + 6, 26, -0.7, 0.6); g.stroke();
+				txt('crit!', home[0] + 30, home[1] - 26, { size: 14, weight: 700, color: C.amber });
+			}
+		}
+	}
+	// skeleton shoots
+	const [sx, sy] = aPos(22, 13); // below the wall's end: a clear line of sight
+	if (t > 6.6) mob('skeleton', sx, sy, 24, seg(t, 6.6, 6.9) * (1 - seg(t, 12.6, 13)));
+	for (const shot of [7.0, 7.6, 8.2]) {
+		const p = seg(t, shot, shot + 0.35);
+		if (p > 0 && p < 1) { const ax = lerp(sx, home[0], p), ay = lerp(sy, home[1], p); line(ax, ay, ax - (sx - home[0]) * 0.04, ay - (sy - home[1]) * 0.04, '#e8e0c8', 3); }
+	}
+	// out of reach while healing
+	alpha(seg(t, 9.9, 10.2) * (1 - seg(t, 11.0, 11.3)), () => {
+		line(far[0], far[1], sx, sy, hexA(C.green, 0.7), 2, [6, 6]);
+		pill('out of reach: safe to eat', lerp(far[0], sx, 0.45), lerp(far[1], sy, 0.45), C.green, { align: 'center', size: 13 });
+		const p = (t * 3) % 1;
+		item('bread', far[0] - 13, far[1] - 50 - 6 * Math.sin(p * Math.PI), 26);
+	});
+	mob('bot', bx, by, 24);
+	if (t < 3.0 || t > 12.8) { // mining crack
+		const p = (t % 1.1) / 1.1;
+		alpha(0.7, () => line(x + 5.3 * ts, y + 8.2 * ts, x + (5.3 + 0.5 * p) * ts, y + (8.2 + 0.5 * p) * ts, '#151515', 2));
+	}
+	// HUD
+	const hp = t < 7.1 ? 20 : t < 8.4 ? lerp(20, 7, seg(t, 7.1, 8.4)) : t < 10.0 ? 7 : lerp(7, 15, seg(t, 10.0, 11.0));
+	rrect(x + 8, y + 8, 196, 30, 8, 'rgba(14,19,26,0.85)', null);
+	hearts(x + 22, y + 24, hp, 13);
+	const owner = t < 3.8 ? ['Collect', 'mining iron ore', C.blue] : t < 6.4 ? ['Combat', 'creeper: quick kill', C.amber] : t < 8.5 ? ['Collect', 'mining (arrows incoming)', C.blue]
+		: t < 9.9 ? ['Combat', 'low health: getting away', C.amber] : t < 11.1 ? ['EatReflex', 'eating, 12+ blocks away', C.red] : ['Collect', 'healed: back to work', C.blue];
+	pill(`${owner[0]}: ${owner[1]}`, x + 220, y + 24, owner[2], { size: 14 });
+
+	// decision log
+	const lx = 790, ly = 96;
+	panel(lx, ly, 430, 450, 'DECISIONS', seg(t, 0.2, 0.6));
+	const log = [
+		[0.6, 'zombie 9 blocks · no line of sight', C.muted],
+		[1.2, '→ not a threat: keep mining', C.green],
+		[4.0, 'creeper 3.6 blocks (within 4)', C.muted],
+		[4.3, 'kill time 0.9 s (creepers fuse in 1.5 s)', C.muted],
+		[4.6, 'ThreatNet says 0.71 → FIGHT', C.amber],
+		[6.4, 'creeper dead · fight went well: learn 1', C.green],
+		[8.4, 'skeleton shooting · health 7 ≤ 8', C.muted],
+		[8.6, '→ FLEE, then keep away and heal', C.amber],
+		[10.0, 'eating bread · nothing can reach us', C.muted],
+		[11.1, 'health 15 ≥ 14 → back to work', C.green],
+	];
+	log.forEach(([at, s, color], i) => alpha(seg(t, at, at + 0.3), () => txt(s, lx + 20, ly + 56 + i * 38, { size: 15, color })));
+	captions(t, [
+		[0.3, 'Mobs that can\'t reach it (behind walls, out of sight) are ignored. A threat that dies quickly is fought; ThreatNet, a small neural net trained on its own past fights, has the last word.'],
+		[6.8, 'At low health it runs, stays out of reach until it has eaten and healed, and only then lets the job walk back — no flee, work, flee loop.'],
+	]);
+}
+
+// ---- scene 5: water ---------------------------------------------------------------------------
+function sceneWater(t) {
+	header(5, 'Water and boats', 'sprint-swim the surface, sail the sea');
+	const top = 96, surf = 300, bed = 560, x0 = 60, x1 = 1220;
+	g.save();
+	g.beginPath(); g.rect(x0, top, x1 - x0, bed + 36 - top); g.clip();
+	const sky = g.createLinearGradient(0, top, 0, surf);
+	sky.addColorStop(0, '#1b3555'); sky.addColorStop(1, '#3b6c9c');
+	g.fillStyle = sky; g.fillRect(x0, top, x1 - x0, surf - top);
+	const sea = g.createLinearGradient(0, surf, 0, bed);
+	sea.addColorStop(0, '#2f6fb8'); sea.addColorStop(1, '#173a66');
+	g.fillStyle = sea; g.fillRect(x0, surf, x1 - x0, bed - surf);
+	for (let i = 0; i < 39; i++) block(i % 5 === 2 ? 'stone' : 'sand', x0 + i * 30, bed, 30);
+	g.fillStyle = '#c2b382'; g.fillRect(x0, bed + 30, x1 - x0, 6);
+	// waves
+	g.strokeStyle = 'rgba(220,240,255,0.5)'; g.lineWidth = 2; g.beginPath();
+	for (let x = x0; x <= x1; x += 8) { const y = surf + 3 * Math.sin(x * 0.03 + t * 3); x === x0 ? g.moveTo(x, y) : g.lineTo(x, y); }
+	g.stroke();
+	// shipwreck
+	const wx = 860, wy = bed - 10;
+	alpha(seg(t, 6.2, 6.8), () => {
+		for (let i = 0; i < 8; i++) block('planks', wx + i * 24, wy - 24 - (i === 0 || i === 7 ? 24 : 0), 24);
+		for (let i = 1; i < 7; i++) block('planks', wx + i * 24, wy - 48, 24);
+		block('log', wx + 96, wy - 120, 24); block('log', wx + 96, wy - 96, 24); block('log', wx + 96, wy - 72, 24);
+		const glow = 0.5 + 0.5 * Math.sin(t * 6);
+		g.strokeStyle = hexA(C.amber, 0.4 + 0.5 * glow); g.lineWidth = 2; g.strokeRect(wx - 2, wy - 122, 196, 124);
+		pill('no trees? a wreck\'s planks and logs are wood', wx + 96, wy - 150, C.amber, { align: 'center', size: 14 });
+	});
+	// the bot: paddling (head up), dip under, then swimming flat along the surface
+	let bx, by, swimming = false;
+	if (t < 1.6) { bx = 150 + 20 * t; by = surf - 6 + 3 * Math.sin(t * 5); }
+	else if (t < 2.6) { const p = seg(t, 1.6, 2.6); bx = 182 + 30 * p; by = surf - 6 + 30 * Math.sin(p * Math.PI); swimming = p > 0.5; }
+	else if (t < 6.0) { const p = seg(t, 2.6, 6.0); bx = 212 + 520 * p; by = surf + 6; swimming = true; }
+	else { bx = 732; by = surf + 6; swimming = true; }
+	const inBoat = t > 7.4;
+	if (inBoat) { const p = ease(seg(t, 7.6, 10.6)); bx = lerp(732, 1120, p); by = surf - 6; swimming = false; }
+	g.save();
+	g.translate(bx, by);
+	if (inBoat) {
+		mob('bot', 0, 2, 24);
+		item('boat', -40, -26, 80);
+	} else if (swimming) {
+		g.rotate(-0.14);
+		rrect(-34, -9, 60, 18, 8, '#3b6fd8', null);
+		mob('bot', 34, -2, 20);
+		g.rotate(0.14);
+		for (let i = 0; i < 3; i++) line(-50 - i * 16, 2 + i * 3, -38 - i * 16, 2 + i * 3, 'rgba(230,245,255,0.55)', 2);
+	} else {
+		rrect(-10, 0, 20, 34, 6, '#3b6fd8', null);
+		mob('bot', 0, -10, 22);
+	}
+	g.restore();
+	// annotations
+	alpha(Math.min(seg(t, 0.2, 0.5), 1 - seg(t, 1.6, 1.9)), () => pill('paddling, head up: 2.2 m/s', 150, surf - 64, C.muted, { size: 14 }));
+	alpha(Math.min(seg(t, 1.6, 1.9), 1 - seg(t, 2.8, 3.1)), () => pill('sink under once: swimming starts with the eyes underwater', 200, surf + 92, C.cyan, { size: 14 }));
+	alpha(Math.min(seg(t, 2.8, 3.2), 1 - seg(t, 6.0, 6.3)), () => {
+		pill('look 8° up → rides at the top, head clear', bx - 140, surf - 64, C.cyan, { size: 14 });
+		line(bx + 34, by - 4, bx + 110, by - 15, hexA(C.cyan, 0.8), 2, [5, 5]);
+	});
+	// air and speed HUD
+	rrect(x0 + 20, top + 18, 360, 104, 10, 'rgba(14,19,26,0.85)', C.line);
+	txt('air', x0 + 40, top + 44, { size: 14, color: C.muted });
+	const air = t < 2.6 ? lerp(300, 280, seg(t, 1.8, 2.6)) : lerp(280, 300, seg(t, 2.6, 3.4));
+	bubbles(x0 + 80, top + 44, air, 13);
+	txt('speed', x0 + 40, top + 76, { size: 14, color: C.muted });
+	const sp = inBoat ? 8.0 : t < 2.6 ? 2.2 : 5.6;
+	g.fillStyle = C.panel2; g.fillRect(x0 + 96, top + 70, 220, 12);
+	g.fillStyle = inBoat ? C.amber : t < 2.6 ? C.muted : C.cyan; g.fillRect(x0 + 96, top + 70, 220 * sp / 8.5, 12);
+	txt(`${sp.toFixed(1)} m/s ${inBoat ? '(boat)' : t < 2.6 ? '(paddle)' : '(sprint-swim)'}`, x0 + 96, top + 100, { size: 13, mono: true, color: C.text });
+	alpha(Math.min(seg(t, 6.1, 6.4), 1 - seg(t, 7.6, 7.9)), () => {
+		rrect(560, 150, 330, 74, 10, 'rgba(14,19,26,0.92)', C.amber);
+		txt('20 s of open water', 580, 175, { size: 15, weight: 700, color: C.amber });
+		item('planks', 580, 186, 30); txt('×5 →', 616, 202, { size: 15, color: C.muted });
+		item('boat', 660, 184, 36);
+		txt('gear makes a boat', 706, 202, { size: 15 });
+	});
+	// no trees in sight: down to the wreck for its wood
+	if (t > 8.3 && t < 10.9) {
+		const p = seg(t, 8.4, 10.8), dive = Math.sin(p * Math.PI);
+		const dx = 1000 - 10 * p, dy = surf + 6 + (wy - 60 - surf) * dive;
+		mob('bot', dx, dy, 16);
+		for (let i = 0; i < 3; i++) circle(dx + 6 + i * 3, dy - 14 - ((t * 40 + i * 13) % 30), 2.5, null, 'rgba(220,240,255,0.7)', 1);
+		if (dive > 0.85) alpha(0.8, () => line(wx + 120, wy - 44, wx + 130, wy - 34, '#1b1b1b', 2));
+	}
+	g.restore();
+	captions(t, [
+		[0.3, 'Long swims are sprint-swum along the surface: dip under once to start, then look slightly up so the head stays clear and the air bar stays full.'],
+		[6.0, 'Twenty seconds of open water and the gear planner builds a boat. Out of sight of trees, a shipwreck\'s planks and logs count as wood.'],
+	]);
+}
+
+// ---- scene 6: the task tree -------------------------------------------------------------------
+const TROWS = [
+	{ d: 0, title: 'Starter base', kind: 'group', icon: 'book', at: 0.3, children: 3 },
+	{ d: 1, title: '64 log', icon: 'log', amount: 64, run: [3.2, 5.0], at: 0.6 },
+	{ d: 1, title: '64 cobblestone', icon: 'cobble', amount: 64, run: [5.0, 6.6], at: 0.9 },
+	{ d: 1, title: 'Build starter_base', icon: 'bricks', amount: 196, run: [8.4, 10.2], at: 1.2, last: true, folds: true },
+	{ d: 2, title: '8 torch', icon: 'torch', amount: 8, run: [6.6, 7.6], at: 1.5 },
+	{ d: 2, title: '16 glass (from base)', icon: 'glass', amount: 16, run: [7.6, 8.4], at: 1.8, last: true, fetch: true },
+	{ d: 0, title: '32 diamond', icon: 'diamond', amount: 32, run: [10.6, 30], at: 2.1, end: 9 },
+];
+function sceneTree(t) {
+	header(6, 'The task tree', 'big goals as subtasks, run in order');
+	const px = 150, py = 96, pw = 980, ph = 474;
+	rrect(px, py, pw, ph, 12, 'rgba(16,16,16,0.92)', '#505050', 2);
+	txt('autoCraft', px + 18, py + 22, { size: 16, weight: 700 });
+	txt(t > 3.2 && t < 10.4 ? 'collect' : t > 10.4 ? 'collect' : 'idle', px + 112, py + 22, { size: 15, color: C.muted });
+	['Tasks', 'Build', 'Team', 'Bot', 'Settings'].forEach((s, i) => {
+		rrect(px + pw - 5 * 110 - 10 + i * 110, py + 8, 104, 30, 4, i ? '#3a3a3a' : '#202020', null);
+		txt(s, px + pw - 5 * 110 - 10 + i * 110 + 52, py + 24, { size: 15, color: i ? '#ffffff' : '#808080', align: 'center' });
+	});
+	const tx = px + 24, ty = py + 76, rowH = 46, colW = 520;
+	const todo = TROWS.filter(r => r.kind !== 'group' && !(r.run && t > r.run[1])).length;
+	txt(`Tasks — ${t > 3.0 && t < 30 ? 'running' : todo + ' to do'}`, tx, py + 58, { size: 17, weight: 600 });
+	const running = TROWS.find(r => r.run && t >= r.run[0] && t < r.run[1]);
+	const nextRow = !running ? null : TROWS.filter(r => r.run && t < r.run[0]).sort((a, b) => a.run[0] - b.run[0])[0];
+	TROWS.forEach((r, i) => {
+		const a = seg(t, r.at, r.at + 0.3);
+		const y = ty + i * rowH, nx = tx + r.d * 28, mid = y + rowH / 2 - 4;
+		alpha(a, () => {
+			// guides
+			if (r.d > 0) {
+				const gx = tx + (r.d - 1) * 28 + 6;
+				line(gx, y - 4, gx, r.last ? mid : y + rowH - 4, '#555555', 2);
+				line(gx, mid, nx, mid, '#555555', 2);
+			}
+			// (a last child's parent line stops at it: nothing to draw for the depth-0 guide beside depth-2 rows)
+			const done = r.kind === 'group' ? t > 10.2 : r.run && t >= r.run[1];
+			const active = r.run && t >= r.run[0] && t < r.run[1];
+			const color = done ? C.green : active ? (blink(t, 0.4) ? C.amber : '#b08a30') : r === nextRow || (!running && i === 1) ? '#ffffff' : (r.kind === 'group' || r.folds) && !done ? '#5a5a5a' : '#9a9a9a';
+			if (r.kind === 'group' || r.folds) { g.fillStyle = '#a0a0a0'; for (let k = 0; k < 3; k++) g.fillRect(nx + k, mid - 2 + k, 9 - 2 * k, 1.5); }
+			circle(nx + 20, mid, 6, color);
+			item(r.icon, nx + 32, y + 2, 34);
+			if (r.fetch) item('chest', nx + 48, y + 18, 20);
+			txt(r.title, nx + 76, mid - 4, { size: 17, color: done ? '#9fcf9f' : active ? C.amber : '#ffffff' });
+			let have = 0, total = r.amount || r.children;
+			if (r.kind === 'group') have = TROWS.slice(1, 4).filter(c => t >= c.run[1]).length;
+			else if (r.run) have = Math.round((r.end ? r.end / r.amount : 1) * r.amount * ease(seg(t, r.run[0], Math.min(r.run[1], r.run[0] + 1.6))));
+			const right = tx + colW;
+			txt(`${have}/${total}`, right, mid - 4, { size: 15, color: C.muted, align: 'right' });
+			g.fillStyle = '#2b2b2b'; g.fillRect(nx + 76, mid + 14, right - nx - 76, 3);
+			g.fillStyle = have >= total ? C.green : C.amber; g.fillRect(nx + 76, mid + 14, (right - nx - 76) * have / total, 3);
+		});
+	});
+	// right side: item picker (decor) and run buttons
+	const rx = px + 600, ry = py + 56;
+	rrect(rx, ry, 170, 30, 4, '#202020', null); txt('Add items', rx + 85, ry + 15, { size: 15, color: '#808080', align: 'center' });
+	rrect(rx + 178, ry, 170, 30, 4, '#3a3a3a', null); txt('Edit task', rx + 263, ry + 15, { size: 15, color: '#fff', align: 'center' });
+	rrect(rx, ry + 42, 270, 30, 2, '#000', '#a0a0a0', 1); txt('search…', rx + 10, ry + 57, { size: 14, color: '#555' });
+	rrect(rx + 278, ry + 42, 70, 30, 2, '#000', '#a0a0a0', 1); txt('64', rx + 290, ry + 57, { size: 14, color: '#ddd' });
+	const kinds = ['log', 'planks', 'cobble', 'stone', 'iron_ore', 'diamond', 'ingot', 'torch', 'glass', 'bricks', 'sand', 'raw_iron', 'stick', 'bread', 'boat', 'chest', 'book', 'pick_iron'];
+	for (let j = 0; j < 5; j++) for (let i = 0; i < 9; i++) {
+		const sx = rx + i * 38, sy = ry + 90 + j * 38, k = kinds[(i + j * 9) % kinds.length];
+		g.fillStyle = '#373737'; g.fillRect(sx, sy, 38, 38); g.fillStyle = '#8b8b8b'; g.fillRect(sx + 2, sy + 2, 34, 34);
+		if (j < 2) item(k, sx + 3, sy + 3, 32);
+	}
+	const press = t > 2.9 && t < 3.15;
+	rrect(rx, py + ph - 52, 170, 36, 4, press ? '#5a7fd0' : '#3a3a3a', null);
+	txt(t > 3.0 ? 'Stop' : 'Run all', rx + 85, py + ph - 34, { size: 15, color: '#fff', align: 'center' });
+	rrect(rx + 178, py + ph - 52, 170, 36, 4, '#3a3a3a', null); txt('Run selected', rx + 263, py + ph - 34, { size: 15, color: t > 3 ? '#777' : '#fff', align: 'center' });
+	if (press) circle(rx + 85, py + ph - 34, 30 * seg(t, 2.9, 3.15), null, hexA(C.blue, 1 - seg(t, 2.9, 3.15)), 3);
+	// legend
+	const lg = [[C.green, 'done'], [C.amber, 'running'], ['#ffffff', 'next'], ['#9a9a9a', 'later'], ['#5a5a5a', 'after its subtasks']];
+	let lx = tx;
+	for (const [c, s] of lg) { circle(lx + 6, py + ph - 26, 6, c); txt(s, lx + 18, py + ph - 26, { size: 14, color: C.muted }); lx += measure(s, { size: 14 }) + 44; }
+	captions(t, [
+		[0.3, 'Big goals become a tree: pick items to collect, add builds and groups, then Run. Subtasks run before their parent, one job, fetch or build at a time.'],
+		[6.0, 'Each finished job or build moves the tree on. A run belongs to the world it started in and carries on after a relog; !ac why shows its latest decisions.'],
+	]);
+}
+
+// ---- scene 7: the whole picture ----------------------------------------------------------------
+function sceneOutro(t) {
+	header(7, 'The whole picture', null);
+	const boxes = [
+		['Task tree', 'what you asked for', C.purple],
+		['Job · Build', 'one at a time', C.blue],
+		['Needs', 'tools, materials, travel', C.amber],
+		['Planner', 'cheapest route', C.green],
+		['Collector + A*', 'scan, walk, mine', C.cyan],
+	];
+	const bw = 196, gap = 40, x0 = (W - (boxes.length * bw + (boxes.length - 1) * gap)) / 2, y = 220;
+	boxes.forEach(([title, sub, color], i) => {
+		const p = back(seg(t, 0.2 + i * 0.35, 0.65 + i * 0.35));
+		if (p <= 0) return;
+		const x = x0 + i * (bw + gap);
+		alpha(clamp(p), () => {
+			rrect(x, y - 10 * (1 - p), bw, 96, 14, hexA(color, 0.14), color, 2);
+			txt(title, x + bw / 2, y + 36 - 10 * (1 - p), { size: 20, weight: 700, align: 'center' });
+			txt(sub, x + bw / 2, y + 64 - 10 * (1 - p), { size: 14, color: C.muted, align: 'center' });
+		});
+		if (i > 0) arrow(x - gap + 4, y + 48, x - 6, y + 48, C.dim, 2.5, seg(t, 0.2 + i * 0.35, 0.5 + i * 0.35));
+	});
+	const p = seg(t, 2.2, 2.8);
+	alpha(p, () => {
+		const x = x0, w = boxes.length * bw + (boxes.length - 1) * gap;
+		rrect(x, 360, w, 70, 14, C.panel, C.line);
+		txt('the tick loop — 20 times a second, reflexes and fights first, work last', x + w / 2, 395, { size: 19, align: 'center' });
+		[0, 1, 2, 3, 4].forEach(i => arrow(x0 + i * (bw + gap) + bw / 2, 352, x0 + i * (bw + gap) + bw / 2, 322, C.dim, 2, p, [4, 5]));
+	});
+	alpha(seg(t, 3.2, 3.8), () => {
+		txt('Stuck? Type  !ac why  in chat for what it is doing and its last decisions.', W / 2, 500, { size: 20, align: 'center', color: C.text });
+		logo(W / 2 - 160, 556, 1.5, C.blue);
+		txt('autoCraft', W / 2 + 26, 580, { size: 40, weight: 800, align: 'center', color: C.blue });
+	});
+}
+
+// ---- timeline ---------------------------------------------------------------------------------
+const SCENES = [
+	{ name: 'Intro', dur: 4.6, draw: sceneIntro },
+	{ name: 'Tick loop', dur: 14, draw: sceneLoop },
+	{ name: 'Planner', dur: 16, draw: scenePlanner },
+	{ name: 'Scan + A*', dur: 16.2, draw: sceneScan },
+	{ name: 'Survival', dur: 14, draw: sceneSurvival },
+	{ name: 'Water', dur: 11, draw: sceneWater },
+	{ name: 'Task tree', dur: 12.4, draw: sceneTree },
+	{ name: 'Overview', dur: 6.5, draw: sceneOutro },
+];
+/** Playback is this much slower than the scene timings, and each scene holds its last frame for HOLD seconds. */
+const SLOW = 1.5, HOLD = 2.0, FADE = 0.5;
+const realDur = s => s.dur * SLOW + HOLD;
+const STARTS = [];
+let TOTAL = 0;
+for (const s of SCENES) { STARTS.push(TOTAL); TOTAL += realDur(s); }
+
+function renderAt(T) {
+	T = clamp(T, 0, TOTAL - 1e-6);
+	let i = 0;
+	while (i + 1 < SCENES.length && T >= STARTS[i + 1]) i++;
+	const s = SCENES[i], real = T - STARTS[i];
+	const t = Math.min(real / SLOW, s.dur - 0.36); // scene time; frozen during the hold so the captions can be read
+	g.setTransform(1, 0, 0, 1, 0, 0);
+	g.globalAlpha = 1;
+	g.fillStyle = C.bg; g.fillRect(0, 0, W, H);
+	g.save();
+	s.draw(t);
+	g.restore();
+	// scene dots
+	SCENES.forEach((sc, k) => circle(W - 60 - (SCENES.length - 1 - k) * 18, 50, k === i ? 5 : 3.5, k === i ? C.blue : C.dim));
+	// fade between scenes
+	const fade = Math.max(1 - seg(real, 0, FADE), seg(real, realDur(s) - FADE, realDur(s)));
+	if (fade > 0) { g.fillStyle = `rgba(14,19,26,${fade})`; g.fillRect(0, 0, W, H); }
+	g.fillStyle = C.blue; g.fillRect(0, H - 3, W * T / TOTAL, 3);
+	return i;
+}
+window.renderAt = renderAt;
+window.TOTAL = TOTAL;
+
+// ---- player -----------------------------------------------------------------------------------
+const params = new URLSearchParams(location.search);
+if (params.has('capture')) {
+	document.body.classList.add('capture');
+	renderAt(Number(params.get('t') || 0));
+} else {
+	let t = Number(params.get('t') || 0), playing = true, last = performance.now();
+	const playBtn = document.getElementById('play'), scrub = document.getElementById('scrub'), time = document.getElementById('time'), chips = document.getElementById('chips');
+	const chipEls = SCENES.map((s, k) => {
+		const b = document.createElement('button');
+		b.textContent = s.name;
+		b.onclick = () => { t = STARTS[k] + 0.01; };
+		chips.appendChild(b);
+		return b;
+	});
+	playBtn.onclick = () => { playing = !playing; playBtn.textContent = playing ? 'Pause' : 'Play'; };
+	scrub.oninput = () => { t = scrub.value / 1000 * TOTAL; };
+	document.addEventListener('keydown', e => {
+		if (e.code === 'Space') { e.preventDefault(); playBtn.click(); }
+		if (e.code === 'ArrowRight') t = Math.min(TOTAL, t + 2);
+		if (e.code === 'ArrowLeft') t = Math.max(0, t - 2);
+	});
+	const frame = now => {
+		if (playing) t += (now - last) / 1000;
+		last = now;
+		if (t >= TOTAL) t = 0;
+		const i = renderAt(t);
+		chipEls.forEach((b, k) => b.classList.toggle('on', k === i));
+		scrub.value = Math.round(t / TOTAL * 1000);
+		time.textContent = `${t.toFixed(1)} / ${TOTAL.toFixed(0)} s`;
+		requestAnimationFrame(frame);
+	};
+	requestAnimationFrame(frame);
+}
+</script>
+</body>
+</html>
