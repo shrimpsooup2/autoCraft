@@ -11,10 +11,21 @@ farms or your own schematics (alone or as a team of bots), stores loot and logs 
 - No external AI libs: the neural net is a tiny MLP in plain Java. Recipes come from the game jar's own data.
 
 ## Control panel (key **K**, rebindable under Controls → autoCraft)
-- **Collect**: search every item the bot can get (blue corner = made: crafted, smelted, hunted or by a procedure;
-  the tooltip says how), click to add with the amount in the box (right-click adds a stack), scroll over a job
-  line to change it, × / right-click removes; Enter adds the typed name (also groups like `log`). *Start job*
-  (or *Replace job*).
+- **Tasks**: everything the bot is asked to do, as one tree. Left: the tree — item icons, a status dot per task
+  (green done, blinking amber running, white next, gray later, dark = waits for its subtasks), fold arrows,
+  guide lines from subtasks to their parent, progress bars (collected or carried / amount, subtasks done, blocks
+  placed); hover a row for what it does and why it waits. Right, *Add items*: search every item the bot can get
+  (blue corner = made: crafted, smelted, hunted or by a procedure; the tooltip says how), click to add it with
+  the amount in the box (right-click: a stack, Enter: the typed name, also groups like `log`) under the selected
+  task, or at the top with nothing selected; adding an item again raises its amount.
+  Right, *Edit task* (opens when a row is clicked): title, item and amount or schematic (*From placement* takes
+  the ghost's spot and rotation; otherwise a spot is found when it runs), context notes; *Expand* breaks a task
+  into its parts (a crafted item's ingredients, a build's materials); *Up*/*Down* reorder, *Delete* removes. On
+  collect tasks *Source* switches between gathering and **getting it from a base** (a named base, or empty = the
+  nearest base whose chests have it), e.g. Expand a build, then mark the materials you keep at base. *+ Group* /
+  *+ Build* add under the selection, *Clear done* tidies. *Run all* works through the tree (subtasks before their
+  parent, one job, fetch or build at a time), *Run selected* only that task and its subtasks; stopping the bot
+  pauses the run. Saved per world in `config/autocraft/tasktree.json`.
 - **Build**: schematic list (built-ins + `config/autocraft/schematics/`, *Open folder*, *Reload*), size and
   material preview; *Place in world* (ghost at the crosshair) or *Find a spot* (bot-picked ground, then
   adjust). While placing, the tab becomes placement settings: X/Y/Z with −/+ (shift: 8), rotation, mirror,
@@ -23,15 +34,6 @@ farms or your own schematics (alone or as a team of bots), stores loot and logs 
   structural wood (auto = only where no trees grow, e.g. sandstone in deserts), filler blocks for cells nobody
   sees, and explicit block replacements (pick a schematic block, then any block). The ghost updates live;
   *Save as default* stores the choices in `config/autocraft/materials.json`.
-- **Tasks**: a tree of big tasks and subtasks. *+ Group* / *+ Collect* / *+ Build* add under the selected task
-  (or at the top with nothing selected); the right side edits the selection — title, item and amount or
-  schematic (*From placement* takes the ghost's spot and rotation; otherwise a spot is found when it runs),
-  context notes — and *Expand* breaks a task into its parts (a crafted item's ingredients, a build's materials);
-  *Up*/*Down* reorder, *Delete* removes; click +/- to fold. On collect tasks *Source* switches between gathering
-  and **getting it from a base** (a named base, or empty = the nearest base whose chests have it), e.g. Expand a
-  build, then mark the materials you keep at base. *Run tasks* works through it: subtasks before their parent,
-  one job, fetch or build at a time; stopping the bot pauses the tree. Saved per world in
-  `config/autocraft/tasktree.json`.
 - **Team**: host a team (shows the address and a 5-character code) or join one; lists members and their roles.
 - **Bot**: live state, job progress bars, build progress, current prerequisite, health/food/position, last death;
   *Pause/Resume*, *Stop*, *Add base here* / *Remove nearest*, the list of bases and of built structures.
@@ -69,6 +71,7 @@ hidden, blocks in the way get red outlines, water/lava and chest-like blocks get
 | `!ac built` | list everything the bot has built (farms are reused by jobs) |
 | `!ac stop` / `!ac pause` / `!ac resume` | control the job |
 | `!ac status` | progress, current behavior, build, prerequisite, health/food |
+| `!ac why` | what it's doing and for which prerequisite, plus its last decisions (behavior, status, need), to see why it stalls or wanders |
 | `!ac base [name]` | add a base where you stand, or move the base with that name (first one is "home"); chests within 8 blocks are its storage |
 | `!ac base remove <name>` / `!ac bases` | remove a base / list them |
 | `!ac base stocked on\|off` | the base chests hold materials: check them before gathering, even unseen ones |
@@ -93,12 +96,12 @@ flowchart TD
   R1 --> R2[DefenseReflex: shield arrows, deflect/dodge ghast fireballs, back off lit creepers]
   R2 --> R3[EatReflex]
   R3 --> R4[EffectReflex: milk / honey]
-  R4 --> C[Combat: quick kills only, jump crits; hunted mobs fought on purpose; flee at low health]
+  R4 --> C[Combat: quick kills only, jump crits; hunted mobs fought on purpose; flee at low health, then keep away and heal before work resumes]
   C --> RC[Recover: after a death, back to the spot for the dropped items]
   RC --> M[Mending: swap damaged mending gear into the offhand while XP is around]
   M --> GO[Goto: debug walk]
   GO --> F[Finish: goal met -> pick up stations, store + log off]
-  F --> G[Gear: armor, shield, tools scaled to the work, shears/sword when needed, rockets, nether kit]
+  F --> G[Gear: armor, shield, tools scaled to the work (needed tools may use job loot: 3 mined cobblestone = stone pickaxe), shears/sword when needed, rockets, nether kit]
   G --> FO[Food: hunt animals when hungry and food is low]
   FO --> ST[Storage: junk drop, bundles, shulkers, base chests]
   ST --> B[Build: schematic orders, materials (window gathered before placing), big-build stash, team roles]
@@ -114,7 +117,7 @@ flowchart TD
 | `command` | `!ac` chat command parser |
 | `goal` | `Job` (+ skipped and deferred requirements), `Requirement` (mined or hunted: items, sources, mobs, tool, strategy, Y level, dimension, biomes; or a made product), `Resources` registry |
 | `tasks` | `TaskTree` + `TaskNode`: the user's task tree and its runner |
-| `world` | `WorldScanner` (nearest-ring, section-skipping block scan; entities), `BlockUtil`, `BiomeFinder`, `ChestMemory` (what chests hold, per world), `WorldKey` |
+| `world` | `WorldScanner` (exact nearest-k block scan: rings outward, chunks/sections that can't beat the k-th nearest skipped; entities), `BlockUtil`, `BiomeFinder`, `ChestMemory` (what chests hold, per world), `WorldKey` |
 | `control` | `Controls` (keys, mine/attack/place/use), `Aim` (Bezier view turns, movement remapped while turning), `InvUtil`, `ContainerOpener`, `Placement` |
 | `path` | incremental A* `Pathfinder` (walk, diagonal, jump-up, staircase, safe fall, dig-down, pillar, bridge, mine-through, swim), goals, executor, `Navigator` |
 | `behavior` | the priority behaviors above + `Harvest`, `BaseDeposit`, `BaseFetch` |
@@ -291,7 +294,7 @@ has settled and reached the server; untargeted item use (buckets, food) finishes
 | 14 | **Fixes** — shared station rules, multi-furnace smelting, station pickup, faster pathing, quick-kill combat with crits, drowning reflex, tool tiers scaled to work | code complete |
 | 15 | **Mob drops & procedures** — loot tables, hunting, honey/wool/milk/eggs, block work, copper garden, trial chambers | code complete |
 | 16 | **Additions** — smooth aim, mob farm, stonecutter, portal time costs + bucket portal, death recovery, player alert, big-build stash and tool investment, chest memory and base fetches, resume after relog, task tree | code complete |
-| 17 | **Hardening** — in-game testing, stuck recovery, tuning thresholds from logs | next |
+| 17 | **Hardening** — in-game testing; fixed so far: stalls (gear planning was blocked by any mob within 8 blocks, worn cheap tools refused, job loot never used for tools), far targets past chunk borders, sunken logs chosen over dry ones, hurt flee/work ping-pong, eating blocked by mobs behind walls; `!ac why` decision trace | in progress |
 
 "Code complete" = compiles against the real 26.3 client jar; not yet run in-game (see Build).
 

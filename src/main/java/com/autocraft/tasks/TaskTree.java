@@ -51,12 +51,11 @@ import org.jspecify.annotations.Nullable;
 public final class TaskTree {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
-	/** A visible row of the tree view. */
-	public record Row(TaskNode node, int depth) {}
-
 	private static @Nullable Map<String, List<TaskNode>> worlds;
 	private static @Nullable TaskNode running;
 	private static boolean active;
+	/** Running just this task and its subtasks; null = the whole tree. */
+	private static @Nullable TaskNode scope;
 
 	private TaskTree() {}
 
@@ -71,21 +70,22 @@ public final class TaskTree {
 
 	/** True while the tree has work left after the current one (so finishing a job doesn't log off). */
 	public static boolean hasMore() {
-		return active && next(roots(), running) != null;
+		return active && next(runList(), running) != null;
 	}
 
-	/** Visible rows: expanded nodes show their children, indented. */
-	public static List<Row> rows() {
-		List<Row> out = new ArrayList<>();
-		flatten(roots(), 0, out);
-		return out;
+	/** The task running right now (a job, fetch or build the bot is doing), or null. */
+	public static @Nullable TaskNode running() {
+		return running;
 	}
 
-	private static void flatten(List<TaskNode> nodes, int depth, List<Row> out) {
-		for (TaskNode n : nodes) {
-			out.add(new Row(n, depth));
-			if (n.expanded) flatten(n.children, depth + 1, out);
-		}
+	/** What a run works through: the whole tree, or the one task it was started on. */
+	private static List<TaskNode> runList() {
+		return scope == null ? roots() : List.of(scope);
+	}
+
+	/** The task a run starts next (while running: the one after the current task), or null. */
+	public static @Nullable TaskNode upNext() {
+		return next(active ? runList() : roots(), running);
 	}
 
 	/** The list holding {@code node} (a parent's children or the roots), or null. */
@@ -195,19 +195,23 @@ public final class TaskTree {
 
 	// ---- running --------------------------------------------------------------------------------
 
-	public static void start() {
+	/** Run the whole tree ({@code only} null), or just {@code only} and its subtasks. */
+	public static void start(@Nullable TaskNode only) {
 		if (active) return;
-		if (next(roots()) == null) {
-			Chat.info("Nothing left to do in the task tree.");
+		scope = only;
+		if (next(runList()) == null) {
+			Chat.info(only == null ? "Nothing left to do in the task tree." : "\"" + only.title + "\" is already done.");
+			scope = null;
 			return;
 		}
 		active = true;
-		Chat.info("Running the task tree.");
+		Chat.info(only == null ? "Running the task tree." : "Running \"" + only.title + "\".");
 	}
 
 	public static void stop() {
 		if (!active) return;
 		active = false;
+		scope = null;
 		if (running != null) {
 			running.state = TaskNode.State.PENDING;
 			running = null;
@@ -232,6 +236,7 @@ public final class TaskTree {
 			if (bot.isRunning()) return;
 			// stopped without finishing (stopped by hand, died, player nearby...): wait for the user
 			active = false;
+			scope = null;
 			running.state = TaskNode.State.PENDING;
 			running = null;
 			save();
@@ -239,10 +244,16 @@ public final class TaskTree {
 			return;
 		}
 		if (bot.isRunning()) return; // something else is going on (a manual job): wait for it
-		TaskNode next = next(roots());
+		if (scope != null && siblings(scope) == null) { // the task it was running was deleted
+			active = false;
+			scope = null;
+			return;
+		}
+		TaskNode next = next(runList());
 		if (next == null) {
 			active = false;
-			Chat.info("Task tree finished.");
+			Chat.info(scope == null ? "Task tree finished." : "Finished \"" + scope.title + "\".");
+			scope = null;
 			if (Settings.get().logoffWhenDone) mc.schedule(() -> mc.disconnectFromWorld(ClientLevel.DEFAULT_QUIT_MESSAGE));
 			return;
 		}

@@ -39,9 +39,14 @@ final class Widgets {
 
 	/** A 10px item icon (16px scaled down) so it fits a text row. */
 	static void smallItem(GuiGraphicsExtractor g, Item item, int x, int y) {
+		scaledItem(g, item, x, y, 0.625F);
+	}
+
+	/** An item icon at {@code scale} × 16 px. */
+	static void scaledItem(GuiGraphicsExtractor g, Item item, int x, int y, float scale) {
 		g.pose().pushMatrix();
 		g.pose().translate(x, y);
-		g.pose().scale(0.625f, 0.625f);
+		g.pose().scale(scale, scale);
 		g.item(item.getDefaultInstance(), 0, 0);
 		g.pose().popMatrix();
 	}

@@ -11,7 +11,6 @@ import com.autocraft.build.SiteFinder;
 import com.autocraft.build.StructureRegistry;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
-import com.autocraft.goal.Resources;
 import com.autocraft.schematic.Schematic;
 import com.autocraft.schematic.SchematicLibrary;
 import com.autocraft.team.Team;
@@ -38,15 +37,15 @@ import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The bot's control panel (default key K). Collect: search any item the bot can get, add it with an amount,
- * start the job. Build: pick a schematic (built-in or from the folder) and place it in the world as a ghost,
- * Litematica-style — exact coordinates, nudges, rotation, mirror — then build it. Tasks: a tree of big tasks and
- * subtasks run in order ({@link TaskTreePanel}). Team: host or join a team of bots. Bot: live status, pause/stop,
- * base. Settings: saved options (log off, overlay, smooth aim, players nearby, after death, base, resume).
+ * The bot's control panel (default key K). Tasks: everything the bot is asked to do as a tree — pick items to
+ * collect, add groups and builds, edit, run ({@link TaskTreePanel}). Build: pick a schematic (built-in or from the
+ * folder) and place it in the world as a ghost, Litematica-style — exact coordinates, nudges, rotation, mirror —
+ * then build it. Team: host or join a team of bots. Bot: live status, pause/stop, base. Settings: saved options
+ * (log off, overlay, smooth aim, players nearby, after death, base, resume).
  */
 public final class AutoCraftScreen extends Screen {
 	private enum Tab {
-		COLLECT("Collect"), BUILD("Build"), TASKS("Tasks"), TEAM("Team"), BOT("Bot"), SETTINGS("Settings");
+		TASKS("Tasks"), BUILD("Build"), TEAM("Team"), BOT("Bot"), SETTINGS("Settings");
 
 		final String label;
 
@@ -55,19 +54,13 @@ public final class AutoCraftScreen extends Screen {
 		}
 	}
 
-	private record OrderLine(ItemCatalog.Entry entry, int amount) {}
-
-	private static final int ROW = 14;
 	private static final int LINE = 11;
-	private static final int CRAFTED_MARK = 0xFF4FA3FF;
-	/** Tab button pitch (6 tabs fit next to the title in the 420-wide panel). */
+
+	/** Tab button pitch (the tabs fit next to the title in the 420-wide panel). */
 	private static final int TAB_W = 50;
 
 	// remembered between openings
-	private static Tab tab = Tab.COLLECT;
-	private static final List<OrderLine> order = new ArrayList<>();
-	private static String searchText = "";
-	private static String amountText = "64";
+	private static Tab tab = Tab.TASKS;
 	private static @Nullable String selectedSchematic;
 
 	private int left;
@@ -78,19 +71,6 @@ public final class AutoCraftScreen extends Screen {
 	private int rightX;
 	private int contentY;
 	private int bottomY;
-
-	// collect tab
-	private @Nullable EditBox search;
-	private List<ItemCatalog.Entry> results = List.of();
-	private int resultScroll;
-	private int gridX;
-	private int gridY;
-	private int gridCols;
-	private int gridRows;
-	private int orderY;
-	private int orderRows;
-	private int orderScroll;
-	private @Nullable Button startButton;
 
 	// build tab
 	private List<String> schematics = List.of();
@@ -154,12 +134,12 @@ public final class AutoCraftScreen extends Screen {
 		}
 		tasks = null;
 		switch (tab) {
-			case COLLECT -> initCollect();
-			case BUILD -> initBuild();
 			case TASKS -> {
 				tasks = new TaskTreePanel(font, left, rightX, colW, contentY, bottomY, this::addRenderableWidget, this::rebuildWidgets);
 				tasks.init();
+				if (tasks.focus() != null) setInitialFocus(tasks.focus());
 			}
+			case BUILD -> initBuild();
 			case TEAM -> initTeam();
 			case BOT -> initBot();
 			case SETTINGS -> initSettings();
@@ -169,13 +149,12 @@ public final class AutoCraftScreen extends Screen {
 	@Override
 	public void tick() {
 		switch (tab) {
-			case COLLECT -> updateCollectButtons();
-			case BUILD -> updateBuildButtons();
-			case TEAM -> updateTeamButtons();
-			case BOT -> updateBotButtons();
 			case TASKS -> {
 				if (tasks != null) tasks.tick();
 			}
+			case BUILD -> updateBuildButtons();
+			case TEAM -> updateTeamButtons();
+			case BOT -> updateBotButtons();
 			case SETTINGS -> {
 			}
 		}
@@ -191,11 +170,10 @@ public final class AutoCraftScreen extends Screen {
 		int stateX = left + 16 + font.width("autoCraft");
 		g.text(font, font.plainSubstrByWidth(state, left + panelW - Tab.values().length * TAB_W - 8 - stateX), stateX, top + 8, Widgets.GRAY);
 		switch (tab) {
-			case COLLECT -> extractCollect(g, mouseX, mouseY);
-			case BUILD -> extractBuild(g, mouseX, mouseY);
 			case TASKS -> {
-				if (tasks != null) tasks.extract(g);
+				if (tasks != null) tasks.extract(g, mouseX, mouseY);
 			}
+			case BUILD -> extractBuild(g, mouseX, mouseY);
 			case TEAM -> extractTeam(g);
 			case BOT -> extractBot(g);
 			case SETTINGS -> extractSettings(g);
@@ -208,26 +186,14 @@ public final class AutoCraftScreen extends Screen {
 		if (super.mouseClicked(event, doubleClick)) return true;
 		double mx = event.x();
 		double my = event.y();
-		if (tab == Tab.COLLECT) {
-			ItemCatalog.Entry e = resultAt(mx, my);
-			if (e != null) {
-				add(e, event.button() == 1 ? e.icon().getDefaultMaxStackSize() : amountValue());
-				return true;
-			}
-			int row = orderRowAt(mx, my);
-			if (row >= 0 && (event.button() == 1 || mx >= rightX + colW - 10)) {
-				order.remove(row);
-				orderScroll = Math.max(0, Math.min(orderScroll, order.size() - orderRows));
-				return true;
-			}
+		if (tab == Tab.TASKS && tasks != null) {
+			return tasks.click(mx, my, event.button());
 		} else if (tab == Tab.BUILD) {
 			int i = schematicAt(mx, my);
 			if (i >= 0) {
 				select(schematics.get(i));
 				return true;
 			}
-		} else if (tab == Tab.TASKS && tasks != null) {
-			return tasks.click(mx, my);
 		}
 		return false;
 	}
@@ -235,24 +201,7 @@ public final class AutoCraftScreen extends Screen {
 	@Override
 	public boolean mouseScrolled(double x, double y, double scrollX, double scrollY) {
 		int dir = (int) Math.signum(scrollY);
-		if (tab == Tab.COLLECT) {
-			if (inside(x, y, gridX, gridY, gridCols * 18, gridRows * 18)) {
-				int maxScroll = Math.max(0, (results.size() + gridCols - 1) / gridCols - gridRows);
-				resultScroll = Math.max(0, Math.min(maxScroll, resultScroll - dir));
-				return true;
-			}
-			int row = orderRowAt(x, y);
-			if (row >= 0) {
-				OrderLine l = order.get(row);
-				int step = minecraft.hasShiftDown() ? 16 : 1;
-				order.set(row, new OrderLine(l.entry, Math.max(1, l.amount + dir * step)));
-				return true;
-			}
-			if (inside(x, y, rightX, orderY, colW, orderRows * ROW)) {
-				orderScroll = Math.max(0, Math.min(Math.max(0, order.size() - orderRows), orderScroll - dir));
-				return true;
-			}
-		} else if (tab == Tab.TASKS && tasks != null && tasks.scroll(x, y, dir)) {
+		if (tab == Tab.TASKS && tasks != null && tasks.scroll(x, y, dir)) {
 			return true;
 		} else if (tab == Tab.BUILD && inside(x, y, left + 8, listY, colW, listRows * LINE)) {
 			listScroll = Math.max(0, Math.min(Math.max(0, schematics.size() - listRows), listScroll - dir));
@@ -263,169 +212,8 @@ public final class AutoCraftScreen extends Screen {
 
 	@Override
 	public boolean keyPressed(KeyEvent event) {
-		if (tab == Tab.COLLECT && search != null && search.isFocused() && event.isConfirmation()) {
-			addTyped();
-			return true;
-		}
+		if (tab == Tab.TASKS && tasks != null && tasks.keyPressed(event)) return true;
 		return super.keyPressed(event);
-	}
-
-	// ---- collect --------------------------------------------------------------------------------
-
-	private void initCollect() {
-		int x = left + 8;
-		search = addRenderableWidget(new EditBox(font, x, contentY, colW - 52, 16, Component.literal("Search")));
-		search.setHint(Component.literal("Search items...").withStyle(ChatFormatting.DARK_GRAY));
-		search.setValue(searchText);
-		search.setResponder(s -> {
-			searchText = s;
-			refreshResults();
-		});
-		EditBox amount = addRenderableWidget(new EditBox(font, x + colW - 48, contentY, 48, 16, Component.literal("Amount")));
-		amount.setMaxLength(6);
-		amount.setValue(amountText);
-		amount.setResponder(s -> amountText = s);
-		amount.setTooltip(Tooltip.create(Component.literal("Amount added per click (right-click adds one stack)")));
-
-		gridX = x;
-		gridY = contentY + 22;
-		gridCols = Math.max(1, colW / 18);
-		gridRows = Math.max(1, (top + panelH - 16 - gridY) / 18);
-		refreshResults();
-
-		orderY = contentY + 14;
-		orderRows = Math.max(1, (bottomY - 16 - orderY) / ROW);
-		addRenderableWidget(Button.builder(Component.literal("Clear"), b -> {
-			order.clear();
-			orderScroll = 0;
-		}).bounds(rightX, bottomY, 50, 18).build());
-		startButton = addRenderableWidget(Button.builder(Component.literal("Start job"), b -> startJob())
-				.bounds(rightX + colW - 90, bottomY, 90, 18).build());
-		updateCollectButtons();
-		setInitialFocus(search);
-	}
-
-	private void refreshResults() {
-		results = ItemCatalog.search(searchText);
-		resultScroll = 0;
-	}
-
-	private int amountValue() {
-		try {
-			return Math.max(1, Integer.parseInt(amountText.trim()));
-		} catch (NumberFormatException e) {
-			return 64;
-		}
-	}
-
-	private void add(ItemCatalog.Entry e, int amount) {
-		for (int i = 0; i < order.size(); i++) {
-			if (order.get(i).entry.key().equals(e.key())) {
-				order.set(i, new OrderLine(e, order.get(i).amount + amount));
-				return;
-			}
-		}
-		order.add(new OrderLine(e, amount));
-		orderScroll = Math.max(0, order.size() - orderRows);
-	}
-
-	/** Enter in the search box: the typed name if it is a resource ("log", "iron"), else the first result. */
-	private void addTyped() {
-		String typed = searchText.trim().toLowerCase().replace(' ', '_');
-		Requirement r = typed.isEmpty() ? null : Resources.forJob(typed, 1);
-		if (r != null) {
-			add(new ItemCatalog.Entry(typed, ItemCatalog.iconOf(r), typed, r.isCrafted(), ItemCatalog.how(ItemCatalog.iconOf(r), r)), amountValue());
-		} else if (!results.isEmpty()) {
-			add(results.getFirst(), amountValue());
-		}
-	}
-
-	private void startJob() {
-		List<Requirement> reqs = new ArrayList<>();
-		for (OrderLine l : order) {
-			Requirement r = Resources.forJob(l.entry.key(), l.amount);
-			if (r != null) reqs.add(r);
-		}
-		if (reqs.isEmpty()) return;
-		Bot.get().start(new Job(reqs));
-		onClose();
-	}
-
-	private void updateCollectButtons() {
-		if (startButton == null) return;
-		startButton.active = !order.isEmpty() && minecraft.player != null;
-		startButton.setMessage(Component.literal(Bot.get().isRunning() ? "Replace job" : "Start job"));
-	}
-
-	private ItemCatalog.@Nullable Entry resultAt(double mx, double my) {
-		if (!inside(mx, my, gridX, gridY, gridCols * 18, gridRows * 18)) return null;
-		int i = (resultScroll + (int) (my - gridY) / 18) * gridCols + (int) (mx - gridX) / 18;
-		return i < results.size() ? results.get(i) : null;
-	}
-
-	private int orderRowAt(double mx, double my) {
-		if (!inside(mx, my, rightX, orderY, colW, orderRows * ROW)) return -1;
-		int i = orderScroll + (int) (my - orderY) / ROW;
-		return i < order.size() ? i : -1;
-	}
-
-	private void extractCollect(GuiGraphicsExtractor g, int mouseX, int mouseY) {
-		for (int r = 0; r < gridRows; r++) {
-			for (int c = 0; c < gridCols; c++) {
-				int i = (resultScroll + r) * gridCols + c;
-				int sx = gridX + c * 18;
-				int sy = gridY + r * 18;
-				boolean hover = i < results.size() && inside(mouseX, mouseY, sx, sy, 18, 18);
-				Widgets.slot(g, sx, sy, hover);
-				if (i >= results.size()) continue;
-				ItemCatalog.Entry e = results.get(i);
-				g.item(e.icon().getDefaultInstance(), sx + 1, sy + 1);
-				if (e.crafted()) g.fill(sx + 14, sy + 1, sx + 17, sy + 4, CRAFTED_MARK);
-				if (hover) {
-					g.setComponentTooltipForNextFrame(font, List.of(Component.literal(e.name()),
-							Component.literal(e.how()).withStyle(ChatFormatting.GRAY),
-							Component.literal("Click: add " + amountValue() + " · Right-click: add a stack").withStyle(ChatFormatting.DARK_GRAY)),
-							mouseX, mouseY);
-				}
-			}
-		}
-		int totalRows = (results.size() + gridCols - 1) / gridCols;
-		if (totalRows > gridRows) {
-			int trackH = gridRows * 18;
-			int thumbH = Math.max(8, trackH * gridRows / totalRows);
-			int thumbY = gridY + (trackH - thumbH) * resultScroll / Math.max(1, totalRows - gridRows);
-			int barX = gridX + gridCols * 18 + 1;
-			g.fill(barX, gridY, barX + 2, gridY + trackH, Widgets.DARK);
-			g.fill(barX, thumbY, barX + 2, thumbY + thumbH, Widgets.GRAY);
-		}
-		int hintY = top + panelH - 12;
-		g.fill(left + 8, hintY + 1, left + 13, hintY + 6, CRAFTED_MARK);
-		g.text(font, font.plainSubstrByWidth(" crafted · Enter adds the typed name", colW - 5), left + 13, hintY, Widgets.GRAY);
-
-		g.text(font, "Job" + (order.isEmpty() ? "" : " (" + order.size() + ")"), rightX, contentY + 2, Widgets.WHITE);
-		if (order.isEmpty()) {
-			g.textWithWordWrap(font, Component.literal("Click items on the left to add them. Scroll over a line to change the amount"
-					+ " (shift: 16 at a time), right-click or × to remove."), rightX, orderY + 2, colW, Widgets.GRAY);
-		}
-		for (int k = 0; k < orderRows && orderScroll + k < order.size(); k++) {
-			OrderLine l = order.get(orderScroll + k);
-			int y = orderY + k * ROW;
-			boolean hover = inside(mouseX, mouseY, rightX, y, colW, ROW);
-			if (hover) g.fill(rightX, y, rightX + colW, y + ROW, 0x30FFFFFF);
-			Widgets.smallItem(g, l.entry.icon(), rightX + 1, y + 2);
-			String amount = l.amount + (l.amount >= 64 && l.entry.icon().getDefaultMaxStackSize() == 64 ? " (" + stacks(l.amount) + ")" : "");
-			int amountX = rightX + colW - 14 - font.width(amount);
-			g.text(font, font.plainSubstrByWidth(l.entry.name(), amountX - rightX - 18), rightX + 14, y + 3, l.entry.crafted() ? 0xFFB8D8FF : Widgets.WHITE);
-			g.text(font, amount, amountX, y + 3, Widgets.GRAY);
-			g.text(font, "×", rightX + colW - 8, y + 3, hover && mouseX >= rightX + colW - 10 ? 0xFFFF5555 : Widgets.GRAY);
-		}
-		if (Bot.get().isRunning() && !order.isEmpty()) g.text(font, "Replaces the running job.", rightX, bottomY - 11, Widgets.GRAY);
-	}
-
-	private static String stacks(int amount) {
-		int full = amount / 64;
-		int rest = amount % 64;
-		return full + (full == 1 ? " stack" : " stacks") + (rest == 0 ? "" : " + " + rest);
 	}
 
 	// ---- build ----------------------------------------------------------------------------------
