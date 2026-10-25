@@ -15,15 +15,17 @@ import net.minecraft.world.item.Items;
 
 /**
  * Eat when hungry (or hurt and not full) and it's safe: no mob within reach of us soon, no archer with a line
- * of sight — and at low health a much bigger safety margin, because standing still to eat next to a mob is how
- * bots die (combat runs away first, eating happens once clear). Picks the most nutritious safe food; risky foods
- * only when starving; golden apples are kept for emergencies.
+ * of sight. At low health the margin is bigger, but only for mobs that can actually get to us (aggressive or in
+ * sight) — a zombie behind a wall must not keep a hurt bot from eating; combat keeps the bot away from the rest
+ * while it recovers. Picks the most nutritious safe food; risky foods only when starving; golden apples are kept
+ * for emergencies.
  */
 public final class EatReflex implements Behavior {
 	private static final int START_BELOW = 15;
 	private static final int STOP_AT = 19;
 	private static final double SAFE_RADIUS = 5;
-	private static final double SAFE_RADIUS_HURT = 14;
+	/** Hurt: mobs that can reach us must be this far (combat's recovery keeps them farther). */
+	private static final double SAFE_RADIUS_HURT = 10;
 	private static final double ARCHER_RADIUS = 20;
 	private static final Set<Item> RISKY = Set.of(Items.ROTTEN_FLESH, Items.SPIDER_EYE, Items.POISONOUS_POTATO, Items.PUFFERFISH, Items.CHICKEN);
 	private static final Set<Item> NEVER = Set.of(Items.SUSPICIOUS_STEW, Items.CHORUS_FRUIT);
@@ -54,7 +56,8 @@ public final class EatReflex implements Behavior {
 		double margin = p.getHealth() < 12 ? SAFE_RADIUS_HURT : SAFE_RADIUS;
 		for (Mob m : Threats.collect(bot, ARCHER_RADIUS)) {
 			double d = m.distanceTo(p);
-			if (d < margin || Threats.isRanged(m) && m.isAggressive() && p.hasLineOfSight(m)) {
+			boolean canReach = m.isAggressive() || p.hasLineOfSight(m);
+			if (d < SAFE_RADIUS || d < margin && canReach || Threats.isRanged(m) && m.isAggressive() && p.hasLineOfSight(m)) {
 				eating = false; // fight or flee first; letting go of "use" stops the bite
 				return false;
 			}
@@ -73,6 +76,11 @@ public final class EatReflex implements Behavior {
 		bot.controls().holdUse();
 		bot.setStatus("eating " + chosen.getHoverName().getString());
 		return true;
+	}
+
+	/** Something safe to eat is carried. */
+	static boolean hasFood(LocalPlayer p) {
+		return bestFood(p, p.getFoodData().getFoodLevel()) >= 0;
 	}
 
 	private static int bestFood(LocalPlayer p, int foodLevel) {

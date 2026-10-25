@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import java.util.PriorityQueue;
 import java.util.Map;
 import java.util.function.Predicate;
 import net.minecraft.client.Minecraft;
@@ -62,42 +63,101 @@ public final class WorldScanner {
 	}
 
 	/**
-	 * Matching block positions in loaded chunks within {@code chunkRadius}, nearest first. Chunks are scanned
-	 * in rings outward and the scan stops after the first ring that brings the total to {@code maxResults},
-	 * so very common blocks (stone, netherrack) cost one or two chunks instead of the whole area.
+	 * The {@code maxResults} matching positions nearest the player (straight-line) in loaded chunks within
+	 * {@code chunkRadius}, nearest first. Chunks are visited in rings outward; once {@code maxResults} are known,
+	 * chunks and sections that can't hold anything nearer are skipped and the scan ends at the first ring wholly
+	 * beyond the farthest kept result. Common blocks (stone, logs in a forest) still cost only a few chunks, and a
+	 * block just across a chunk border beats a farther one in the bot's own chunk (stopping after the first ring
+	 * that had enough matches used to send the bot to a tree 20 blocks off with one right next to it).
 	 */
 	public List<BlockPos> findBlocks(Predicate<BlockState> match, int chunkRadius, int maxResults) {
 		BlockPos origin = mc.player.blockPosition();
+		Nearest nearest = new Nearest(maxResults);
 		int cx = origin.getX() >> 4, cz = origin.getZ() >> 4;
-		List<BlockPos> found = new ArrayList<>();
-		for (int r = 0; r <= chunkRadius && found.size() < maxResults; r++) {
+		for (int r = 0; r <= chunkRadius; r++) {
+			boolean ringInRange = false;
 			for (int dx = -r; dx <= r; dx++) {
 				for (int dz = -r; dz <= r; dz++) {
-					if (Math.max(Math.abs(dx), Math.abs(dz)) == r) scanChunk(cx + dx, cz + dz, match, found);
+					if (Math.max(Math.abs(dx), Math.abs(dz)) != r) continue;
+					long horizontal = horizontalDistSqr(origin, cx + dx, cz + dz);
+					if (horizontal >= nearest.bound()) continue;
+					ringInRange = true;
+					scanChunk(cx + dx, cz + dz, origin, horizontal, match, nearest);
 				}
 			}
+			if (!ringInRange) break; // every chunk farther out is farther still
 		}
-		found.sort(Comparator.comparingDouble(p -> p.distSqr(origin)));
-		return found.size() > maxResults ? new ArrayList<>(found.subList(0, maxResults)) : found;
+		return nearest.sorted();
 	}
 
-	private void scanChunk(int chunkX, int chunkZ, Predicate<BlockState> match, List<BlockPos> out) {
+	/** Squared horizontal distance from {@code o} to the nearest column of chunk (chunkX, chunkZ). */
+	private static long horizontalDistSqr(BlockPos o, int chunkX, int chunkZ) {
+		long dx = axisGap(o.getX(), chunkX << 4), dz = axisGap(o.getZ(), chunkZ << 4);
+		return dx * dx + dz * dz;
+	}
+
+	/** Distance along one axis from {@code v} to the 16-block span starting at {@code min} (0 inside it). */
+	private static long axisGap(int v, int min) {
+		return v < min ? min - v : v > min + 15 ? v - (min + 15) : 0;
+	}
+
+	private void scanChunk(int chunkX, int chunkZ, BlockPos o, long horizontal, Predicate<BlockState> match, Nearest out) {
 		ClientLevel level = mc.level;
 		LevelChunk chunk = level.getChunkSource().getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
 		if (chunk == null) return;
 		LevelChunkSection[] sections = chunk.getSections();
 		int baseX = chunkX << 4, baseZ = chunkZ << 4, minY = level.getMinY();
-		for (int i = 0; i < sections.length; i++) {
+		int home = Math.clamp((o.getY() - minY) >> 4, 0, sections.length - 1);
+		// sections nearest the player's height first (home, below, above, ...): the bound tightens early
+		for (int k = 0; k < 2 * sections.length; k++) {
+			int i = (k & 1) == 0 ? home + k / 2 : home - (k + 1) / 2;
+			if (i < 0 || i >= sections.length) continue;
 			LevelChunkSection section = sections[i];
-			if (section == null || section.hasOnlyAir() || !section.maybeHas(match)) continue;
+			if (section == null || section.hasOnlyAir()) continue;
 			int baseY = minY + (i << 4);
+			long gapY = axisGap(o.getY(), baseY);
+			if (horizontal + gapY * gapY >= out.bound() || !section.maybeHas(match)) continue;
 			for (int y = 0; y < 16; y++) {
+				long dy = baseY + y - o.getY();
 				for (int z = 0; z < 16; z++) {
+					long dz = baseZ + z - o.getZ();
 					for (int x = 0; x < 16; x++) {
-						if (match.test(section.getBlockState(x, y, z))) out.add(new BlockPos(baseX + x, baseY + y, baseZ + z));
+						long dx = baseX + x - o.getX();
+						long d = dx * dx + dy * dy + dz * dz;
+						if (d < out.bound() && match.test(section.getBlockState(x, y, z))) out.offer(baseX + x, baseY + y, baseZ + z, d);
 					}
 				}
 			}
+		}
+	}
+
+	/** The k nearest positions offered so far (a max-heap on squared distance). */
+	private static final class Nearest {
+		private record Hit(BlockPos pos, long distSqr) {}
+
+		private final int k;
+		private final PriorityQueue<Hit> heap = new PriorityQueue<>((a, b) -> Long.compare(b.distSqr, a.distSqr));
+
+		Nearest(int k) {
+			this.k = Math.max(1, k);
+		}
+
+		/** Anything at this squared distance or farther can't make the cut. */
+		long bound() {
+			return heap.size() < k ? Long.MAX_VALUE : heap.peek().distSqr;
+		}
+
+		void offer(int x, int y, int z, long distSqr) {
+			heap.add(new Hit(new BlockPos(x, y, z), distSqr));
+			if (heap.size() > k) heap.poll();
+		}
+
+		List<BlockPos> sorted() {
+			List<Hit> hits = new ArrayList<>(heap);
+			hits.sort(Comparator.comparingLong(Hit::distSqr));
+			List<BlockPos> out = new ArrayList<>(hits.size());
+			for (Hit h : hits) out.add(h.pos);
+			return out;
 		}
 	}
 

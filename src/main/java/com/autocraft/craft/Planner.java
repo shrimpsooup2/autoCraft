@@ -73,8 +73,9 @@ public final class Planner {
 	private final Predicate<ItemStack> protect;
 	private final RecipeBook book = RecipeBook.get();
 	private final Map<String, Double> costMemo = new HashMap<>();
+	private boolean borrowJobLoot;
 
-	/** @param protect job loot: never smelted beyond what's needed */
+	/** @param protect job loot: not used as an ingredient (unless {@link #borrowingJobLoot}), never smelted beyond what's needed */
 	public Planner(LocalPlayer p, Requirement.Dim dimension, boolean tableNearby, boolean furnaceNearby, boolean cutterNearby,
 			Predicate<ItemStack> protect) {
 		this.p = p;
@@ -83,6 +84,17 @@ public final class Planner {
 		this.furnaceNearby = furnaceNearby;
 		this.cutterNearby = cutterNearby;
 		this.protect = protect;
+	}
+
+	/**
+	 * Job loot may be used as an ingredient: for a tool the job can't go on without, 3 of the 40 cobblestone mined
+	 * so far make a stone pickaxe and the job mines 3 more — instead of a trip for logs, or no pickaxe at all. The
+	 * total work is the same either way (protected loot would have to be gathered again for the tool). Also what
+	 * {@link #costOf} assumes, so tool choices and plans agree.
+	 */
+	public Planner borrowingJobLoot() {
+		borrowJobLoot = true;
+		return this;
 	}
 
 	/** Any carried stack matches. */
@@ -205,9 +217,9 @@ public final class Planner {
 		return new Smelt(inputItem, amount);
 	}
 
-	/** Make sure {@code needed} items matching the ingredient are carried (any mix of its options; job loot doesn't count). */
+	/** Make sure {@code needed} items matching the ingredient are carried (any mix of its options; job loot only when borrowing). */
 	private Step ingredient(Ingredient ing, int needed, int depth, Set<Item> visiting) {
-		int have = InvUtil.count(p, s -> ing.test(s) && !protect.test(s));
+		int have = InvUtil.count(p, s -> ing.test(s) && (borrowJobLoot || !protect.test(s)));
 		if (have >= needed) return DONE;
 		Item choice = cheapestOption(ing, depth, visiting);
 		if (choice == null) return new Unavailable(ing.toString());

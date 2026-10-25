@@ -42,6 +42,11 @@ public final class CombatBehavior implements Behavior {
 	private static final float LOW_HEALTH = 8;
 	private static final double CHASE_LIMIT = 8;
 	private static final int QUIET_TICKS_TO_END = 40;
+	/** After running away hurt: stay away until this healthy (or until healing isn't possible). */
+	private static final float RECOVERED_HEALTH = 14;
+	/** While recovering, mobs that can reach us are kept at least this far (eating needs 10). */
+	private static final double KEEP_AWAY = 12;
+	private static final double LURK_RADIUS = 20;
 	private static final int CREEPER_BACKOFF = 15;
 	/** Sprinting speed in blocks per tick, for the approach part of the estimate. */
 	private static final double SPRINT_SPEED = 0.28;
@@ -60,6 +65,8 @@ public final class CombatBehavior implements Behavior {
 	private @Nullable Goal fleeGoal;
 	private int fleeGoalAge;
 	private final BlockPos[] chaseAt = new BlockPos[1];
+	/** Fled at low health: hold the bot away from danger until it has healed (no running back to a furnace by the mob). */
+	private boolean recovering;
 
 	@Override
 	public String name() {
@@ -77,6 +84,7 @@ public final class CombatBehavior implements Behavior {
 		givenUp.clear();
 		fleeGoal = null;
 		chaseAt[0] = null;
+		recovering = false;
 	}
 
 	@Override
@@ -84,6 +92,7 @@ public final class CombatBehavior implements Behavior {
 		LocalPlayer p = bot.player();
 		List<Mob> threats = relevantThreats(bot, p);
 		if (threats.isEmpty()) {
+			if (recovering && recover(bot, p)) return true;
 			if (engaged && ++quietTicks > QUIET_TICKS_TO_END) endEngagement(bot, p);
 			return false;
 		}
@@ -124,6 +133,7 @@ public final class CombatBehavior implements Behavior {
 			bot.setStatus(String.format("fighting %s (~%.1fs)", target.getType().getDescription().getString(), killTicks / 20));
 		} else {
 			flee(bot, threats);
+			if (low) recovering = true;
 			bot.setStatus(low ? "low health, getting away" : "avoiding " + threats.size() + " mob" + (threats.size() == 1 ? "" : "s"));
 		}
 		return true;
@@ -223,6 +233,33 @@ public final class CombatBehavior implements Behavior {
 			bot.nav().stop();
 			if (s == Navigator.Status.FAILED) mode = Mode.FIGHT; // cornered
 		}
+	}
+
+	/**
+	 * After getting away hurt: keep mobs that can reach us at a distance and stand still meanwhile (the eat reflex
+	 * eats, health comes back), instead of letting the job walk straight back to them. Ends once healed, or when
+	 * healing can't happen (no food and too hungry to regenerate) — then the food behavior has to fix that first.
+	 */
+	private boolean recover(Bot bot, LocalPlayer p) {
+		boolean canHeal = p.getFoodData().getFoodLevel() >= 18 || EatReflex.hasFood(p);
+		if (p.getHealth() >= RECOVERED_HEALTH || !canHeal) {
+			recovering = false;
+			return false;
+		}
+		// mobs that can reach us within KEEP_AWAY, and any mob at all within 6 (the eat reflex won't eat next to one)
+		Mob near = null;
+		for (Mob m : Threats.collect(bot, LURK_RADIUS)) {
+			double d = m.distanceTo(p);
+			if ((d < 6 || d < KEEP_AWAY && (m.isAggressive() || p.hasLineOfSight(m))) && (near == null || d < near.distanceTo(p))) near = m;
+		}
+		if (near != null) {
+			flee(bot, List.of(near));
+			bot.setStatus("low health: keeping away from " + near.getType().getDescription().getString());
+			return true;
+		}
+		bot.nav().stop();
+		bot.setStatus(String.format("low health (%.0f): recovering before going back to work", p.getHealth()));
+		return true;
 	}
 
 	private void endEngagement(Bot bot, LocalPlayer p) {

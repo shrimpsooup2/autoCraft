@@ -144,7 +144,8 @@ public final class GearBehavior implements Behavior {
 				return false;
 			}
 			case Planner.Unavailable u -> {
-				return false; // plan() skips these
+				bot.setNeed(Bot.NeedOwner.GEAR, null); // a stale need would hold the collector on something it can't mine
+				return false;
 			}
 			case Planner.Done d -> {
 				bot.setNeed(Bot.NeedOwner.GEAR, null);
@@ -165,12 +166,14 @@ public final class GearBehavior implements Behavior {
 	// ---- planning -------------------------------------------------------------------------------
 
 	private Step plan(Bot bot, LocalPlayer p) {
-		Planner planner = Stations.planner(bot);
-		for (Want w : wants(bot, p, planner, bot.targetForGear())) {
-			Step s = w.plan.apply(planner);
+		Planner strict = Stations.planner(bot);
+		// tools the job can't go on without may use job loot (3 cobblestone for a stone pickaxe); extras may not
+		Planner tools = Stations.planner(bot).borrowingJobLoot();
+		for (Want w : wants(bot, p, tools, bot.targetForGear())) {
+			Step s = w.plan.apply(w.required ? tools : strict);
 			if (s instanceof Planner.Done || s instanceof Planner.Unavailable) continue;
 			if (!w.required && !(s instanceof Planner.Craft c && w.finalItem.test(c.recipe().output()))) continue;
-			if (s instanceof Planner.Gather g) s = toolFirst(planner, p, g);
+			if (s instanceof Planner.Gather g) s = toolFirst(tools, p, g);
 			return s;
 		}
 		return new Planner.Done();

@@ -249,8 +249,9 @@ public final class InvUtil {
 	}
 
 	/**
-	 * A few uses left: the planners count it as gone and make a replacement now (before it breaks mid-job). Cheap
-	 * tools are still used to the last swing meanwhile; see {@link #reserved}.
+	 * A few uses left: the crafting planner doesn't count it as owned (asked for one, it makes a new one). Whether
+	 * it may still be swung is {@link #reserved}: cheap tools are used to the last swing, and gear plans the
+	 * replacement once the job can't go on without one.
 	 */
 	public static boolean nearlyBroken(ItemStack s) {
 		return s.isDamageableItem() && s.getMaxDamage() - s.getDamageValue() <= 3;
