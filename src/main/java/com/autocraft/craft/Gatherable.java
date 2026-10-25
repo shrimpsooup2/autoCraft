@@ -23,6 +23,7 @@ import net.minecraft.world.level.block.BaseEntityBlock;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.CropBlock;
+import net.minecraft.world.level.block.FlowerPotBlock;
 import net.minecraft.world.level.block.StemBlock;
 import net.minecraft.world.level.block.VegetationBlock;
 import org.jspecify.annotations.Nullable;
@@ -108,7 +109,7 @@ public final class Gatherable {
 		boolean anyHere = false;
 		for (LootBook.BlockDrop d : LootBook.get().blockSources(item)) {
 			Block b = d.block();
-			if (!isWorldBlock(b) || dimensionOf(b) == null) continue;
+			if (!isWorldBlock(b) || placedOnly(b) || dimensionOf(b) == null) continue;
 			anyHere |= dimensionOf(b) == here;
 			switch (d.tool()) {
 				case ANY -> plain.add(b);
@@ -158,9 +159,20 @@ public final class Gatherable {
 		return Requirement.hunted(BuiltInRegistries.ITEM.getKey(item).getPath(), item, total, Set.copyOf(mobs), dim, Set.copyOf(biomes));
 	}
 
-	/** Blocks that occur in the world: not furniture/containers, placed string/redstone, or someone's crops. */
+	/** Blocks that occur in the world: not furniture/containers, placed string/redstone, potted plants, or someone's crops. */
 	private static boolean isWorldBlock(Block b) {
-		return !(b instanceof BaseEntityBlock) && !(b instanceof CropBlock) && !(b instanceof StemBlock) && !PLAYER_MADE.contains(b);
+		return !(b instanceof BaseEntityBlock) && !(b instanceof CropBlock) && !(b instanceof StemBlock) && !(b instanceof FlowerPotBlock)
+				&& !PLAYER_MADE.contains(b);
+	}
+
+	/**
+	 * A crafted or smelted block (iron block, comparator, iron bars, terracotta): mining one gives it back, but none
+	 * generate where the bot can count on them, so searching for them never ends — it's made instead. Natural blocks
+	 * that drop something else ({@link #NOT_SELF_DROPPING}: glowstone dust, clay balls, snowballs) still count.
+	 */
+	private static boolean placedOnly(Block b) {
+		Item self = b.asItem();
+		return self != Items.AIR && !NOT_SELF_DROPPING.contains(b) && RecipeBook.get().isMade(self);
 	}
 
 	/** Where a block is found (null: the End or nowhere the bot goes). */
