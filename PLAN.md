@@ -281,7 +281,12 @@ has settled and reached the server; untargeted item use (buckets, food) finishes
   start over.)
 
 ### Water and wood
-- An explore leg over water or ice, or six seconds of open-water swimming, makes the gear planner build a boat
+- Swimming: on a straight stretch of deep water with food to spare the bot sprint-swims, skimming the surface
+  (it sinks under once to start swimming, then looks slightly up so it rides at the top with its head clearing
+  the water, keeping its air full); short of air it paddles with its head up until the bar is full. Shallow
+  water is waded, dives to sunken blocks swim straight at them, and it stands up out of the swim to climb a bank.
+  Paths cost deep water like walking when it can sprint-swim, and the bot doesn't re-plan for bobbing up and down.
+- An explore leg over water or ice, or 20 seconds of open-water swimming, makes the gear planner build a boat
   (the cheapest kind, or whichever kind 5 planks are carried for); legs over water are then sailed.
 - With wood needed and no trees around (out at sea, an iceberg, or exploring came up empty), shipwreck planks and
   logs count as wood — planks only in or under water, never from someone's house.
@@ -307,7 +312,7 @@ has settled and reached the server; untargeted item use (buckets, food) finishes
 | 14 | **Fixes** — shared station rules, multi-furnace smelting, station pickup, faster pathing, quick-kill combat with crits, drowning reflex, tool tiers scaled to work | code complete |
 | 15 | **Mob drops & procedures** — loot tables, hunting, honey/wool/milk/eggs, block work, copper garden, trial chambers | code complete |
 | 16 | **Additions** — smooth aim, mob farm, stonecutter, portal time costs + bucket portal, death recovery, player alert, big-build stash and tool investment, chest memory and base fetches, resume after relog, task tree | code complete |
-| 17 | **Hardening** — in-game testing; fixed so far: stalls (gear planning was blocked by any mob within 8 blocks, worn cheap tools refused, job loot never used for tools), far targets past chunk borders, sunken logs chosen over dry ones, hurt flee/work ping-pong, eating blocked by mobs behind walls, searching for crafted blocks (iron block for an iron pickaxe), saves leaking between same-named worlds; boats over water, shipwreck wood; `!ac why` decision trace. Next: better swimming (sprint-swim skimming the surface) | in progress |
+| 17 | **Hardening** — in-game testing; fixed so far: stalls (gear planning was blocked by any mob within 8 blocks, worn cheap tools refused, job loot never used for tools), far targets past chunk borders, sunken logs chosen over dry ones, hurt flee/work ping-pong, eating blocked by mobs behind walls, searching for crafted blocks (iron block for an iron pickaxe), saves leaking between same-named worlds, slow/re-planning swimming (now sprint-swims skimming the surface); boats over water, shipwreck wood; `!ac why` decision trace | in progress |
 
 "Code complete" = compiles against the real 26.3 client jar; not yet run in-game (see Build).
 

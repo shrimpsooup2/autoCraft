@@ -172,9 +172,14 @@ public final class Controls {
 
 	/** Turn to walk toward {@code target} horizontally, keeping pitch level-ish. */
 	public void faceHorizontally(Vec3 target) {
+		faceHorizontally(target, 10.0F);
+	}
+
+	/** Turn toward {@code target}'s direction at {@code pitch} (swimming: dip under, skim the surface, come up for air). */
+	public void faceHorizontally(Vec3 target, float pitch) {
 		LocalPlayer p = mc.player;
 		double dx = target.x - p.getX(), dz = target.z - p.getZ();
-		face((float) (Mth.atan2(dz, dx) * Mth.RAD_TO_DEG) - 90.0F, 10.0F);
+		face((float) (Mth.atan2(dz, dx) * Mth.RAD_TO_DEG) - 90.0F, pitch);
 	}
 
 	// ---- actions ----------------------------------------------------------------------------

@@ -24,6 +24,14 @@ final class PathExecutor {
 	/** Upper bound for mining a single planned block. */
 	private static final int MINE_TICKS = 20 * 25;
 	private static final double CENTER_TOLERANCE = 0.4;
+	/** In water the body drifts and bobs: looser centring before turns. */
+	private static final double CENTER_TOLERANCE_WATER = 0.7;
+	/** Straight water steps ahead before sprint-swimming is worth starting. */
+	private static final int SPRINT_SWIM_RUN = 4;
+	/** Trying this long to get the eyes under (to start swimming) means the water is too shallow: paddle instead. */
+	private static final int SWIM_START_TICKS = 30;
+	/** Skimming: looking this far up keeps a swimming player at the top, head clearing the water. */
+	private static final float SKIM_PITCH = -8.0F;
 
 	private final List<Step> steps;
 	private final BlockPos start;
@@ -31,6 +39,11 @@ final class PathExecutor {
 	private int index;
 	private int moveTicks;
 	private int mineTicks;
+	/** Short of breath: paddling with the head up until the air bar is full again. */
+	private boolean breathing;
+	private int swimStartTicks;
+	/** This stretch of water is too shallow to swim in (until we're out of it). */
+	private boolean tooShallow;
 
 	PathExecutor(List<Step> steps, BlockPos start, Predicate<ItemStack> scaffold) {
 		this.steps = steps;
@@ -76,7 +89,7 @@ final class PathExecutor {
 
 		// 3. move
 		if (++moveTicks > STUCK_TICKS) return Result.REPLAN;
-		move(p, controls, step, feet);
+		move(level, p, controls, step, feet);
 		return Result.RUNNING;
 	}
 
@@ -85,15 +98,22 @@ final class PathExecutor {
 		int limit = Math.min(steps.size(), index + 4);
 		for (int k = index; k < limit; k++) {
 			Step s = steps.get(k);
-			if (!feet.equals(s.dest()) || !Navigator.settled(p)) continue;
+			if (!reached(feet, s.dest(), p) || !Navigator.settled(p)) continue;
 			Step next = k + 1 < steps.size() ? steps.get(k + 1) : null;
-			if (next != null && turns(s, next, k == 0 ? start : steps.get(k - 1).dest()) && horizontalDist(p, s.dest()) > CENTER_TOLERANCE) {
+			double tolerance = p.isInWater() ? CENTER_TOLERANCE_WATER : CENTER_TOLERANCE;
+			if (next != null && turns(s, next, k == 0 ? start : steps.get(k - 1).dest()) && horizontalDist(p, s.dest()) > tolerance) {
 				continue; // reached the block, but centre up before turning so we don't clip corners or slip off edges
 			}
 			index = k + 1;
 			moveTicks = 0;
 			mineTicks = 0;
 		}
+	}
+
+	/** At {@code dest}: exactly, or in water within a block of its height (floating, bobbing, swimming). */
+	private static boolean reached(BlockPos feet, BlockPos dest, LocalPlayer p) {
+		if (feet.equals(dest)) return true;
+		return p.isInWater() && feet.getX() == dest.getX() && feet.getZ() == dest.getZ() && Math.abs(feet.getY() - dest.getY()) <= 1;
 	}
 
 	private boolean turns(Step s, Step next, BlockPos before) {
@@ -106,7 +126,8 @@ final class PathExecutor {
 		if (!Navigator.settled(p) || feet.equals(from) || feet.equals(step.dest())) return false;
 		BlockPos dest = step.dest();
 		int lowY = Math.min(from.getY(), dest.getY()) - 1, highY = Math.max(from.getY(), dest.getY()) + 1;
-		if (feet.getY() < lowY || feet.getY() > highY) return true;
+		// in water the height comes and goes (bobbing, coming up for air): only leaving the line counts
+		if (!p.isInWater() && (feet.getY() < lowY || feet.getY() > highY)) return true;
 		return xzDistance(feet, from) > 1 && xzDistance(feet, dest) > 1;
 	}
 
@@ -142,19 +163,28 @@ final class PathExecutor {
 		return Result.RUNNING;
 	}
 
-	private void move(LocalPlayer p, Controls controls, Step step, BlockPos feet) {
+	private void move(ClientLevel level, LocalPlayer p, Controls controls, Step step, BlockPos feet) {
 		Vec3 target = Vec3.atBottomCenterOf(step.dest());
 		double dist = horizontalDist(p, step.dest());
 		boolean inWater = p.isInWater();
+		if (!inWater) {
+			tooShallow = false; // out of that stretch of water
+			swimStartTicks = 0;
+		}
 		switch (step.type()) {
 			case WALK, DIAGONAL -> {
+				if (inWater) {
+					swim(level, p, controls, step, target);
+					return;
+				}
 				controls.faceHorizontally(target);
 				controls.forward();
 				if (shouldSprint(p)) controls.sprint();
-				if (inWater || p.horizontalCollision && p.onGround()) controls.jump();
+				if (p.horizontalCollision && p.onGround()) controls.jump();
 			}
 			case ASCEND -> {
-				controls.faceHorizontally(target);
+				if (p.isSwimming()) p.setSprinting(false); // stand up to climb out: a swimming body dives when it jumps
+				controls.faceHorizontally(target, inWater ? -15.0F : 10.0F);
 				controls.forward();
 				if (inWater || p.onGround() && (p.horizontalCollision || dist < 1.1)) controls.jump();
 			}
@@ -172,6 +202,55 @@ final class PathExecutor {
 				// placed already; just let gravity land us on the new block
 			}
 		}
+	}
+
+	/**
+	 * One water step. Short of breath (a third of the bar gone): paddle with the head up until it's full. A step
+	 * under the surface (a dive to a wreck or a sunken block): swim straight at it. A longer straight swim in deep
+	 * water with food to spare: sprint-swim skimming the surface — sink under once (swimming only starts with the eyes
+	 * in the water), then look a little up so the body rides at the top and the head keeps clearing the water, which
+	 * keeps the air bar full. Otherwise paddle with the head up.
+	 */
+	private void swim(ClientLevel level, LocalPlayer p, Controls controls, Step step, Vec3 target) {
+		int air = p.getAirSupply(), max = p.getMaxAirSupply();
+		if (air < max * 2 / 3) breathing = true;
+		else if (air >= max) breathing = false;
+		boolean fed = p.getFoodData().getFoodLevel() > 6;
+		controls.forward();
+		if (BlockUtil.isWater(level.getBlockState(step.dest().above())) && !breathing) {
+			controls.lookAt(Vec3.atCenterOf(step.dest())); // a dive: swimming steers where it looks
+			if (fed) controls.sprint();
+			return;
+		}
+		if (!breathing && fed && !tooShallow && waterRunAhead(level) >= SPRINT_SWIM_RUN) {
+			controls.sprint();
+			if (p.isSwimming()) {
+				swimStartTicks = 0;
+				controls.faceHorizontally(target, SKIM_PITCH);
+			} else if (++swimStartTicks > SWIM_START_TICKS) {
+				tooShallow = true; // can't get the eyes under here: paddle across
+			} else {
+				controls.faceHorizontally(target, 30.0F);
+				controls.sneak(); // sink until the eyes are under, then the sprint turns into swimming
+			}
+			return;
+		}
+		// paddling: a swimming body would steer down as it jumps, so stand up first
+		if (p.isSwimming()) p.setSprinting(false);
+		controls.faceHorizontally(target, breathing ? -30.0F : 0.0F);
+		controls.jump(); // head above water; against a bank this also climbs out
+	}
+
+	/** Straight-ahead water steps from the current one (a turn or a step onto land ends the run). */
+	private int waterRunAhead(ClientLevel level) {
+		int n = 0;
+		for (int k = index; k < Math.min(steps.size(), index + SPRINT_SWIM_RUN); k++) {
+			Step s = steps.get(k);
+			if (s.type() != Step.Type.WALK && s.type() != Step.Type.DIAGONAL || !BlockUtil.isWater(level.getBlockState(s.dest()))) break;
+			if (k > index && turns(steps.get(k - 1), s, k - 1 == 0 ? start : steps.get(k - 2).dest())) break;
+			n++;
+		}
+		return n;
 	}
 
 	private boolean shouldSprint(LocalPlayer p) {

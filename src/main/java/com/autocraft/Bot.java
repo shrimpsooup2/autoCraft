@@ -115,7 +115,8 @@ public final class Bot {
 
 	/** Progress is saved this often while running (and whenever work starts or stops). */
 	private static final int SAVE_EVERY = 20 * 5;
-	private static final int SWIM_TICKS_FOR_BOAT = 20 * 6;
+	/** Open-water swimming this long (an ocean, not a river: ~100 blocks sprint-swum) asks for a boat. */
+	private static final int SWIM_TICKS_FOR_BOAT = 20 * 20;
 	private static final int BOAT_WANT_TICKS = 20 * 120;
 	/** Stop reasons for finished work (the task tree moves on after these). */
 	public static final String JOB_COMPLETE = "job complete";

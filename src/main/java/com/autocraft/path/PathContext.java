@@ -33,6 +33,8 @@ final class PathContext {
 	final ClientLevel level;
 	final LocalPlayer player;
 	final int throwaway;
+	/** Enough food to sprint: long swims are sprint-swum along the surface (about as fast as walking). */
+	final boolean sprintSwim;
 	private final boolean quiet;
 	private final int minY, maxY;
 	private final Long2ObjectOpenHashMap<LevelChunk> chunks = new Long2ObjectOpenHashMap<>();
@@ -45,6 +47,7 @@ final class PathContext {
 		this.player = player;
 		this.quiet = quiet;
 		this.throwaway = quiet ? 0 : InvUtil.count(player, scaffold); // placing blocks makes noise
+		this.sprintSwim = player.getFoodData().getFoodLevel() > 6;
 		this.minY = level.getMinY();
 		this.maxY = level.getMaxY();
 	}

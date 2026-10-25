@@ -29,6 +29,8 @@ final class Pathfinder {
 	// costs in ticks
 	private static final double WALK = Goal.WALK;
 	private static final double SWIM = 9;
+	private static final double SWIM_SPRINT = 5;
+	private static final double SUBMERGED_EXTRA = 4;
 	private static final double JUMP_EXTRA = 2.5;
 	private static final double DESCEND_EXTRA = 2;
 	private static final double FALL_PER_BLOCK = 1;
@@ -168,7 +170,7 @@ final class Pathfinder {
 		BlockPos place = null;
 		double move;
 		if (ctx.water(x, y, z)) {
-			move = SWIM;
+			move = swimCost(x, y, z);
 		} else if (ctx.standOn(x, y - 1, z)) {
 			move = WALK * ctx.floorMultiplier(x, y, z);
 		} else if (onSolid && n.placed < ctx.throwaway && ctx.replaceable(x, y - 1, z) && !ctx.lava(x, y - 2, z)) {
@@ -187,10 +189,21 @@ final class Pathfinder {
 		if (!ctx.passable(n.x + dx, y, n.z) || !ctx.passable(n.x + dx, y + 1, n.z)) return;
 		if (!ctx.passable(n.x, y, n.z + dz) || !ctx.passable(n.x, y + 1, n.z + dz)) return;
 		double move;
-		if (ctx.water(x, y, z)) move = SWIM * SQRT2;
+		if (ctx.water(x, y, z)) move = swimCost(x, y, z) * SQRT2;
 		else if (ctx.standOn(x, y - 1, z)) move = WALK * SQRT2 * ctx.floorMultiplier(x, y, z);
 		else return;
 		add(n, x, y, z, move + (ctx.nearLava(x, y, z) ? LAVA_NEARBY : 0), Step.Type.DIAGONAL, List.of(), null);
+	}
+
+	/**
+	 * Ticks per block into water at (x,y,z). Deep enough to swim and fed: sprint-swum along the surface (about 0.28
+	 * blocks a tick, like sprinting on land). Wading (ground underfoot, head out) or hungry: paddling. Under the
+	 * surface costs extra — it uses air, and the bot floats at the top anyway.
+	 */
+	private double swimCost(int x, int y, int z) {
+		boolean deep = !ctx.standOn(x, y - 1, z);
+		double cost = deep && ctx.sprintSwim ? SWIM_SPRINT : SWIM;
+		return ctx.water(x, y + 1, z) ? cost + SUBMERGED_EXTRA : cost;
 	}
 
 	private void ascend(Node n, int dx, int dz, boolean inWater, boolean onSolid) {
