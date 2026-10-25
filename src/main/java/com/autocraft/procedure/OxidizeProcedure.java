@@ -6,6 +6,7 @@ import com.autocraft.control.InvUtil;
 import com.autocraft.goal.Requirement.Dim;
 import com.autocraft.path.Navigator;
 import com.autocraft.world.BlockUtil;
+import com.autocraft.world.WorldKey;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonParseException;
@@ -14,6 +15,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import net.fabricmc.loader.api.FabricLoader;
@@ -32,7 +34,7 @@ import org.jspecify.annotations.Nullable;
  * here) and left to oxidize on their own, which takes a long while per stage and only happens while the chunk is
  * loaded (within simulation distance of a player). The job carries on meanwhile (WAITING); once only this is left
  * the bot waits by the garden, mines blocks that reached the stage and scrapes ones that went too far back with an
- * axe first. The garden is remembered across sessions.
+ * axe first. The garden is remembered across sessions, per world.
  */
 final class OxidizeProcedure implements Procedure {
 	private static final List<Block> STAGES = List.of(Blocks.COPPER_BLOCK.weathering().unaffected(), Blocks.COPPER_BLOCK.weathering().exposed(),
@@ -50,7 +52,7 @@ final class OxidizeProcedure implements Procedure {
 		}
 	}
 
-	private static @Nullable List<Plot> garden;
+	private static @Nullable Map<String, List<Plot>> gardens;
 	private static long lastNotice = -NOTICE_TICKS;
 
 	@Override
@@ -82,9 +84,10 @@ final class OxidizeProcedure implements Procedure {
 		return new Run(item, total);
 	}
 
+	/** This world's garden. */
 	private static List<Plot> garden() {
-		if (garden == null) garden = load();
-		return garden;
+		if (gardens == null) gardens = load();
+		return gardens.computeIfAbsent(WorldKey.current(), k -> new ArrayList<>());
 	}
 
 	private final class Run implements Task {
@@ -192,22 +195,23 @@ final class OxidizeProcedure implements Procedure {
 		return FabricLoader.getInstance().getConfigDir().resolve("autocraft").resolve("copper_garden.json");
 	}
 
-	private static List<Plot> load() {
+	private static Map<String, List<Plot>> load() {
+		Map<String, List<Plot>> out = new HashMap<>();
 		try {
 			if (Files.exists(file())) {
-				List<Plot> loaded = GSON.fromJson(Files.readString(file()), new TypeToken<List<Plot>>() {}.getType());
-				if (loaded != null) return new ArrayList<>(loaded);
+				Map<String, List<Plot>> loaded = GSON.fromJson(Files.readString(file()), new TypeToken<Map<String, List<Plot>>>() {}.getType());
+				if (loaded != null) loaded.forEach((k, v) -> out.put(k, new ArrayList<>(v)));
 			}
 		} catch (IOException | JsonParseException e) {
-			Chat.LOG.warn("Could not read copper_garden.json", e);
+			Chat.LOG.warn("Could not read copper_garden.json (a file from before per-world saving starts over)", e);
 		}
-		return new ArrayList<>();
+		return out;
 	}
 
 	private static void save() {
 		try {
 			Files.createDirectories(file().getParent());
-			Files.writeString(file(), GSON.toJson(garden()));
+			Files.writeString(file(), GSON.toJson(gardens));
 		} catch (IOException e) {
 			Chat.LOG.warn("Could not save copper_garden.json", e);
 		}

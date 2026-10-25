@@ -26,6 +26,7 @@ import com.autocraft.build.BuildOrder;
 import com.autocraft.build.BuildPlan;
 import com.autocraft.control.Controls;
 import com.autocraft.craft.RecipeBook;
+import com.autocraft.craft.Stations;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
 import com.autocraft.goal.Requirement.Dim;
@@ -425,6 +426,8 @@ public final class Bot {
 		needs.clear();
 		resetBehaviors();
 		scanner.clear();
+		recovery = null; // saved per world by TaskSave; restored when rejoining that world
+		Stations.forgetWorld();
 		threatNet.save();
 	}
 

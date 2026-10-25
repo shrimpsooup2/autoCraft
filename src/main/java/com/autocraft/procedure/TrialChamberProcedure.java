@@ -7,13 +7,16 @@ import com.autocraft.control.InvUtil;
 import com.autocraft.goal.Requirement.Dim;
 import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
+import com.autocraft.world.WorldKey;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonParseException;
+import com.google.gson.reflect.TypeToken;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -41,7 +44,7 @@ import org.jspecify.annotations.Nullable;
  * spawners for trial keys, open vaults with them (loot includes ominous bottles), and for the heavy core go
  * ominous: drink an ominous bottle (Bad Omen), walk in to get Trial Omen, beat the now-ominous spawners for
  * ominous keys and open ominous vaults until one gives a heavy core. Each vault opens once per player, so used
- * vaults are remembered and the bot moves on to another chamber when one is spent.
+ * vaults are remembered (per world) and the bot moves on to another chamber when one is spent.
  */
 final class TrialChamberProcedure implements Procedure {
 	private static final int CHAMBER_Y = -30;
@@ -52,7 +55,7 @@ final class TrialChamberProcedure implements Procedure {
 	private static final int MAX_LEGS = 60;
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
-	private static @Nullable Set<Long> usedVaults;
+	private static @Nullable Map<String, Set<Long>> usedVaults;
 
 	@Override
 	public boolean makes(Item item) {
@@ -77,9 +80,10 @@ final class TrialChamberProcedure implements Procedure {
 		return new Run(item, total);
 	}
 
+	/** Vaults this player already opened in this world. */
 	private static Set<Long> used() {
 		if (usedVaults == null) usedVaults = load();
-		return usedVaults;
+		return usedVaults.computeIfAbsent(WorldKey.current(), k -> new HashSet<>());
 	}
 
 	private final class Run implements Task {
@@ -296,23 +300,32 @@ final class TrialChamberProcedure implements Procedure {
 		return FabricLoader.getInstance().getConfigDir().resolve("autocraft").resolve("trial_chambers.json");
 	}
 
-	private static Set<Long> load() {
-		Set<Long> out = new HashSet<>();
+	private static Map<String, Set<Long>> load() {
+		Map<String, Set<Long>> out = new HashMap<>();
 		try {
 			if (Files.exists(file())) {
-				long[] loaded = GSON.fromJson(Files.readString(file()), long[].class);
-				if (loaded != null) for (long v : loaded) out.add(v);
+				Map<String, long[]> loaded = GSON.fromJson(Files.readString(file()), new TypeToken<Map<String, long[]>>() {}.getType());
+				if (loaded != null) {
+					loaded.forEach((world, vaults) -> {
+						Set<Long> set = new HashSet<>();
+						for (long v : vaults) set.add(v);
+						out.put(world, set);
+					});
+				}
 			}
 		} catch (IOException | JsonParseException e) {
-			Chat.LOG.warn("Could not read trial_chambers.json", e);
+			Chat.LOG.warn("Could not read trial_chambers.json (a file from before per-world saving starts over)", e);
 		}
 		return out;
 	}
 
 	private static void save() {
+		Map<String, long[]> out = new HashMap<>();
+		used(); // make sure it's loaded
+		usedVaults.forEach((world, vaults) -> out.put(world, vaults.stream().mapToLong(Long::longValue).toArray()));
 		try {
 			Files.createDirectories(file().getParent());
-			Files.writeString(file(), GSON.toJson(used().stream().mapToLong(Long::longValue).toArray()));
+			Files.writeString(file(), GSON.toJson(out));
 		} catch (IOException e) {
 			Chat.LOG.warn("Could not save trial_chambers.json", e);
 		}

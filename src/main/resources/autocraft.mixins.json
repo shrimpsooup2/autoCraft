@@ -3,6 +3,7 @@
 	"package": "com.autocraft.mixin",
 	"compatibilityLevel": "JAVA_25",
 	"client": [
+		"BiomeManagerAccessor",
 		"MinecraftMixin",
 		"MouseHandlerMixin"
 	],

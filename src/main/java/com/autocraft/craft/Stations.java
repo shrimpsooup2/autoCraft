@@ -45,6 +45,14 @@ public final class Stations {
 
 	private Stations() {}
 
+	/** Left the world: its station positions mean nothing in the next one. */
+	public static void forgetWorld() {
+		placed.clear();
+		rejected.clear();
+		baseStations.clear();
+		baseScannedFor = null;
+	}
+
 	/**
 	 * Station to use: the nearest within {@link #USE_RADIUS}; otherwise, when near the base and not carrying one to
 	 * put down, a base station. Null means place our own (or the planner makes one).

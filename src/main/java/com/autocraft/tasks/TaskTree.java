@@ -4,6 +4,7 @@ import com.autocraft.Bases;
 import com.autocraft.Bot;
 import com.autocraft.Chat;
 import com.autocraft.Settings;
+import com.autocraft.TaskSave;
 import com.autocraft.build.BaseWithdraw;
 import com.autocraft.build.BuildOrder;
 import com.autocraft.build.BuildPlan;
@@ -56,6 +57,8 @@ public final class TaskTree {
 	private static boolean active;
 	/** Running just this task and its subtasks; null = the whole tree. */
 	private static @Nullable TaskNode scope;
+	/** The world the run was started in ({@link WorldKey}): it only runs there, and resumes there after a relog. */
+	private static String runWorld = "";
 
 	private TaskTree() {}
 
@@ -64,18 +67,19 @@ public final class TaskTree {
 		return worlds.computeIfAbsent(WorldKey.current(), k -> new ArrayList<>());
 	}
 
+	/** A run is going in this world (one started in another world waits there). */
 	public static boolean active() {
-		return active;
+		return active && WorldKey.current().equals(runWorld);
 	}
 
 	/** True while the tree has work left after the current one (so finishing a job doesn't log off). */
 	public static boolean hasMore() {
-		return active && next(runList(), running) != null;
+		return active() && next(runList(), running) != null;
 	}
 
-	/** The task running right now (a job, fetch or build the bot is doing), or null. */
+	/** The task running right now in this world (a job, fetch or build the bot is doing), or null. */
 	public static @Nullable TaskNode running() {
-		return running;
+		return active() ? running : null;
 	}
 
 	/** What a run works through: the whole tree, or the one task it was started on. */
@@ -85,7 +89,7 @@ public final class TaskTree {
 
 	/** The task a run starts next (while running: the one after the current task), or null. */
 	public static @Nullable TaskNode upNext() {
-		return next(active ? runList() : roots(), running);
+		return active() ? next(runList(), running) : next(roots());
 	}
 
 	/** The list holding {@code node} (a parent's children or the roots), or null. */
@@ -197,19 +201,25 @@ public final class TaskTree {
 
 	/** Run the whole tree ({@code only} null), or just {@code only} and its subtasks. */
 	public static void start(@Nullable TaskNode only) {
-		if (active) return;
+		if (active()) return;
+		if (running != null) { // a run left behind in another world: it no longer counts as running there
+			running.state = TaskNode.State.PENDING;
+			running = null;
+		}
 		scope = only;
 		if (next(runList()) == null) {
 			Chat.info(only == null ? "Nothing left to do in the task tree." : "\"" + only.title + "\" is already done.");
 			scope = null;
+			active = false;
 			return;
 		}
 		active = true;
+		runWorld = WorldKey.current();
 		Chat.info(only == null ? "Running the task tree." : "Running \"" + only.title + "\".");
 	}
 
 	public static void stop() {
-		if (!active) return;
+		if (!active()) return;
 		active = false;
 		scope = null;
 		if (running != null) {
@@ -222,7 +232,7 @@ public final class TaskTree {
 
 	/** The bot finished a job or build ("job complete" / "build complete"): the running task is done. */
 	public static void completed() {
-		if (running == null) return;
+		if (running == null || !active()) return; // a job in another world finished, not this run's task
 		running.state = TaskNode.State.DONE;
 		running = null;
 		save();
@@ -231,6 +241,8 @@ public final class TaskTree {
 	/** Every client tick: notice the current task stopping and start the next. */
 	public static void tick(Minecraft mc) {
 		if (!active || mc.player == null || mc.level == null) return;
+		// another world (or the same one right after joining, before the bot's task is restored): wait
+		if (!WorldKey.current().equals(runWorld) || TaskSave.restorePending()) return;
 		Bot bot = Bot.get();
 		if (running != null) {
 			if (bot.isRunning()) return;

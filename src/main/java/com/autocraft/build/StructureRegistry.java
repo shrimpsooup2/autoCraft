@@ -2,6 +2,7 @@ package com.autocraft.build;
 
 import com.autocraft.Chat;
 import com.autocraft.goal.Requirement.Dim;
+import com.autocraft.world.WorldKey;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonParseException;
@@ -10,7 +11,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.Mirror;
@@ -19,9 +22,9 @@ import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Everything the bot has built (bases, farms, user structures), saved to {@code config/autocraft/structures.json}
- * so farms are reused across sessions. Built structures and the one under construction are protected:
- * pathfinding and resource collection never break blocks inside them.
+ * Everything the bot has built (bases, farms, user structures), per world ({@link WorldKey}), saved to
+ * {@code config/autocraft/structures.json} so farms are reused across sessions. Built structures and the one under
+ * construction are protected: pathfinding and resource collection never break blocks inside them.
  */
 public final class StructureRegistry {
 	/**
@@ -56,15 +59,16 @@ public final class StructureRegistry {
 	}
 
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
-	private static @Nullable List<Entry> entries;
+	private static @Nullable Map<String, List<Entry>> worlds;
 	private static @Nullable BoundingBox underConstruction;
 	private static @Nullable Dim underConstructionDim;
 
 	private StructureRegistry() {}
 
+	/** This world's structures. */
 	public static List<Entry> all() {
-		if (entries == null) entries = load();
-		return entries;
+		if (worlds == null) worlds = load();
+		return worlds.computeIfAbsent(WorldKey.current(), k -> new ArrayList<>());
 	}
 
 	public static void add(Entry e) {
@@ -105,22 +109,23 @@ public final class StructureRegistry {
 		return FabricLoader.getInstance().getConfigDir().resolve("autocraft").resolve("structures.json");
 	}
 
-	private static List<Entry> load() {
+	private static Map<String, List<Entry>> load() {
+		Map<String, List<Entry>> out = new HashMap<>();
 		try {
 			if (Files.exists(file())) {
-				List<Entry> loaded = GSON.fromJson(Files.readString(file()), new TypeToken<List<Entry>>() {}.getType());
-				if (loaded != null) return new ArrayList<>(loaded);
+				Map<String, List<Entry>> loaded = GSON.fromJson(Files.readString(file()), new TypeToken<Map<String, List<Entry>>>() {}.getType());
+				if (loaded != null) loaded.forEach((k, v) -> out.put(k, new ArrayList<>(v)));
 			}
 		} catch (IOException | JsonParseException e) {
-			Chat.LOG.warn("Could not read structures.json", e);
+			Chat.LOG.warn("Could not read structures.json (a file from before per-world saving starts over)", e);
 		}
-		return new ArrayList<>();
+		return out;
 	}
 
 	private static void save() {
 		try {
 			Files.createDirectories(file().getParent());
-			Files.writeString(file(), GSON.toJson(all()));
+			Files.writeString(file(), GSON.toJson(worlds));
 		} catch (IOException e) {
 			Chat.LOG.warn("Could not save structures.json", e);
 		}

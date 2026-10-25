@@ -84,6 +84,11 @@ public final class TaskSave {
 		restoreAt = System.currentTimeMillis() + RESTORE_DELAY_MS;
 	}
 
+	/** Just joined: the saved task hasn't been restored yet. */
+	public static boolean restorePending() {
+		return restoreAt >= 0;
+	}
+
 	/** Every client tick: restore the saved task when it's time. */
 	public static void tick(Minecraft mc) {
 		if (restoreAt < 0 || System.currentTimeMillis() < restoreAt || mc.player == null || mc.level == null) return;
