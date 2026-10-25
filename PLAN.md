@@ -7,8 +7,8 @@ farms or your own schematics (alone or as a team of bots), stores loot and logs 
 
 **How it works, animated:** `docs/how-it-works/how-it-works.mp4` (2.6 min), or open `docs/how-it-works/index.html`
 in a browser to scrub through it scene by scene (tick loop, planner, scanner + A*, survival, water, task tree).
-The mod icon (`src/main/resources/assets/autocraft/icon.png`, enlarged in `docs/logo-512.png`) is a player head
-that is half face, half circuitry.
+The mod icon (`src/main/resources/assets/autocraft/icon.png`, enlarged in `docs/logo-512.png`) is a gear that
+dissolves into redstone circuitry: its right-hand teeth turn into traces ending in pads, and bits break off it.
 
 ## Stack
 - Minecraft **26.3**, Fabric Loader 0.19.5, Fabric API, Java 25, Loom (`./gradlew build`, `./gradlew runClient`).
