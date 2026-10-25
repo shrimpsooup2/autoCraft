@@ -274,6 +274,19 @@ has settled and reached the server; untargeted item use (buckets, food) finishes
   (`config/autocraft/chests.json`). Prerequisites a base's chests hold are fetched from the quickest such base
   when the round trip beats gathering, builds take from the base nearest the site that has the item; *Materials
   at base* (or `!ac base stocked on`) checks base chests not looked into yet.
+- "Per world" means the singleplayer save folder or the server address, plus the world's hashed seed (which the
+  server sends every client): two singleplayer worlds both called "New World", or two worlds behind one address,
+  never share bases, task tree, structures, chests, deaths, copper garden, used vaults or resume state. A task-tree
+  run belongs to the world it was started in and waits while you're elsewhere. (Files from before this keying
+  start over.)
+
+### Water and wood
+- An explore leg over water or ice, or six seconds of open-water swimming, makes the gear planner build a boat
+  (the cheapest kind, or whichever kind 5 planks are carried for); legs over water are then sailed.
+- With wood needed and no trees around (out at sea, an iceberg, or exploring came up empty), shipwreck planks and
+  logs count as wood — planks only in or under water, never from someone's house.
+- Crafted or smelted blocks (iron block, comparator, iron bars, terracotta) are never searched for in the world:
+  mining one would give it back, but none generate, so they're always made.
 
 ## Phases
 | # | Phase | Status |
@@ -294,7 +307,7 @@ has settled and reached the server; untargeted item use (buckets, food) finishes
 | 14 | **Fixes** — shared station rules, multi-furnace smelting, station pickup, faster pathing, quick-kill combat with crits, drowning reflex, tool tiers scaled to work | code complete |
 | 15 | **Mob drops & procedures** — loot tables, hunting, honey/wool/milk/eggs, block work, copper garden, trial chambers | code complete |
 | 16 | **Additions** — smooth aim, mob farm, stonecutter, portal time costs + bucket portal, death recovery, player alert, big-build stash and tool investment, chest memory and base fetches, resume after relog, task tree | code complete |
-| 17 | **Hardening** — in-game testing; fixed so far: stalls (gear planning was blocked by any mob within 8 blocks, worn cheap tools refused, job loot never used for tools), far targets past chunk borders, sunken logs chosen over dry ones, hurt flee/work ping-pong, eating blocked by mobs behind walls; `!ac why` decision trace | in progress |
+| 17 | **Hardening** — in-game testing; fixed so far: stalls (gear planning was blocked by any mob within 8 blocks, worn cheap tools refused, job loot never used for tools), far targets past chunk borders, sunken logs chosen over dry ones, hurt flee/work ping-pong, eating blocked by mobs behind walls, searching for crafted blocks (iron block for an iron pickaxe), saves leaking between same-named worlds; boats over water, shipwreck wood; `!ac why` decision trace. Next: better swimming (sprint-swim skimming the surface) | in progress |
 
 "Code complete" = compiles against the real 26.3 client jar; not yet run in-game (see Build).
 
