@@ -126,6 +126,9 @@ public final class Bot {
 	private boolean running;
 	private boolean paused;
 	private String activeBehavior = "idle";
+	private static final int TRACE_SIZE = 40;
+	private final java.util.ArrayDeque<String> trace = new java.util.ArrayDeque<>();
+	private String lastTrace = "";
 	private String status = "";
 	private @Nullable ElytraTravel flight;
 	private long ticks;
@@ -194,7 +197,26 @@ public final class Bot {
 				break;
 			}
 		}
+		if (activeBehavior.equals("idle")) status = "nothing to do right now"; // not the last thing it did
+		trace();
 		if (running) controls.apply();
+	}
+
+	/** Record behavior/status/need changes (the last {@link #TRACE_SIZE}), for {@code !ac why}. */
+	private void trace() {
+		Requirement need = activeNeed();
+		String line = activeBehavior + ": " + status + (need == null ? "" : " [need " + need + "]");
+		if (line.equals(lastTrace)) return;
+		lastTrace = line;
+		String stamped = String.format("%d:%02d %s", ticks / 1200, ticks / 20 % 60, line);
+		trace.addLast(stamped);
+		while (trace.size() > TRACE_SIZE) trace.removeFirst();
+		Chat.LOG.debug("trace {}", stamped);
+	}
+
+	/** Recent decisions, oldest first (minutes:seconds of bot time). */
+	public List<String> recentTrace() {
+		return List.copyOf(trace);
 	}
 
 	/** "Log off near players": another player (not a teammate) within the radius ends the session. */

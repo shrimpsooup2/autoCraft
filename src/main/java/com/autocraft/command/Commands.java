@@ -93,6 +93,14 @@ public final class Commands {
 				if (args.length < 4) throw new IllegalArgumentException("usage: !ac goto <x> <y> <z>");
 				bot.startGoto(new Goal.Block(position(player, args, 1)));
 			}
+			case "why" -> {
+				Chat.info("Now: " + bot.activeBehavior() + (bot.isRunning() ? "" : " (not running)") + " — " + bot.status());
+				Requirement need = bot.activeNeed();
+				Requirement target = bot.currentTarget();
+				Chat.info("Prerequisite: " + (need == null ? "none" : need) + " · collector target: " + (target == null ? "none" : target));
+				List<String> recent = bot.recentTrace();
+				for (String line : recent.subList(Math.max(0, recent.size() - 12), recent.size())) Chat.info("  " + line);
+			}
 			case "resources" -> Chat.info("Named: " + Resources.describe() + ". Any natural block's item id works, and any craftable or smeltable item"
 					+ " (torch, glass, piston, iron_ingot...).");
 			case "build" -> build(bot, args);

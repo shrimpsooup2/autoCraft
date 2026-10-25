@@ -3,7 +3,6 @@ package com.autocraft.behavior;
 import com.autocraft.Bot;
 import com.autocraft.Chat;
 import com.autocraft.ai.Features;
-import com.autocraft.combat.Threats;
 import com.autocraft.control.InvUtil;
 import com.autocraft.craft.Planner;
 import com.autocraft.craft.Planner.Step;
@@ -48,7 +47,6 @@ import org.jspecify.annotations.Nullable;
  */
 public final class GearBehavior implements Behavior {
 	private static final int PLAN_EVERY = 20;
-	private static final double HOSTILE_RADIUS = 8;
 	private static final List<Item> PICKAXES = List.of(Items.WOODEN_PICKAXE, Items.STONE_PICKAXE, Items.IRON_PICKAXE, Items.DIAMOND_PICKAXE);
 	private static final int NETHER_BLOCKS = 32;
 	private static final int WATER_SEARCH_EVERY = 100;
@@ -112,7 +110,8 @@ public final class GearBehavior implements Behavior {
 		if (fillBucket(bot, p)) return true;
 		if (++sincePlan < PLAN_EVERY) return false;
 		sincePlan = 0;
-		if (!Threats.collect(bot, HOSTILE_RADIUS).isEmpty()) return false;
+		// no "mobs nearby" gate here: combat runs first and takes over when a mob matters; a mob behind a wall used
+		// to block all gear planning, and with the only pickaxe worn out the bot then stood still
 
 		Step step = plan(bot, p);
 		switch (step) {
@@ -167,7 +166,7 @@ public final class GearBehavior implements Behavior {
 
 	private Step plan(Bot bot, LocalPlayer p) {
 		Planner planner = Stations.planner(bot);
-		for (Want w : wants(bot, p, bot.targetForGear())) {
+		for (Want w : wants(bot, p, planner, bot.targetForGear())) {
 			Step s = w.plan.apply(planner);
 			if (s instanceof Planner.Done || s instanceof Planner.Unavailable) continue;
 			if (!w.required && !(s instanceof Planner.Craft c && w.finalItem.test(c.recipe().output()))) continue;
@@ -182,11 +181,11 @@ public final class GearBehavior implements Behavior {
 	 * a lot with wood), iron/diamond when hundreds of blocks remain and the materials are cheap, axes and shovels
 	 * for big wood/dirt jobs. Nothing is made that something carried already beats.
 	 */
-	private static List<Want> wants(Bot bot, LocalPlayer p, @Nullable Requirement target) {
+	private static List<Want> wants(Bot bot, LocalPlayer p, Planner planner, @Nullable Requirement target) {
 		List<Want> wants = new ArrayList<>();
 		int pick = 0, axe = 0, shovel = 0;
 		if (target != null) {
-			Item tool = requiredPickaxe(target);
+			Item tool = cheapestPickaxe(planner, target);
 			if (tool != null && !canHarvestAny(p, target)) wants.add(Want.required(tool));
 			boolean deep = target.strategy() == Requirement.Strategy.UNDERGROUND || target.dimension() == Requirement.Dim.NETHER;
 			int remaining = Math.max(0, target.amount() - InvUtil.count(p, target.counts()));
@@ -267,7 +266,7 @@ public final class GearBehavior implements Behavior {
 	private static Step toolFirst(Planner planner, LocalPlayer p, Planner.Gather gather) {
 		Requirement req = gather.requirement();
 		for (int depth = 0; depth <= PICKAXES.size(); depth++) {
-			Item tool = requiredPickaxe(req);
+			Item tool = cheapestPickaxe(planner, req);
 			if (tool == null || canHarvestAny(p, req)) return new Planner.Gather(req);
 			Step s = planner.next(tool, 1);
 			if (!(s instanceof Planner.Gather g)) return s;
@@ -276,18 +275,27 @@ public final class GearBehavior implements Behavior {
 		return new Planner.Gather(req);
 	}
 
-	/** Cheapest pickaxe that gets drops from at least one source, or null if no tool is needed. */
-	private static @Nullable Item requiredPickaxe(Requirement r) {
+	/**
+	 * The pickaxe to make for a requirement: of the tiers that get drops from its blocks, the one that's cheapest
+	 * to make right now — a stone pickaxe when cobblestone is on hand (3 cobblestone instead of a trip for logs),
+	 * not always the lowest tier. Null if no tool is needed.
+	 */
+	private static @Nullable Item cheapestPickaxe(Planner planner, Requirement r) {
 		for (Block b : r.sources()) {
 			if (!b.defaultBlockState().requiresCorrectToolForDrops()) return null;
 		}
+		Item best = null;
+		double bestCost = Double.MAX_VALUE;
 		for (Item pick : PICKAXES) {
 			ItemStack stack = new ItemStack(pick);
-			for (Block b : r.sources()) {
-				if (stack.isCorrectToolForDrops(b.defaultBlockState())) return pick;
+			if (r.sources().stream().noneMatch(b -> stack.isCorrectToolForDrops(b.defaultBlockState()))) continue;
+			double c = planner.costOf(pick);
+			if (best == null || c < bestCost) {
+				bestCost = c;
+				best = pick;
 			}
 		}
-		return null;
+		return best;
 	}
 
 	private static boolean canHarvestAny(LocalPlayer p, Requirement r) {

@@ -110,6 +110,11 @@ public final class Planner {
 		return best == null ? new Unavailable("boat") : next(best, 1);
 	}
 
+	/** Rough effort to get one more of {@code item} (0 when a usable one is carried); compares alternatives. */
+	public double costOf(Item item) {
+		return cost(item, false, 0, new HashSet<>());
+	}
+
 	// ---- planning -------------------------------------------------------------------------------
 
 	private int carried(Item item) {
@@ -217,18 +222,34 @@ public final class Planner {
 		return ing.options().getFirst();
 	}
 
+	/**
+	 * Which option of an ingredient to make more of: the cheapest to make. What's already carried doesn't count
+	 * here (it's in the count anyway) — two birch planks on hand must not mean "make more birch planks" when only
+	 * oak logs are carried.
+	 */
 	private @Nullable Item cheapestOption(Ingredient ing, int depth, Set<Item> visiting) {
 		Item best = null;
 		double bestCost = INF;
 		boolean flexible = ing.options().size() > 1;
 		for (Item option : ing.options()) {
-			double c = cost(option, flexible, depth + 1, visiting);
+			double c = makeCost(option, flexible, depth + 1, visiting);
 			if (c < bestCost) {
 				bestCost = c;
 				best = option;
 			}
 		}
 		return best;
+	}
+
+	/** Cost of making or getting one more, whether or not some are carried. */
+	private double makeCost(Item item, boolean flexible, int depth, Set<Item> visiting) {
+		if (depth > MAX_DEPTH || !visiting.add(item)) return INF;
+		try {
+			Route r = bestRoute(item, flexible, depth, visiting);
+			return r == null ? INF : r.cost;
+		} finally {
+			visiting.remove(item);
+		}
 	}
 
 	// ---- route costs ----------------------------------------------------------------------------

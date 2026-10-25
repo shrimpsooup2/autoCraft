@@ -93,6 +93,20 @@ public final class BlockUtil {
 		return false;
 	}
 
+	/**
+	 * Under water: water somewhere in the column above before open air (a shipwreck's logs, a sunken tree), even
+	 * when the block's own neighbours are other blocks.
+	 */
+	public static boolean underwater(BlockGetter level, BlockPos pos) {
+		BlockPos.MutableBlockPos m = pos.mutable();
+		for (int dy = 1; dy <= 16; dy++) {
+			BlockState s = level.getBlockState(m.move(Direction.UP));
+			if (isWater(s)) return true;
+			if (s.isAir()) return false;
+		}
+		return false;
+	}
+
 	public static boolean touchesWater(BlockGetter level, BlockPos pos) {
 		for (Direction d : Direction.values()) {
 			if (d != Direction.DOWN && isWater(level.getBlockState(pos.relative(d)))) return true;

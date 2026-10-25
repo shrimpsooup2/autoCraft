@@ -5,6 +5,7 @@ import java.util.Set;
 import java.util.function.Predicate;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
@@ -185,7 +186,7 @@ public final class InvUtil {
 			ItemStack s = inv.getItem(i);
 			if (s.isEmpty()) continue;
 			if (needsTool && !s.isCorrectToolForDrops(state)) continue;
-			if (nearlyBroken(s)) continue;
+			if (reserved(s)) continue;
 			float speed = s.getDestroySpeed(state);
 			if (speed > bestSpeed) {
 				bestSpeed = speed;
@@ -197,7 +198,7 @@ public final class InvUtil {
 
 	public static boolean canHarvest(Player p, BlockState state) {
 		if (!state.requiresCorrectToolForDrops()) return true;
-		return find(p, s -> s.isCorrectToolForDrops(state) && !nearlyBroken(s)) >= 0;
+		return find(p, s -> s.isCorrectToolForDrops(state) && !reserved(s)) >= 0;
 	}
 
 	public static void selectBestTool(Player p, BlockState state) {
@@ -221,7 +222,7 @@ public final class InvUtil {
 				float bestSpeed = 1.0F;
 				for (int i = 0; i < MAIN_SIZE; i++) {
 					ItemStack s = inv.getItem(i);
-					if (s.isEmpty() || !plainTool(s) || nearlyBroken(s)) continue;
+					if (s.isEmpty() || !plainTool(s) || reserved(s)) continue;
 					if (state.requiresCorrectToolForDrops() && !s.isCorrectToolForDrops(state)) continue;
 					float speed = s.getDestroySpeed(state);
 					if (speed > bestSpeed) {
@@ -247,8 +248,21 @@ public final class InvUtil {
 		return true;
 	}
 
-	/** Keep a few uses in reserve so tools are never fully destroyed mid-job. */
+	/**
+	 * A few uses left: the planners count it as gone and make a replacement now (before it breaks mid-job). Cheap
+	 * tools are still used to the last swing meanwhile; see {@link #reserved}.
+	 */
 	public static boolean nearlyBroken(ItemStack s) {
 		return s.isDamageableItem() && s.getMaxDamage() - s.getDamageValue() <= 3;
+	}
+
+	/**
+	 * Nearly broken and worth saving (diamond/netherite, or enchanted — mending gear repairs itself): never used up.
+	 * A worn wooden or stone pickaxe is not reserved: refusing it would mean mining stone by hand, or nothing.
+	 */
+	public static boolean reserved(ItemStack s) {
+		if (!nearlyBroken(s)) return false;
+		String path = BuiltInRegistries.ITEM.getKey(s.getItem()).getPath();
+		return s.isEnchanted() || path.startsWith("diamond_") || path.startsWith("netherite_");
 	}
 }

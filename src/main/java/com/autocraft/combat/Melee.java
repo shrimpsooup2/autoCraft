@@ -69,7 +69,7 @@ public final class Melee {
 		double bestDamage = 1;
 		for (int i = 0; i < InvUtil.MAIN_SIZE; i++) {
 			double d = Threats.attackDamage(p.getInventory().getItem(i));
-			if (d > bestDamage && !InvUtil.nearlyBroken(p.getInventory().getItem(i))) {
+			if (d > bestDamage && !InvUtil.reserved(p.getInventory().getItem(i))) {
 				bestDamage = d;
 				best = i;
 			}

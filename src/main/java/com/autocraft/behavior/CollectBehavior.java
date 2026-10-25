@@ -43,6 +43,8 @@ public final class CollectBehavior implements Behavior {
 	private static final int SCAN_CHUNKS = 5;
 	private static final int SCAN_MAX = 96;
 	private static final int SCAN_MAX_AGE = 40;
+	/** A source in or under water counts as this much farther than a dry one. */
+	private static final double WET_PENALTY = 64;
 	private static final double DROP_RADIUS = 12;
 	private static final int BLACKLIST_TICKS = 20 * 60 * 5;
 	private static final int TUNNEL_LEG = 24;
@@ -206,9 +208,11 @@ public final class CollectBehavior implements Behavior {
 			Long until = blacklist.get(pos);
 			if (until != null && until > tick) continue;
 			if (!BlockUtil.isBreakable(level, pos, level.getBlockState(pos))) continue;
-			if (!allowWet && BlockUtil.touchesWater(level, pos)) continue;
+			// in or under water (a shipwreck's logs, a sunken tree): only when nothing dry turns up, and dry wins
+			boolean wet = BlockUtil.touchesWater(level, pos) || BlockUtil.underwater(level, pos);
+			if (wet && !allowWet) continue;
 			double dx = pos.getX() - feet.getX(), dy = pos.getY() - feet.getY(), dz = pos.getZ() - feet.getZ();
-			double score = Math.sqrt(dx * dx + dz * dz) + Math.abs(dy) * 2;
+			double score = Math.sqrt(dx * dx + dz * dz) + Math.abs(dy) * 2 + (wet ? WET_PENALTY : 0);
 			if (score < bestScore) {
 				bestScore = score;
 				best = pos;
