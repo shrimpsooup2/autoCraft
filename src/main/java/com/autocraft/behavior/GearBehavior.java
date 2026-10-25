@@ -96,6 +96,9 @@ public final class GearBehavior implements Behavior {
 			case RUNNING -> {
 				return true;
 			}
+			case TRAVEL -> {
+				return false; // a procedure needs the other dimension: the portal behavior takes us
+			}
 			case FAILED, WAITING -> {
 				onFailure();
 				sincePlan = PLAN_EVERY;

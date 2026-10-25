@@ -26,10 +26,11 @@ import net.minecraft.world.level.block.Blocks;
 import org.jspecify.annotations.Nullable;
 
 /**
- * What mining blocks and killing mobs gives, read from the game jar's own loot tables
- * ({@code data/minecraft/loot_table/blocks|entities}): flint from gravel, string from cobwebs (not with shears),
- * leaves only with shears, gunpowder from creepers... Drops behind special conditions (silk touch, being on fire,
- * killed by a skeleton) are kept out or marked so planners only rely on what the bot can actually do.
+ * What mining blocks, killing mobs and opening structure chests gives, read from the game jar's own loot tables
+ * ({@code data/minecraft/loot_table/blocks|entities|chests}): flint from gravel, string from cobwebs (not with
+ * shears), leaves only with shears, gunpowder from creepers, echo shards in ancient city chests... Drops behind
+ * special conditions (silk touch, being on fire, killed by a skeleton) are kept out or marked so planners only rely
+ * on what the bot can actually do.
  */
 public final class LootBook {
 	/** Which tool a drop needs. */
@@ -48,10 +49,14 @@ public final class LootBook {
 
 	public record MobDrop(EntityType<?> type, double chance) {}
 
+	/** A structure chest table ({@code ancient_city}, {@code village/village_weaponsmith}...) and the chance one chest has the item. */
+	public record ChestDrop(String table, double chance) {}
+
 	private static @Nullable LootBook instance;
 
 	private final Map<Item, List<BlockDrop>> fromBlocks = new HashMap<>();
 	private final Map<Item, List<MobDrop>> fromMobs = new HashMap<>();
+	private final Map<Item, List<ChestDrop>> fromChests = new HashMap<>();
 
 	public static LootBook get() {
 		if (instance == null) instance = load();
@@ -68,6 +73,11 @@ public final class LootBook {
 		return fromMobs.getOrDefault(item, List.of());
 	}
 
+	/** Structure loot tables (chests, and {@code archaeology/...} for suspicious sand/gravel) that can hold {@code item}. */
+	public List<ChestDrop> chestSources(Item item) {
+		return fromChests.getOrDefault(item, List.of());
+	}
+
 	// ---- loading --------------------------------------------------------------------------------
 
 	private static LootBook load() {
@@ -79,7 +89,9 @@ public final class LootBook {
 		}
 		int blocks = book.readAll(root.get().resolve("blocks"), true);
 		int mobs = book.readAll(root.get().resolve("entities"), false);
-		Chat.LOG.info("Loaded {} block and {} entity loot tables", blocks, mobs);
+		int chests = book.readChests(root.get().resolve("chests"), "");
+		chests += book.readChests(root.get().resolve("archaeology"), "archaeology/");
+		Chat.LOG.info("Loaded {} block, {} entity and {} chest/archaeology loot tables", blocks, mobs, chests);
 		return book;
 	}
 
@@ -105,6 +117,65 @@ public final class LootBook {
 			Chat.LOG.error("Could not list loot tables in {}", dir, e);
 		}
 		return n;
+	}
+
+	/** Chest tables keep their folder in the id ({@code village/village_armorer}); suspicious blocks get {@code archaeology/}. */
+	private int readChests(Path dir, String prefix) {
+		int n = 0;
+		if (!Files.isDirectory(dir)) return 0;
+		try (Stream<Path> files = Files.walk(dir)) {
+			for (Path f : (Iterable<Path>) files::iterator) {
+				if (!f.toString().endsWith(".json")) continue;
+				String id = prefix + dir.relativize(f).toString().replace('\\', '/').replace(".json", "");
+				try (Reader r = Files.newBufferedReader(f)) {
+					readChest(id, JsonParser.parseReader(r).getAsJsonObject());
+					n++;
+				} catch (RuntimeException | IOException e) {
+					Chat.LOG.debug("Skipping loot table {}: {}", f, e.toString());
+				}
+			}
+		} catch (IOException e) {
+			Chat.LOG.error("Could not list loot tables in {}", dir, e);
+		}
+		return n;
+	}
+
+	/** Per pool: weighted picks, average rolls; the item's chance per chest combines the pools. */
+	private void readChest(String id, JsonObject json) {
+		if (!json.has("pools")) return;
+		Map<Item, Double> missChance = new HashMap<>();
+		for (JsonElement poolEl : json.getAsJsonArray("pools")) {
+			JsonObject pool = poolEl.getAsJsonObject();
+			if (conditions(pool).impossible) continue;
+			double rolls = rolls(pool.get("rolls"));
+			double total = 0;
+			Map<Item, Double> weights = new HashMap<>();
+			for (JsonElement entryEl : pool.getAsJsonArray("entries")) {
+				JsonObject entry = entryEl.getAsJsonObject();
+				double w = entry.has("weight") ? entry.get("weight").getAsDouble() : 1;
+				total += w;
+				if (!"minecraft:item".equals(entry.has("type") ? entry.get("type").getAsString() : "")) continue;
+				Item item = BuiltInRegistries.ITEM.getOptional(Identifier.parse(entry.get("name").getAsString())).orElse(Items.AIR);
+				// a plain book that gets enchanted on the way out is an enchanted book in the chest
+				if (item == Items.BOOK && entry.has("functions") && entry.get("functions").toString().contains("enchant")) item = Items.ENCHANTED_BOOK;
+				if (item != Items.AIR) weights.merge(item, w, Double::sum);
+			}
+			if (total <= 0) continue;
+			for (Map.Entry<Item, Double> e : weights.entrySet()) {
+				double perPool = Math.pow(1 - e.getValue() / total, rolls);
+				missChance.merge(e.getKey(), perPool, (a, b) -> a * b);
+			}
+		}
+		missChance.forEach((item, miss) -> fromChests.computeIfAbsent(item, k -> new ArrayList<>()).add(new ChestDrop(id, 1 - miss)));
+	}
+
+	private static double rolls(@Nullable JsonElement e) {
+		if (e == null) return 1;
+		if (e.isJsonPrimitive()) return e.getAsDouble();
+		JsonObject o = e.getAsJsonObject();
+		if (o.has("min") && o.has("max")) return (o.get("min").getAsDouble() + o.get("max").getAsDouble()) / 2;
+		if (o.has("value")) return o.get("value").getAsDouble();
+		return 1;
 	}
 
 	private void readBlock(String id, JsonObject json) {

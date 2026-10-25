@@ -3,6 +3,8 @@ package com.autocraft.control;
 import com.autocraft.Settings;
 import com.autocraft.loot.LootBook;
 import java.util.function.Predicate;
+import net.minecraft.tags.BlockTags;
+import net.minecraft.tags.ItemTags;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Options;
 import net.minecraft.client.player.LocalPlayer;
@@ -35,6 +37,8 @@ public final class Controls {
 	private boolean mining;
 	private boolean driving;
 	private boolean aimedLastTick = true;
+	/** Ancient city: sneak everywhere, never sprint, only wool may be mined or placed. */
+	private boolean quiet;
 
 	public Controls(Minecraft mc) {
 		this.mc = mc;
@@ -60,6 +64,9 @@ public final class Controls {
 	/** True while the bot is breaking a block this tick; the mixin keeps vanilla from aborting it. */
 	public boolean isMining() { return mining; }
 
+	public void setQuiet(boolean value) { quiet = value; }
+	public boolean quiet() { return quiet; }
+
 	public void apply() {
 		LocalPlayer p = mc.player;
 		aim.update(p);
@@ -81,12 +88,25 @@ public final class Controls {
 		o.keyLeft.setDown(l);
 		o.keyRight.setDown(r);
 		o.keyJump.setDown(jump);
-		o.keyShift.setDown(sneak);
-		o.keySprint.setDown(sprint);
+		// quiet: footsteps, splashes and landings make no vibrations while sneaking; sneaking refuses to step off a
+		// ledge though, so let go for that one step (and press again in the air, before landing)
+		o.keyShift.setDown(sneak || quiet && !(p.onGround() && aboutToStepDown(p, f, b, l, r)));
+		o.keySprint.setDown(sprint && !quiet);
 		o.keyUse.setDown(use);
 		o.keyAttack.setDown(false);
 		driving = true;
 		aimedLastTick = aim.settled(); // this tick's movement packet carries the settled view
+	}
+
+	/** Walking on with these keys would leave the ground (a drop of a block or more). */
+	private boolean aboutToStepDown(LocalPlayer p, boolean f, boolean b, boolean l, boolean r) {
+		double fw = (f ? 1 : 0) - (b ? 1 : 0), lw = (l ? 1 : 0) - (r ? 1 : 0);
+		if (fw == 0 && lw == 0) return false;
+		double yaw = Math.toRadians(p.getYRot());
+		double dx = lw * Math.cos(yaw) - fw * Math.sin(yaw), dz = fw * Math.cos(yaw) + lw * Math.sin(yaw);
+		double len = Math.sqrt(dx * dx + dz * dz);
+		BlockPos below = BlockPos.containing(p.getX() + dx / len * 0.55, p.getY() - 0.5, p.getZ() + dz / len * 0.55);
+		return mc.level.getBlockState(below).getCollisionShape(mc.level, below).isEmpty();
 	}
 
 	/** Let go of everything (bot stopped / paused). Safe to call repeatedly. */
@@ -172,6 +192,7 @@ public final class Controls {
 		BlockState state = mc.level.getBlockState(pos);
 		if (state.isAir() || state.canBeReplaced() && !state.getFluidState().isEmpty()) return true; // gone, or plain fluid
 		if (state.getDestroySpeed(mc.level, pos) < 0) return true; // unbreakable: caller must route around
+		if (quiet && !state.is(BlockTags.DAMPENS_VIBRATIONS)) return true; // a sculk sensor would hear it: not here
 		InvUtil.selectTool(mc.player, state, tool);
 		Direction side = faceToward(pos);
 		lookAt(Vec3.atCenterOf(pos).add(Vec3.atLowerCornerOf(side.getUnitVec3i()).scale(0.5)));
@@ -228,6 +249,7 @@ public final class Controls {
 			Vec3 hit = Vec3.atCenterOf(against).add(Vec3.atLowerCornerOf(clickedFace.getUnitVec3i()).scale(0.5));
 			if (mc.player.getEyePosition().distanceToSqr(hit) > sq(mc.player.blockInteractionRange())) continue;
 			if (!InvUtil.select(mc.player, item)) return false;
+			if (quiet && !mc.player.getMainHandItem().is(ItemTags.WOOL)) return false; // only wool goes down silently
 			lookAt(hit);
 			InteractionResult r = mc.gameMode.useItemOn(mc.player, InteractionHand.MAIN_HAND,
 					new BlockHitResult(hit, clickedFace, against, false));

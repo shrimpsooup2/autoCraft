@@ -50,7 +50,7 @@ public final class ItemCatalog {
 	static String how(Item item, Requirement r) {
 		if (!r.isCrafted()) return "Mined";
 		if (RecipeBook.get().isMade(item)) return "Crafted / smelted";
-		if (Procedures.forItem(item) != null) return "Special procedure (tools on blocks/animals, waiting, trial chambers)";
+		if (Procedures.forItem(item) != null) return Procedures.forItem(item).label();
 		return "Hunted / mining loot";
 	}
 

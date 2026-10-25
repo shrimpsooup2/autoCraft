@@ -43,6 +43,7 @@ public final class Navigator {
 	private Predicate<ItemStack> searchScaffold = InvUtil::isThrowaway;
 	private Pathfinder.@Nullable Result preResult;
 	private boolean lastPartial;
+	private boolean quiet;
 
 	public Navigator(Minecraft mc, Controls controls, Predicate<ItemStack> keep) {
 		this.mc = mc;
@@ -71,6 +72,15 @@ public final class Navigator {
 
 	public @Nullable Goal goal() {
 		return goal;
+	}
+
+	/** Quiet mode (ancient cities): plan without mining, placing or stepping on sculk sensors/shriekers. */
+	public void setQuiet(boolean value) {
+		if (quiet == value) return;
+		quiet = value;
+		Goal keepGoal = goal;
+		stop(); // the current plan may mine or place: plan again
+		if (keepGoal != null) setGoal(keepGoal);
 	}
 
 	public Status tick() {
@@ -112,7 +122,7 @@ public final class Navigator {
 		if (search == null) {
 			if (!settled(p)) return Status.MOVING; // let falls/jumps land before planning
 			searchScaffold = InvUtil.scaffold(p, keep);
-			search = new Pathfinder(new PathContext(mc.level, p, searchScaffold), feet, goal);
+			search = new Pathfinder(new PathContext(mc.level, p, searchScaffold, quiet), feet, goal);
 			searchStart = feet;
 			searchTicks = 0;
 		}
@@ -141,7 +151,7 @@ public final class Navigator {
 	private void prePlan(LocalPlayer p) {
 		if (lastPartial && search == null && preResult == null && executor.remaining() <= 3) {
 			searchStart = executor.end();
-			search = new Pathfinder(new PathContext(mc.level, p, searchScaffold), searchStart, goal);
+			search = new Pathfinder(new PathContext(mc.level, p, searchScaffold, quiet), searchStart, goal);
 			searchTicks = 0;
 		}
 		if (search == null) return;

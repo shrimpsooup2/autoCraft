@@ -99,7 +99,9 @@ public final class CombatBehavior implements Behavior {
 		boolean oneHit = target != null && hitsToKill(p, target) <= 1;
 		boolean low = p.getHealth() <= LOW_HEALTH;
 		boolean hunted = target != null && bot.huntTargets().contains(target.getType()); // the job is killing these
-		Mode wanted = target == null || threats.stream().anyMatch(m -> m instanceof Warden) ? Mode.FLEE
+		boolean warden = threats.stream().anyMatch(m -> m instanceof Warden);
+		if (warden) bot.setQuiet(false); // it's onto us: running beats sneaking now
+		Mode wanted = target == null || warden ? Mode.FLEE
 				: low && !oneHit ? Mode.FLEE
 				: hunted && netSays >= 0.2 ? Mode.FIGHT
 				: quick && netSays >= (engaged && mode == Mode.FIGHT ? 0.3 : 0.4) ? Mode.FIGHT

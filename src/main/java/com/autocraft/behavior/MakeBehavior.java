@@ -46,6 +46,9 @@ public final class MakeBehavior implements Behavior {
 			case RUNNING -> {
 				return true;
 			}
+			case TRAVEL -> {
+				return false; // a procedure needs the other dimension: the portal behavior takes us
+			}
 			case DONE -> sincePlan = REPLAN_TICKS;
 			case FAILED -> {
 				Chat.warn("Making failed; retrying.");

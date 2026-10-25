@@ -90,7 +90,7 @@ public final class PortalBehavior implements Behavior {
 		// for our items after a death, a base to fetch from, then the job
 		Requirement materialNeed = bot.materialNeed();
 		Dim want = materialNeed != null ? materialNeed.dimension() : bot.recovery() != null ? bot.recovery().dim()
-				: bot.fetchOrder() != null ? bot.fetchOrder().dim() : desiredDimension(bot);
+				: bot.fetchOrder() != null ? bot.fetchOrder().dim() : bot.procedureDimension() != null ? bot.procedureDimension() : desiredDimension(bot);
 		if (want == null || want == now) {
 			if (materialNeed == null) bot.setNeed(Bot.NeedOwner.TRAVEL, null);
 			return false;

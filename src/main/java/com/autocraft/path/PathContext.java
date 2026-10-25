@@ -11,6 +11,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
@@ -18,7 +19,9 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * World view for one search: cached block states (unloaded chunks read as null = impassable) and
- * cost helpers. Inventory-dependent values (tools, throwaway blocks) are snapshotted at creation.
+ * cost helpers. Inventory-dependent values (tools, throwaway blocks) are snapshotted at creation. Traps are
+ * never walked into (pressure plates, tripwires); in quiet mode (ancient cities) nothing is mined or placed and
+ * sculk sensors and shriekers are never stepped on.
  */
 final class PathContext {
 	static final double INF = 1e9;
@@ -30,16 +33,18 @@ final class PathContext {
 	final ClientLevel level;
 	final LocalPlayer player;
 	final int throwaway;
+	private final boolean quiet;
 	private final int minY, maxY;
 	private final Long2ObjectOpenHashMap<LevelChunk> chunks = new Long2ObjectOpenHashMap<>();
 	private final Long2ObjectOpenHashMap<BlockState> states = new Long2ObjectOpenHashMap<>();
 	private final Reference2IntOpenHashMap<BlockState> breakTicks = new Reference2IntOpenHashMap<>();
 	private final BlockPos.MutableBlockPos mpos = new BlockPos.MutableBlockPos();
 
-	PathContext(ClientLevel level, LocalPlayer player, Predicate<ItemStack> scaffold) {
+	PathContext(ClientLevel level, LocalPlayer player, Predicate<ItemStack> scaffold, boolean quiet) {
 		this.level = level;
 		this.player = player;
-		this.throwaway = InvUtil.count(player, scaffold);
+		this.quiet = quiet;
+		this.throwaway = quiet ? 0 : InvUtil.count(player, scaffold); // placing blocks makes noise
 		this.minY = level.getMinY();
 		this.maxY = level.getMaxY();
 	}
@@ -66,13 +71,23 @@ final class PathContext {
 
 	boolean passable(int x, int y, int z) {
 		BlockState s = state(x, y, z);
-		return s != null && BlockUtil.isPassable(level, mpos.set(x, y, z), s);
+		return s != null && !isTrap(s) && BlockUtil.isPassable(level, mpos.set(x, y, z), s);
+	}
+
+	/** Pressure plates and tripwires set off temple traps (TNT, arrows): never walk into them. */
+	private static boolean isTrap(BlockState s) {
+		return s.is(BlockTags.PRESSURE_PLATES) || s.is(Blocks.TRIPWIRE);
+	}
+
+	/** Stepping on these wakes an ancient city whatever we do (sneaking doesn't help). */
+	private static boolean isLoudFloor(BlockState s) {
+		return s.is(Blocks.SCULK_SENSOR) || s.is(Blocks.CALIBRATED_SCULK_SENSOR) || s.is(Blocks.SCULK_SHRIEKER);
 	}
 
 	/** A player can stand on top of block (x,y,z). */
 	boolean standOn(int x, int y, int z) {
 		BlockState s = state(x, y, z);
-		return s != null && BlockUtil.canStandOn(level, mpos.set(x, y, z), s);
+		return s != null && !(quiet && isLoudFloor(s)) && BlockUtil.canStandOn(level, mpos.set(x, y, z), s);
 	}
 
 	boolean water(int x, int y, int z) {
@@ -99,9 +114,10 @@ final class PathContext {
 	/** Ticks to make (x,y,z) passable: 0 if already passable, INF if it must not or cannot be mined. */
 	double clearCost(int x, int y, int z) {
 		BlockState s = state(x, y, z);
-		if (s == null) return INF;
+		if (s == null || isTrap(s)) return INF;
 		mpos.set(x, y, z);
 		if (BlockUtil.isPassable(level, mpos, s)) return 0;
+		if (quiet && !s.is(BlockTags.DAMPENS_VIBRATIONS)) return INF; // breaking blocks makes noise (wool doesn't)
 		if (!BlockUtil.isBreakable(level, mpos, s)) return INF;
 		int ticks = breakTicks.getOrDefault(s, -1);
 		if (ticks < 0) {

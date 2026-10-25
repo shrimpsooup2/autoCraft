@@ -146,6 +146,9 @@ public final class BuildBehavior implements Behavior {
 			case RUNNING -> {
 				return true;
 			}
+			case TRAVEL -> {
+				return false; // a procedure needs the other dimension: the portal behavior takes us
+			}
 			case FAILED -> Chat.warn("Making materials for the build failed; retrying.");
 			case WAITING -> {
 				if (workshop.waitingFor() != null) builder.deferItem(workshop.waitingFor()); // place the rest first

@@ -1,6 +1,7 @@
 package com.autocraft.craft;
 
 import com.autocraft.Bot;
+import com.autocraft.goal.Requirement;
 import com.autocraft.procedure.Procedure;
 import com.autocraft.procedure.Procedures;
 import net.minecraft.world.item.Item;
@@ -18,7 +19,9 @@ public final class Workshop {
 		DONE,
 		FAILED,
 		/** A procedure needs the world to take its time ({@link #waitingFor()}): do other work, come back later. */
-		WAITING
+		WAITING,
+		/** A procedure needs the other dimension ({@link Bot#procedureDimension()}): let the portal behavior run. */
+		TRAVEL
 	}
 
 	private @Nullable Crafter crafter;
@@ -75,7 +78,9 @@ public final class Workshop {
 		}
 		if (special != null) {
 			Procedure.Task.Status s = special.tick(bot);
-			if (s == Procedure.Task.Status.RUNNING) return Status.RUNNING;
+			Requirement.Dim wants = special.wantsDimension();
+			bot.setProcedureDimension(s == Procedure.Task.Status.RUNNING && wants != null && wants != bot.dimension() ? wants : null);
+			if (s == Procedure.Task.Status.RUNNING) return bot.procedureDimension() != null ? Status.TRAVEL : Status.RUNNING;
 			special = null;
 			if (s == Procedure.Task.Status.FAILED) Procedures.failed(specialItem);
 			return switch (s) {

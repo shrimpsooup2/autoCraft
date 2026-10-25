@@ -49,6 +49,8 @@ public final class EatReflex implements Behavior {
 		if (!eating && !hungry) return false;
 		if (eating && food >= STOP_AT && p.getHealth() >= 14) eating = false;
 		if (!eating && !hungry) return false;
+		// in an ancient city eating is a vibration sculk sensors hear: only when it's getting dangerous
+		if (bot.quiet() && p.getHealth() > 8 && food > 4) return false;
 		double margin = p.getHealth() < 12 ? SAFE_RADIUS_HURT : SAFE_RADIUS;
 		for (Mob m : Threats.collect(bot, ARCHER_RADIUS)) {
 			double d = m.distanceTo(p);

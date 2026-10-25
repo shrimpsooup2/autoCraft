@@ -17,7 +17,8 @@ public final class Procedures {
 
 	private static List<Procedure> all() {
 		if (all == null) {
-			all = List.of(new BeeNestProcedure(), new AnimalProcedure(), new BlockWorkProcedure(), new OxidizeProcedure(), new TrialChamberProcedure());
+			all = List.of(new BeeNestProcedure(), new AnimalProcedure(), new BlockWorkProcedure(), new OxidizeProcedure(), new TrialChamberProcedure(),
+					new ChestLootProcedure());
 		}
 		return all;
 	}

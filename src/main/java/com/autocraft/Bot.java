@@ -109,6 +109,7 @@ public final class Bot {
 	public record FetchOrder(BlockPos base, Dim dim, Item item, int amount) {}
 
 	private @Nullable FetchOrder fetchOrder;
+	private @Nullable Dim procedureDimension;
 
 	/** Progress is saved this often while running (and whenever work starts or stops). */
 	private static final int SAVE_EVERY = 20 * 5;
@@ -409,6 +410,8 @@ public final class Bot {
 		nav.stop();
 		flight = null;
 		huntTargets = Set.of();
+		setQuiet(false);
+		procedureDimension = null;
 		for (Behavior b : behaviors) b.reset();
 	}
 
@@ -478,6 +481,7 @@ public final class Bot {
 	 * own materials are would make it chase its tail).
 	 */
 	public @Nullable Dim workDimension() {
+		if (procedureDimension != null) return procedureDimension; // a fortress or bastion chest: kit up for the Nether
 		return dimensionOf(needHereFirst(NeedOwner.GEAR, NeedOwner.TRAVEL));
 	}
 
@@ -585,6 +589,18 @@ public final class Bot {
 	public void setTeamNeeds(Map<Item, Integer> needs) { teamNeeds = Map.copyOf(needs); }
 	public Set<EntityType<?>> huntTargets() { return huntTargets; }
 	public void setHuntTargets(Set<EntityType<?>> mobs) { huntTargets = mobs; }
+
+	/** Ancient city mode: sneak everywhere, no sprinting, no mining or placing (except wool), never step on sculk. */
+	public void setQuiet(boolean value) {
+		controls.setQuiet(value);
+		nav.setQuiet(value);
+	}
+
+	public boolean quiet() { return controls.quiet(); }
+
+	/** The dimension a running procedure needs to be in (a fortress chest in the Nether); null = here. */
+	public @Nullable Dim procedureDimension() { return procedureDimension; }
+	public void setProcedureDimension(@Nullable Dim dim) { procedureDimension = dim; }
 
 	public String activeBehavior() { return activeBehavior; }
 	public String status() { return status; }
