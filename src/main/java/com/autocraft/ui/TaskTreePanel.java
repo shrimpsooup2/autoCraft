@@ -1,5 +1,6 @@
 package com.autocraft.ui;
 
+import com.autocraft.Bases;
 import com.autocraft.build.Placement;
 import com.autocraft.goal.Resources;
 import com.autocraft.schematic.SchematicLibrary;
@@ -103,7 +104,7 @@ final class TaskTreePanel {
 			TaskTree.save();
 		});
 		int y = contentY + 20;
-		if (n.kind == TaskNode.Kind.COLLECT) {
+		if (n.kind == TaskNode.Kind.COLLECT || n.kind == TaskNode.Kind.FETCH) {
 			EditBox item = box(rightX, y, colW - 52, 64, n.item, "Item id, e.g. iron or piston");
 			item.setResponder(s -> {
 				n.item = s.trim().toLowerCase();
@@ -159,6 +160,22 @@ final class TaskTreePanel {
 			selected = null;
 			rebuild.run();
 		}).bounds(rightX + 3 * (quarter + 4), by, quarter, 18).build());
+		if (n.kind == TaskNode.Kind.COLLECT || n.kind == TaskNode.Kind.FETCH) {
+			int half = colW / 2 - 2;
+			add.accept(Button.builder(Component.literal(n.kind == TaskNode.Kind.FETCH ? "Source: from base" : "Source: gather"), b -> {
+				n.kind = n.kind == TaskNode.Kind.FETCH ? TaskNode.Kind.COLLECT : TaskNode.Kind.FETCH;
+				TaskTree.save();
+				rebuild.run();
+			}).tooltip(Tooltip.create(Component.literal("Gather it (mine, craft, hunt...) or take it out of a base's chests")))
+					.bounds(rightX, by + 22, half, 18).build());
+			if (n.kind == TaskNode.Kind.FETCH) {
+				EditBox base = box(rightX + half + 4, by + 23, half, 32, n.base, "Base (empty: nearest with it)");
+				base.setResponder(s -> {
+					n.base = s.trim();
+					TaskTree.save();
+				});
+			}
+		}
 	}
 
 	private EditBox box(int x, int y, int w, int maxLength, String value, String hint) {
@@ -195,14 +212,19 @@ final class TaskTreePanel {
 				case ACTIVE -> 0xFFFFD27F;
 				case PENDING -> Widgets.WHITE;
 			};
-			String label = n.title + (n.kind == TaskNode.Kind.GROUP ? "" : n.kind == TaskNode.Kind.COLLECT ? " [collect]" : " [build]");
+			String label = n.title + switch (n.kind) {
+				case GROUP -> "";
+				case COLLECT -> " [collect]";
+				case FETCH -> " [from base]";
+				case BUILD -> " [build]";
+			};
 			g.text(font, font.plainSubstrByWidth(label, colW - (tx - x) - 8), tx + 8, y, color);
 		}
 		if (selected != null) extractDetails(g, selected);
 	}
 
 	private void extractDetails(GuiGraphicsExtractor g, TaskNode n) {
-		int y = contentY + 84;
+		int y = contentY + 104;
 		String state = switch (n.state) {
 			case DONE -> "done";
 			case ACTIVE -> "running";
@@ -210,7 +232,16 @@ final class TaskTreePanel {
 		};
 		g.text(font, "Status: " + state, rightX, y, Widgets.GRAY);
 		y += LINE;
-		if (n.kind == TaskNode.Kind.COLLECT && Resources.forJob(n.item, 1) == null) {
+		if (n.kind == TaskNode.Kind.FETCH) {
+			if (TaskTree.item(n.item) == null) {
+				g.text(font, "Unknown item: \"" + n.item + "\"", rightX, y, 0xFFFF7F7F);
+			} else if (!n.base.isBlank() && Bases.named(n.base) == null) {
+				g.text(font, "No base named \"" + n.base + "\" (bases: " + Bases.all().stream().map(Bases.Base::name).toList() + ")", rightX, y, 0xFFFF7F7F);
+			} else {
+				g.text(font, font.plainSubstrByWidth("From " + (n.base.isBlank() ? "the nearest base that has it" : "base \"" + n.base + "\""), colW), rightX,
+						y, Widgets.GRAY);
+			}
+		} else if (n.kind == TaskNode.Kind.COLLECT && Resources.forJob(n.item, 1) == null) {
 			g.text(font, "Unknown item: \"" + n.item + "\"", rightX, y, 0xFFFF7F7F);
 		} else if (n.kind == TaskNode.Kind.BUILD) {
 			if (SchematicLibrary.get(n.schematic) == null) {

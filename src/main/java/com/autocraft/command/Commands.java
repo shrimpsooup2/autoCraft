@@ -1,5 +1,6 @@
 package com.autocraft.command;
 
+import com.autocraft.Bases;
 import com.autocraft.Bot;
 import com.autocraft.Chat;
 import com.autocraft.Settings;
@@ -68,9 +69,19 @@ public final class Commands {
 					Chat.info(on ? "OK: the base chests will be checked before gathering anything." : "OK: only base chests known to hold an item are visited.");
 					return;
 				}
+				if (args.length >= 3 && args[1].equalsIgnoreCase("remove")) {
+					String name = String.join(" ", java.util.Arrays.copyOfRange(args, 2, args.length));
+					Chat.info(Bases.remove(name) ? "Removed base \"" + name + "\"." : "No base named \"" + name + "\".");
+					return;
+				}
 				BlockPos pos = player.blockPosition();
-				bot.setBase(pos);
-				Chat.info("Base set to " + pos.toShortString() + ". Chests within 8 blocks will be used for storage.");
+				String name = args.length >= 2 ? String.join(" ", java.util.Arrays.copyOfRange(args, 1, args.length)) : null;
+				String used = Bases.set(name, pos, bot.dimension());
+				Chat.info("Base \"" + used + "\" set to " + pos.toShortString() + ". Chests within 8 blocks of it are used for storage.");
+			}
+			case "bases" -> {
+				if (Bases.all().isEmpty()) Chat.info("No bases yet: !ac base [name] marks one where you stand.");
+				for (Bases.Base b : Bases.all()) Chat.info(b.name() + ": " + b.pos().toShortString() + " (" + b.dim().name().toLowerCase() + ")");
 			}
 			case "logoff" -> {
 				boolean on = args.length < 2 || !args[1].equalsIgnoreCase("off");
@@ -244,7 +255,8 @@ public final class Commands {
 	private static void help() {
 		Chat.info("Press K for the control panel. Commands: !ac collect <item> <amount> ... (mined, crafted, hunted or special) | place"
 				+ " <schematic> (ghost preview, then position it) | build <schematic> <x y z|here> [rot] | farm <resource> [x y z|here] | team"
-				+ " host|join|leave | schematics | built | stop | pause | resume | status | base | base stocked on|off | logoff on|off | goto x y z"
+				+ " host|join|leave | schematics | built | stop | pause | resume | status | base [name] | base remove <name> | bases"
+				+ " | base stocked on|off | logoff on|off | goto x y z"
 				+ " | resources");
 	}
 }

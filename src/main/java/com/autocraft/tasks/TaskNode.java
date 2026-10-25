@@ -6,18 +6,20 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * One task in the tree: a group of subtasks, "collect N of an item" (any job target: mined, crafted, hunted,
- * special) or "build a schematic" (at a fixed spot taken from a placement, or a spot found when it runs). Subtasks
- * run before their parent. {@code context} is the user's note on why/how.
+ * special), "get N of an item from a base" (a named base, or the nearest one known to hold it) or "build a
+ * schematic" (at a fixed spot taken from a placement, or a spot found when it runs). Subtasks run before their
+ * parent. {@code context} is the user's note on why/how.
  */
 public final class TaskNode {
-	public enum Kind { GROUP, COLLECT, BUILD }
+	public enum Kind { GROUP, COLLECT, FETCH, BUILD }
 
 	public enum State { PENDING, ACTIVE, DONE }
-
 	public String title;
 	public Kind kind;
 	public String item = "";
 	public int amount = 1;
+	/** FETCH: base name; empty = the nearest base whose chests hold the item. */
+	public String base = "";
 	public String schematic = "";
 	/** Build origin from a placement; null = find a spot when it runs. */
 	public int @Nullable [] origin;

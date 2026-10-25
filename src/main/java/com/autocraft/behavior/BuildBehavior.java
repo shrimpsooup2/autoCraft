@@ -1,5 +1,6 @@
 package com.autocraft.behavior;
 
+import com.autocraft.Bases;
 import com.autocraft.Bot;
 import com.autocraft.Chat;
 import com.autocraft.build.BaseWithdraw;
@@ -20,6 +21,7 @@ import com.autocraft.schematic.Schematic;
 import com.autocraft.team.Team;
 import com.autocraft.team.TeamRole;
 import com.autocraft.world.ChestMemory;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -263,16 +265,20 @@ public final class BuildBehavior implements Behavior {
 			withdraw = new BaseWithdraw(stash, window);
 			return true;
 		}
+		// a base known to hold it (nearest to the site): one trip per item; base chests never looked into: one look
+		Requirement.Dim dim = bot.dimension();
+		BlockPos site = plan.box().getCenter();
+		Bases.Base holder = Bases.inDimension(dim).stream().filter(b -> ChestMemory.count(b.pos(), BaseWithdraw.BASE_RADIUS, dim, s -> s.is(item)) > 0)
+				.min(Comparator.comparingDouble(b -> b.pos().distSqr(site))).orElse(null);
+		if (holder != null && triedBaseFor.add(item)) {
+			withdraw = new BaseWithdraw(holder.pos(), window);
+			return true;
+		}
 		BlockPos base = bot.base();
-		if (base != null && bot.baseDimension() == bot.dimension()) {
-			// base chests known to hold it: one trip per item; never looked inside: one look per build
-			boolean known = ChestMemory.count(base, BaseWithdraw.BASE_RADIUS, bot.dimension(), s -> s.is(item)) > 0;
-			boolean unseen = !ChestMemory.surveyed(base, BaseWithdraw.BASE_RADIUS, bot.dimension());
-			if (known ? triedBaseFor.add(item) : unseen && !triedBase) {
-				triedBase = true;
-				withdraw = new BaseWithdraw(base, window);
-				return true;
-			}
+		if (base != null && bot.baseDimension() == dim && !triedBase && !ChestMemory.surveyed(base, BaseWithdraw.BASE_RADIUS, dim)) {
+			triedBase = true;
+			withdraw = new BaseWithdraw(base, window);
+			return true;
 		}
 		return step(bot, item, Math.max(1, window.getOrDefault(item, 1)));
 	}
@@ -423,8 +429,7 @@ public final class BuildBehavior implements Behavior {
 						.map(i -> i.getDefaultInstance().getHoverName().getString()).collect(Collectors.joining(", "))) + ").");
 		if (s.baseSpot() != null) {
 			BlockPos spot = plan.toWorld(s.baseSpot());
-			bot.setBase(spot);
-			Chat.info("Base set to " + spot.toShortString() + ".");
+			Chat.info("Base \"" + bot.setBase(spot) + "\" set at " + spot.toShortString() + ".");
 		}
 		reset();
 		bot.finishBuild();

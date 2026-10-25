@@ -28,10 +28,10 @@ import net.minecraft.world.level.block.Rotation;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The task in progress — job (with deposited counts and skipped items), build order, base, death recovery —
- * per world, saved to {@code config/autocraft/tasks.json} so it picks up again after a relog or a crash. Build
- * progress needs no saving: the builder reads the world. Saved when work starts or stops and every few seconds
- * while running; restored a few seconds after joining.
+ * The task in progress — job (with deposited counts and skipped items), build order, death recovery — per world,
+ * saved to {@code config/autocraft/tasks.json} so it picks up again after a relog or a crash. Build progress needs
+ * no saving (the builder reads the world) and bases have their own file ({@link Bases}). Saved when work starts
+ * or stops and every few seconds while running; restored a few seconds after joining.
  */
 public final class TaskSave {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -51,8 +51,8 @@ public final class TaskSave {
 		}
 	}
 
-	private record State(List<Line> job, Map<String, Integer> stored, List<String> skipped, @Nullable SavedBuild build, @Nullable Spot base,
-			@Nullable Spot recovery, boolean running) {}
+	private record State(List<Line> job, Map<String, Integer> stored, List<String> skipped, @Nullable SavedBuild build, @Nullable Spot recovery,
+			boolean running) {}
 
 	private static @Nullable Map<String, State> all;
 	private static long restoreAt = -1;
@@ -74,8 +74,7 @@ public final class TaskSave {
 		SavedBuild build = b == null ? null : new SavedBuild(b.schematic().name(), b.origin().getX(), b.origin().getY(), b.origin().getZ(),
 				b.rotation(), b.mirror(), b.substitution().encode(), b.purpose());
 		Bot.Recovery r = bot.recovery();
-		State state = new State(lines, stored, skipped, build, Spot.of(bot.base(), bot.baseDimension()), r == null ? null : Spot.of(r.pos(), r.dim()),
-				running && (job != null || build != null));
+		State state = new State(lines, stored, skipped, build, r == null ? null : Spot.of(r.pos(), r.dim()), running && (job != null || build != null));
 		states().put(WorldKey.current(), state);
 		write();
 	}
@@ -92,7 +91,6 @@ public final class TaskSave {
 		State s = states().get(WorldKey.current());
 		if (s == null) return;
 		Bot bot = Bot.get();
-		if (s.base != null) bot.restoreBase(s.base.pos(), s.base.dim);
 		if (!s.running || !Settings.get().resumeAfterRelog || bot.isRunning()) return;
 		List<Requirement> reqs = new ArrayList<>();
 		for (Line l : s.job) {

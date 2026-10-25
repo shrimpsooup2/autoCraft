@@ -87,9 +87,10 @@ public final class PortalBehavior implements Behavior {
 		lastDim = now;
 
 		// material needs (iron for a new pickaxe, quartz for observers or comparators) decide first, then going back
-		// for our items after a death, then the job
+		// for our items after a death, a base to fetch from, then the job
 		Requirement materialNeed = bot.materialNeed();
-		Dim want = materialNeed != null ? materialNeed.dimension() : bot.recovery() != null ? bot.recovery().dim() : desiredDimension(bot);
+		Dim want = materialNeed != null ? materialNeed.dimension() : bot.recovery() != null ? bot.recovery().dim()
+				: bot.fetchOrder() != null ? bot.fetchOrder().dim() : desiredDimension(bot);
 		if (want == null || want == now) {
 			if (materialNeed == null) bot.setNeed(Bot.NeedOwner.TRAVEL, null);
 			return false;

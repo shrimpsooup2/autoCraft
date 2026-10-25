@@ -1,8 +1,10 @@
 package com.autocraft.tasks;
 
+import com.autocraft.Bases;
 import com.autocraft.Bot;
 import com.autocraft.Chat;
 import com.autocraft.Settings;
+import com.autocraft.build.BaseWithdraw;
 import com.autocraft.build.BuildOrder;
 import com.autocraft.build.BuildPlan;
 import com.autocraft.build.MaterialAdvisor;
@@ -14,6 +16,7 @@ import com.autocraft.goal.Requirement;
 import com.autocraft.goal.Resources;
 import com.autocraft.schematic.Schematic;
 import com.autocraft.schematic.SchematicLibrary;
+import com.autocraft.world.ChestMemory;
 import com.autocraft.world.WorldKey;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -145,7 +148,7 @@ public final class TaskTree {
 		Map<Item, Integer> parts = switch (node.kind) {
 			case COLLECT -> ingredients(item(node.item), node.amount);
 			case BUILD -> bill(node.schematic);
-			case GROUP -> Map.of();
+			case GROUP, FETCH -> Map.of();
 		};
 		if (parts.isEmpty()) return false;
 		parts.forEach((item, n) -> node.children.add(TaskNode.collect(BuiltInRegistries.ITEM.getKey(item).getPath(), n)));
@@ -269,6 +272,20 @@ public final class TaskTree {
 			bot.start(new Job(List.of(r)));
 			return true;
 		}
+		if (n.kind == TaskNode.Kind.FETCH) {
+			Item item = item(n.item);
+			if (item == null) {
+				Chat.warn("Task tree: unknown item \"" + n.item + "\".");
+				return false;
+			}
+			Bases.Base base = n.base.isBlank() ? holderOf(bot, item) : Bases.named(n.base);
+			if (base == null) {
+				Chat.warn(n.base.isBlank() ? "Task tree: no base set (!ac base [name])." : "Task tree: no base named \"" + n.base + "\".");
+				return false;
+			}
+			bot.startFetch(new Bot.FetchOrder(base.pos(), base.dim(), item, n.amount));
+			return true;
+		}
 		Schematic s = SchematicLibrary.get(n.schematic);
 		if (s == null) {
 			Chat.warn("Task tree: no schematic \"" + n.schematic + "\".");
@@ -282,6 +299,22 @@ public final class TaskTree {
 		bot.startBuild(new BuildOrder(s, origin, Rotation.values()[n.rotation], Mirror.values()[n.mirror],
 				MaterialAdvisor.resolve(MaterialSettings.defaults(), s), BuildOrder.Purpose.USER));
 		return true;
+	}
+
+	/** The nearest base whose chests are known to hold {@code item} (this dimension first), else the nearest base. */
+	private static Bases.@Nullable Base holderOf(Bot bot, Item item) {
+		BlockPos here = bot.player().blockPosition();
+		Bases.Base best = null;
+		double bestCost = Double.MAX_VALUE;
+		for (Bases.Base b : Bases.all()) {
+			if (ChestMemory.count(b.pos(), BaseWithdraw.BASE_RADIUS, b.dim(), s -> s.is(item)) <= 0) continue;
+			double cost = b.dim() == bot.dimension() ? b.pos().distSqr(here) : Double.MAX_VALUE / 2;
+			if (cost < bestCost) {
+				bestCost = cost;
+				best = b;
+			}
+		}
+		return best != null ? best : Bases.nearest(bot.dimension(), here);
 	}
 
 	/** First unfinished task whose subtasks are all done (depth first, in order). */
@@ -325,6 +358,11 @@ public final class TaskTree {
 		for (TaskNode n : list) {
 			if (n.state == TaskNode.State.ACTIVE) n.state = TaskNode.State.PENDING;
 			if (n.children == null) n.children = new ArrayList<>();
+			// fields added later are missing from older files
+			if (n.base == null) n.base = "";
+			if (n.item == null) n.item = "";
+			if (n.schematic == null) n.schematic = "";
+			if (n.context == null) n.context = "";
 			resetActive(n.children);
 		}
 	}

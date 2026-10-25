@@ -27,12 +27,14 @@ farms or your own schematics (alone or as a team of bots), stores loot and logs 
   (or at the top with nothing selected); the right side edits the selection — title, item and amount or
   schematic (*From placement* takes the ghost's spot and rotation; otherwise a spot is found when it runs),
   context notes — and *Expand* breaks a task into its parts (a crafted item's ingredients, a build's materials);
-  *Up*/*Down* reorder, *Delete* removes; click +/- to fold. *Run tasks* works through it: subtasks before their
-  parent, one job or build at a time; stopping the bot pauses the tree. Saved per world in
+  *Up*/*Down* reorder, *Delete* removes; click +/- to fold. On collect tasks *Source* switches between gathering
+  and **getting it from a base** (a named base, or empty = the nearest base whose chests have it), e.g. Expand a
+  build, then mark the materials you keep at base. *Run tasks* works through it: subtasks before their parent,
+  one job, fetch or build at a time; stopping the bot pauses the tree. Saved per world in
   `config/autocraft/tasktree.json`.
 - **Team**: host a team (shows the address and a 5-character code) or join one; lists members and their roles.
 - **Bot**: live state, job progress bars, build progress, current prerequisite, health/food/position, last death;
-  *Pause/Resume*, *Stop*, *Set base here*, list of built structures.
+  *Pause/Resume*, *Stop*, *Add base here* / *Remove nearest*, the list of bases and of built structures.
 - **Settings** (saved to `config/autocraft/settings.json`): log off when done, status overlay, smooth aim, after
   death recover items and continue, log off when another player comes near (and how near), materials at base,
   resume after relog.
@@ -67,7 +69,8 @@ hidden, blocks in the way get red outlines, water/lava and chest-like blocks get
 | `!ac built` | list everything the bot has built (farms are reused by jobs) |
 | `!ac stop` / `!ac pause` / `!ac resume` | control the job |
 | `!ac status` | progress, current behavior, build, prerequisite, health/food |
-| `!ac base` | mark current position as the storage base (chests near it are used) |
+| `!ac base [name]` | add a base where you stand, or move the base with that name (first one is "home"); chests within 8 blocks are its storage |
+| `!ac base remove <name>` / `!ac bases` | remove a base / list them |
 | `!ac base stocked on\|off` | the base chests hold materials: check them before gathering, even unseen ones |
 | `!ac team host` / `!ac team join <host[:port]> <code>` / `!ac team leave` | team mode (see below) |
 | `!ac logoff on\|off` | disconnect when the job is done (default on) |
@@ -214,11 +217,15 @@ has settled and reached the server; untargeted item use (buckets, food) finishes
   recover* on, the bot respawns, goes back (through a portal if needed) and picks up what's lying there, then
   carries on; burnt items (lava, fire) are written off. Off: the job stops.
 - *Log off near players*: another player (not a teammate) within the radius ends the session.
-- The task in progress (job with deposited counts and skipped items, build order, base, recovery) is saved per
-  world in `config/autocraft/tasks.json` every few seconds and resumed a few seconds after joining again.
+- The task in progress (job with deposited counts and skipped items, build order, recovery) is saved per world
+  in `config/autocraft/tasks.json` every few seconds and resumed a few seconds after joining again.
+- Bases: as many as you like per world (`config/autocraft/bases.json`), e.g. home, a nether base, a mining
+  outpost. Deposits, base furnaces/tables and returning after a job use the nearest base in the current
+  dimension (home when there's none).
 - Chest memory: every chest or barrel screen that opens — the bot's or yours — is read and remembered per world
-  (`config/autocraft/chests.json`). Prerequisites the base chests hold are fetched when the round trip is quicker
-  than gathering; *Materials at base* (or `!ac base stocked on`) checks base chests not looked into yet.
+  (`config/autocraft/chests.json`). Prerequisites a base's chests hold are fetched from the quickest such base
+  when the round trip beats gathering, builds take from the base nearest the site that has the item; *Materials
+  at base* (or `!ac base stocked on`) checks base chests not looked into yet.
 
 ## Phases
 | # | Phase | Status |

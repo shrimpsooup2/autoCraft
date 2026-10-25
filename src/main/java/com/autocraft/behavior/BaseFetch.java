@@ -1,5 +1,6 @@
 package com.autocraft.behavior;
 
+import com.autocraft.Bases;
 import com.autocraft.Bot;
 import com.autocraft.Chat;
 import com.autocraft.Settings;
@@ -17,8 +18,8 @@ import net.minecraft.core.BlockPos;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Materials the base chests hold (as last seen, or "materials are at base" for chests not looked into yet):
- * fetch them when the round trip is quicker than gathering them. One trip per need.
+ * Materials a base's chests hold (as last seen, or "materials are at base" for chests not looked into yet):
+ * fetch them from the quickest base in this dimension when the round trip beats gathering. One trip per need.
  */
 final class BaseFetch {
 	private static final double WALK_SPEED = 4.3;
@@ -41,22 +42,33 @@ final class BaseFetch {
 			withdraw = null;
 			return false;
 		}
-		BlockPos base = bot.base();
-		if (base == null || bot.baseDimension() != bot.dimension() || tried.contains(need.name())) return false;
+		if (tried.contains(need.name())) return false;
 		LocalPlayer p = bot.player();
 		int missing = need.amount() - InvUtil.count(p, need.counts());
 		if (missing <= 0) return false;
 		Dim dim = bot.dimension();
-		int stock = ChestMemory.count(base, BaseWithdraw.BASE_RADIUS, dim, need.counts());
-		boolean unseen = Settings.get().materialsAtBase && !ChestMemory.surveyed(base, BaseWithdraw.BASE_RADIUS, dim);
-		if (stock <= 0 && !unseen) return false;
-		int fetchable = unseen ? missing : Math.min(missing, stock);
-		double trip = 2 * Math.sqrt(base.distSqr(Navigator.feet(p))) / WALK_SPEED + CHEST_SECONDS;
-		double gather = fetchable * Gatherable.cost(need, dim) * SECONDS_PER_EFFORT;
-		if (trip >= gather) return false;
+		BlockPos feet = Navigator.feet(p);
+		Bases.Base best = null;
+		double bestTrip = Double.MAX_VALUE;
+		int bestFetchable = 0;
+		for (Bases.Base b : Bases.inDimension(dim)) {
+			int stock = ChestMemory.count(b.pos(), BaseWithdraw.BASE_RADIUS, dim, need.counts());
+			boolean unseen = Settings.get().materialsAtBase && !ChestMemory.surveyed(b.pos(), BaseWithdraw.BASE_RADIUS, dim);
+			if (stock <= 0 && !unseen) continue;
+			double trip = 2 * Math.sqrt(b.pos().distSqr(feet)) / WALK_SPEED + CHEST_SECONDS;
+			if (trip < bestTrip) {
+				best = b;
+				bestTrip = trip;
+				bestFetchable = unseen ? missing : Math.min(missing, stock);
+			}
+		}
+		if (best == null) return false;
+		double gather = bestFetchable * Gatherable.cost(need, dim) * SECONDS_PER_EFFORT;
+		if (bestTrip >= gather) return false;
 		tried.add(need.name());
-		Chat.info("Fetching " + need.name() + " from the base chests (~" + Math.round(trip) + "s) instead of gathering it (~" + Math.round(gather) + "s).");
-		withdraw = new BaseWithdraw(base, need.counts(), missing);
+		Chat.info("Fetching " + need.name() + " from base \"" + best.name() + "\" (~" + Math.round(bestTrip) + "s) instead of gathering it (~"
+				+ Math.round(gather) + "s).");
+		withdraw = new BaseWithdraw(best.pos(), need.counts(), missing);
 		return true;
 	}
 }

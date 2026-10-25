@@ -11,6 +11,7 @@ import com.autocraft.behavior.EatReflex;
 import com.autocraft.behavior.EffectReflex;
 import com.autocraft.behavior.FallReflex;
 import com.autocraft.behavior.FarmBehavior;
+import com.autocraft.behavior.FetchBehavior;
 import com.autocraft.behavior.FinishBehavior;
 import com.autocraft.behavior.FoodBehavior;
 import com.autocraft.behavior.GearBehavior;
@@ -104,19 +105,23 @@ public final class Bot {
 	/** Death spot to return to. */
 	public record Recovery(BlockPos pos, Dim dim) {}
 
+	/** Take {@code amount} of {@code item} out of the chests at the base at {@code base} (a task-tree step). */
+	public record FetchOrder(BlockPos base, Dim dim, Item item, int amount) {}
+
+	private @Nullable FetchOrder fetchOrder;
+
 	/** Progress is saved this often while running (and whenever work starts or stops). */
 	private static final int SAVE_EVERY = 20 * 5;
 	/** Stop reasons for finished work (the task tree moves on after these). */
 	public static final String JOB_COMPLETE = "job complete";
 	public static final String BUILD_COMPLETE = "build complete";
+	public static final String FETCH_COMPLETE = "fetch complete";
 
 	private String lastStop = "";
 
 	private @Nullable Job job;
 	private @Nullable BuildOrder build;
 	private @Nullable Goal gotoGoal;
-	private @Nullable BlockPos base;
-	private Dim baseDim = Dim.OVERWORLD;
 	private boolean running;
 	private boolean paused;
 	private String activeBehavior = "idle";
@@ -142,6 +147,7 @@ public final class Bot {
 				new RecoverBehavior(),
 				new MendingBehavior(),
 				new GotoBehavior(),
+				new FetchBehavior(),
 				new FinishBehavior(),
 				new GearBehavior(),
 				new FoodBehavior(),
@@ -282,6 +288,18 @@ public final class Bot {
 		Chat.info("Going to " + goal);
 	}
 
+	/** Utility mode: get items from a base's chests (through a portal if the base is in the other dimension). */
+	public void startFetch(FetchOrder order) {
+		begin(null, null);
+		fetchOrder = order;
+		Chat.info("Getting " + order.amount() + " " + order.item().getDefaultInstance().getHoverName().getString() + " from the base at "
+				+ order.base().toShortString() + ".");
+	}
+
+	public @Nullable FetchOrder fetchOrder() {
+		return fetchOrder;
+	}
+
 	/**
 	 * Build something. With a resource job running (an auto farm) the job continues afterwards; otherwise
 	 * the build is the whole task. A team leader shares user builds with its members.
@@ -336,6 +354,7 @@ public final class Bot {
 		Procedures.reset();
 		resetBehaviors();
 		recovery = null;
+		fetchOrder = null;
 		running = true;
 		paused = false;
 		mc.options.pauseOnLostFocus = false; // keep ticking while the window is in the background
@@ -353,11 +372,12 @@ public final class Bot {
 		needs.clear();
 		resetBehaviors();
 		recovery = null;
+		fetchOrder = null;
 		controls.releaseAll();
 		threatNet.save();
 		TaskSave.save(this, false);
 		Chat.info("Stopped: " + reason);
-		if (reason.equals(JOB_COMPLETE) || reason.equals(BUILD_COMPLETE)) TaskTree.completed();
+		if (reason.equals(JOB_COMPLETE) || reason.equals(BUILD_COMPLETE) || reason.equals(FETCH_COMPLETE)) TaskTree.completed();
 	}
 
 	/** Why the bot last stopped ({@link #JOB_COMPLETE}, {@link #BUILD_COMPLETE}, or something else). */
@@ -519,18 +539,24 @@ public final class Bot {
 
 	public Dim dimension() { return Dim.of(mc.level); }
 
-	public @Nullable BlockPos base() { return base; }
-	public Dim baseDimension() { return baseDim; }
-	public void setBase(@Nullable BlockPos pos) {
-		base = pos;
-		baseDim = dimension();
-		TaskSave.save(this, running);
+	/** The nearest base in this dimension (else home); null when no base is set. */
+	public @Nullable BlockPos base() {
+		Bases.Base b = nearestBase();
+		return b == null ? null : b.pos();
 	}
 
-	/** The base remembered for this world (after joining), without announcing it. */
-	public void restoreBase(BlockPos pos, Dim dim) {
-		base = pos;
-		baseDim = dim;
+	public Dim baseDimension() {
+		Bases.Base b = nearestBase();
+		return b == null ? Dim.OVERWORLD : b.dim();
+	}
+
+	private Bases.@Nullable Base nearestBase() {
+		return mc.level == null ? null : Bases.nearest(dimension(), mc.player == null ? null : mc.player.blockPosition());
+	}
+
+	/** Add a base here (or move the one at this spot); returns its name. */
+	public String setBase(BlockPos pos) {
+		return Bases.set(null, pos, dimension());
 	}
 
 	/** The plan being built (rotated, wood-swapped world positions), for the ghost overlay; null when not building. */

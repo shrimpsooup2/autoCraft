@@ -1,5 +1,6 @@
 package com.autocraft.ui;
 
+import com.autocraft.Bases;
 import com.autocraft.Bot;
 import com.autocraft.Chat;
 import com.autocraft.DeathLog;
@@ -750,13 +751,21 @@ public final class AutoCraftScreen extends Screen {
 			updateBotButtons();
 		}).bounds(rightX, contentY, half, 18).build());
 		addRenderableWidget(Button.builder(Component.literal("Stop"), b -> bot.stop("from the panel")).bounds(rightX + half + 4, contentY, half, 18).build());
-		addRenderableWidget(Button.builder(Component.literal("Set base here"), b -> {
+		int halfW = colW / 2 - 2;
+		addRenderableWidget(Button.builder(Component.literal("Add base here"), b -> {
 			LocalPlayer p = minecraft.player;
 			if (p == null) return;
-			bot.setBase(p.blockPosition());
-			Chat.info("Base set to " + p.blockPosition().toShortString() + ". Chests within 8 blocks will be used for storage.");
-		}).tooltip(Tooltip.create(Component.literal("Chests near here receive the loot; finished jobs are delivered here")))
-				.bounds(rightX, contentY + 22, colW, 18).build());
+			String name = bot.setBase(p.blockPosition());
+			Chat.info("Base \"" + name + "\" at " + p.blockPosition().toShortString() + ". Chests within 8 blocks of it are used for storage"
+					+ " (rename: !ac base <name>).");
+		}).tooltip(Tooltip.create(Component.literal("Several bases are fine (one per area or dimension): the nearest one in this dimension is used")))
+				.bounds(rightX, contentY + 22, halfW, 18).build());
+		addRenderableWidget(Button.builder(Component.literal("Remove nearest"), b -> {
+			LocalPlayer p = minecraft.player;
+			Bases.Base nearest = p == null ? null : Bases.inDimension(bot.dimension()).stream()
+					.min(java.util.Comparator.comparingDouble(x -> x.pos().distSqr(p.blockPosition()))).orElse(null);
+			if (nearest != null && Bases.remove(nearest.name())) Chat.info("Removed base \"" + nearest.name() + "\".");
+		}).bounds(rightX + halfW + 4, contentY + 22, halfW, 18).build());
 		updateBotButtons();
 	}
 
@@ -866,6 +875,16 @@ public final class AutoCraftScreen extends Screen {
 		}
 
 		int sy = contentY + 48;
+		List<Bases.Base> bases = Bases.all();
+		g.text(font, "Bases (" + bases.size() + ")", rightX, sy, Widgets.WHITE);
+		sy += LINE;
+		for (Bases.Base b : bases) {
+			if (sy > contentY + 48 + 4 * LINE) break;
+			g.text(font, font.plainSubstrByWidth(b.name() + " @ " + b.pos().toShortString() + " (" + b.dim().name().toLowerCase() + ")", colW), rightX, sy,
+					Widgets.GRAY);
+			sy += LINE;
+		}
+		sy += 2;
 		List<StructureRegistry.Entry> built = StructureRegistry.all();
 		g.text(font, "Built (" + built.size() + ")", rightX, sy, Widgets.WHITE);
 		sy += LINE;
