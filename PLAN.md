@@ -83,7 +83,7 @@ hidden, blocks in the way get red outlines, water/lava and chest-like blocks get
 | `!ac built` | list everything the bot has built (farms are reused by jobs) |
 | `!ac stop` / `!ac pause` / `!ac resume` | control the job |
 | `!ac status` | progress, current behavior, build, prerequisite, health/food |
-| `!ac why` | what it's doing and for which prerequisite, plus its last decisions (behavior, status, need), to see why it stalls or wanders |
+| `!ac why` | what it's doing and for which prerequisite, what the gear planner last decided ("tool for iron: gather 16 cobblestone"), plus its last decisions (behavior, status, need), to see why it stalls or wanders |
 | `!ac base [name]` | add a base where you stand, or move the base with that name (first one is "home"); chests within 8 blocks are its storage |
 | `!ac base remove <name>` / `!ac bases` | remove a base / list them |
 | `!ac base stocked on\|off` | the base chests hold materials: check them before gathering, even unseen ones |
@@ -324,7 +324,7 @@ has settled and reached the server; untargeted item use (buckets, food) finishes
 | 14 | **Fixes** — shared station rules, multi-furnace smelting, station pickup, faster pathing, quick-kill combat with crits, drowning reflex, tool tiers scaled to work | code complete |
 | 15 | **Mob drops & procedures** — loot tables, hunting, honey/wool/milk/eggs, block work, copper garden, trial chambers | code complete |
 | 16 | **Additions** — smooth aim, mob farm, stonecutter, portal time costs + bucket portal, death recovery, player alert, big-build stash and tool investment, chest memory and base fetches, resume after relog, task tree | code complete |
-| 17 | **Hardening** — in-game testing; fixed so far: stalls (gear planning was blocked by any mob within 8 blocks, worn cheap tools refused, job loot never used for tools, an iron pickaxe chosen to mine the iron for itself when a little raw iron was carried), far targets past chunk borders, sunken logs chosen over dry ones, hurt flee/work ping-pong, eating blocked by mobs behind walls, searching for crafted blocks (iron block for an iron pickaxe), saves leaking between same-named worlds, slow/re-planning swimming (now sprint-swims skimming the surface); boats over water, shipwreck wood; `!ac why` decision trace; idle reasons ("waiting for a pickaxe that mines iron") | in progress |
+| 17 | **Hardening** — in-game testing; fixed so far: stalls (gear planning was blocked by any mob within 8 blocks, worn cheap tools refused, job loot never used for tools, an iron pickaxe chosen to mine the iron for itself when a little raw iron was carried, the collector waiting for a pickaxe the gear planner never planned: it now asks for one for exactly what it's stuck on and gets an answer the next tick), far targets past chunk borders, sunken logs chosen over dry ones, hurt flee/work ping-pong, eating blocked by mobs behind walls, searching for crafted blocks (iron block for an iron pickaxe), saves leaking between same-named worlds, slow/re-planning swimming (now sprint-swims skimming the surface); boats over water, shipwreck wood; `!ac why` decision trace | in progress |
 
 "Code complete" = compiles against the real 26.3 client jar; not yet run in-game (see Build).
 
