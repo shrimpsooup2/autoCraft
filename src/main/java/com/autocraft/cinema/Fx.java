@@ -210,7 +210,7 @@ final class Fx {
 
 	/** Pixels across each face of {@link #pixelCube}, and how bright each ring is from the rim (0) to the middle. */
 	private static final int CUBE_PX = 8;
-	private static final double[] CUBE_RINGS = {0.5, 0.68, 0.86, 1.0};
+	private static final double[] CUBE_RINGS = {0.74, 0.84, 0.93, 1.0};
 	private static final Vec3 CUBE_SUN = new Vec3(0.3, 1, 0.5).normalize();
 
 	/**
