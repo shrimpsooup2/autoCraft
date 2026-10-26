@@ -41,6 +41,14 @@ public final class TaskNode {
 		this.kind = kind;
 	}
 
+	/**
+	 * For Gson: with a no-argument constructor it runs the field defaults above and then fills in what the file has,
+	 * so a field added later ({@link #how}) is "" in older saves, not null (without one Gson skips the initializers).
+	 */
+	private TaskNode() {
+		this("", Kind.GROUP);
+	}
+
 	public static TaskNode collect(String item, int amount) {
 		TaskNode n = new TaskNode(amount + " " + item.replace('_', ' '), Kind.COLLECT);
 		n.item = item;
