@@ -7,6 +7,11 @@ farms or your own schematics (alone or as a team of bots), stores loot and logs 
 
 **How it works, animated:** `docs/how-it-works/how-it-works.mp4` (2.6 min), or open `docs/how-it-works/index.html`
 in a browser to scrub through it scene by scene (tick loop, planner, scanner + A*, survival, water, task tree).
+**Explainer video** (1:52, silent so a song can be laid over it): how to use it (K, pick an item, Run) and what it
+then does on its own — the plan, x-ray scan and A*, survival at night, ancient city loot, a team build, the end card.
+Generated entirely by the scripts in `docs/video/` with original textures; `python docs/video/render_all.py` renders
+it (Blender 5.x) to `docs/video/autocraft-explainer.mp4`. Stills of every shot are in `docs/video/previews/`; the
+shot list and options are in `docs/video/storyboard.md`.
 The mod icon (`src/main/resources/assets/autocraft/icon.png`, enlarged in `docs/logo-512.png`) is a gear that
 dissolves into redstone circuitry: its right-hand teeth turn into traces ending in pads, and bits break off it.
 

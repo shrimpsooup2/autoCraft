@@ -38,3 +38,8 @@ hs_err_*.log
 replay_*.log
 *.hprof
 *.jfr
+
+# explainer video: rendered frames (docs/video/render_all.py) and Python caches
+
+/docs/video/renders/
+__pycache__/
