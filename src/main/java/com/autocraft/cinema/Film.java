@@ -244,8 +244,9 @@ public final class Film {
 		float partial = Minecraft.getInstance().getDeltaTracker().getGameTimeDeltaPartialTick(false);
 		try {
 			Fx fx = new Fx(ctx, partial);
-			s.lights(fx);
-			s.draw(fx, time(partial));
+			double t = time(partial);
+			s.lights(fx, t);
+			s.draw(fx, t);
 		} catch (RuntimeException e) {
 			Chat.warn("Film graphics failed: " + e);
 			stop(null);

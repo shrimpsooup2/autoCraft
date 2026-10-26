@@ -57,13 +57,18 @@ abstract class Shot {
 
 	void draw(Fx fx, double t) {}
 
-	/** The status light over each actor that has one: the bot's red (idle), green (running), amber (recovering). */
-	final void lights(Fx fx) {
+	/**
+	 * The status light over each actor that has one — red idle, green running, amber recovering: a small cube that
+	 * bobs and turns, in a faint glow that flares when it flashes.
+	 */
+	final void lights(Fx fx, double t) {
 		for (Actor a : actors) {
 			if (a.light == 0 || a.entity.isRemoved()) continue;
-			Vec3 p = a.entity.getPosition(fx.partial).add(0, a.entity.getBbHeight() + 0.4, 0);
-			fx.spark(p, 0.28 * (1 + a.lightFlash), Fx.argb(255, a.light));
-			fx.spark(p, 0.7 + 1.4 * a.lightFlash, Fx.argb((int) (50 + 120 * a.lightFlash), a.light));
+			double phase = a.entity.getId() * 1.7;   // so several bots don't bob in step
+			Vec3 p = a.entity.getPosition(fx.partial).add(0, a.entity.getBbHeight() + 0.45 + 0.05 * Math.sin(t * 2.4 + phase), 0);
+			double f = a.lightFlash;
+			fx.halo(p, 0.55 * (1 + 1.5 * f), Fx.argb((int) (25 + 110 * f), a.light));
+			fx.pixelCube(p, 0.2 * (1 + 0.5 * f), (float) (t * 75 + phase * 40), a.light, f);
 		}
 	}
 

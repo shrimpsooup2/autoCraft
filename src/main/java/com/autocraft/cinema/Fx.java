@@ -199,23 +199,81 @@ final class Fx {
 		quad(m, b, tmp, p001, p101, p100, p000, color);
 	}
 
+	/** Pixels across each face of {@link #pixelCube}, and how bright each ring is from the rim (0) to the middle. */
+	private static final int CUBE_PX = 8;
+	private static final double[] CUBE_RINGS = {0.42, 0.62, 0.82, 1.0};
+	private static final Vec3 CUBE_SUN = new Vec3(0.3, 1, 0.5).normalize();
+
+	/**
+	 * A small solid cube turned `yawDeg` about its vertical axis, each face an 8×8 pixel pattern: dark at the rim,
+	 * lit in the middle (the bot's status light). flash 0..1 brightens it toward white.
+	 */
+	void pixelCube(Vec3 c, double size, float yawDeg, int rgb, double flash) {
+		double yr = Math.toRadians(yawDeg), h = size / 2, px = size / CUBE_PX;
+		Vec3 x = new Vec3(Math.cos(yr), 0, Math.sin(yr)), z = new Vec3(-Math.sin(yr), 0, Math.cos(yr)), y = new Vec3(0, 1, 0);
+		Vec3[][] faces = {{y, x, z}, {y.reverse(), x, z.reverse()}, {x, z.reverse(), y}, {x.reverse(), z, y}, {z, x, y}, {z.reverse(), x.reverse(), y}};
+		double r = ((rgb >> 16) & 255) / 255.0, g = ((rgb >> 8) & 255) / 255.0, b = (rgb & 255) / 255.0;
+		glass((m, buf, tmp) -> {
+			for (int f = 0; f < faces.length; f++) {
+				Vec3 n = faces[f][0], a = faces[f][1], v = faces[f][2];
+				double shade = 0.72 + 0.28 * Math.max(0, n.dot(CUBE_SUN));
+				Vec3 corner = c.add(n.scale(h)).subtract(a.scale(h)).subtract(v.scale(h));
+				for (int i = 0; i < CUBE_PX; i++) {
+					for (int j = 0; j < CUBE_PX; j++) {
+						int ring = Math.min(Math.min(i, j), Math.min(CUBE_PX - 1 - i, CUBE_PX - 1 - j));
+						double k = CUBE_RINGS[ring] * shade * (0.95 + 0.1 * (((i * 73 + j * 151 + f * 37) * 2654435761L >>> 16) & 255) / 255.0);
+						double white = ring == CUBE_RINGS.length - 1 ? 0.35 : 0;
+						white = white + (1 - white) * 0.35 * flash;
+						int color = argb(255, rgbOf(lerp(r * k, 1, white), lerp(g * k, 1, white), lerp(b * k, 1, white)));
+						Vec3 p00 = corner.add(a.scale(i * px)).add(v.scale(j * px));
+						quad(m, buf, tmp, p00, p00.add(a.scale(px)), p00.add(a.scale(px)).add(v.scale(px)), p00.add(v.scale(px)), color);
+					}
+				}
+			}
+		});
+	}
+
+	private static double lerp(double from, double to, double u) {
+		return from + (to - from) * u;
+	}
+
+	private static int rgbOf(double r, double g, double b) {
+		return ((int) (Math.min(1, r) * 255) << 16) | ((int) (Math.min(1, g) * 255) << 8) | (int) (Math.min(1, b) * 255);
+	}
+
 	/** A soft round glow facing the camera (a light, a spark, a glint): a small bright core in a fading halo. */
 	void spark(Vec3 c, double size, int color) {
+		Vec3[] rim = rim(size);
+		halo(c, rim, color);
+		int core = fade(color, 1);
+		glow((m, b, tmp) -> {
+			for (int i = 0; i < rim.length - 1; i++) quad2(m, b, tmp, c, c.add(rim[i].scale(0.18)), c.add(rim[i + 1].scale(0.18)), c, core, core, core, core);
+		});
+	}
+
+	/** Only the fading halo of a {@link #spark}: a glow around something solid, which no bright core shows through. */
+	void halo(Vec3 c, double size, int color) {
+		halo(c, rim(size), color);
+	}
+
+	private void halo(Vec3 c, Vec3[] rim, int color) {
+		int clear = color & 0xFFFFFF;
+		glass((m, b, tmp) -> {
+			for (int i = 0; i < rim.length - 1; i++) quad4(m, b, tmp, c, c.add(rim[i]), c.add(rim[i + 1]), c, color, clear, clear, color);
+		});
+	}
+
+	/** A camera-facing circle of `size` across, as 16 offsets from its centre (the first repeated at the end). */
+	private Vec3[] rim(double size) {
 		Vector3f right = new Vector3f(1, 0, 0).rotate(camRot), up = new Vector3f(0, 1, 0).rotate(camRot);
 		Vec3 r = new Vec3(right.x, right.y, right.z).scale(size / 2), u = new Vec3(up.x, up.y, up.z).scale(size / 2);
-		int clear = color & 0xFFFFFF, core = fade(color, 1);
 		int seg = 16;
 		Vec3[] rim = new Vec3[seg + 1];
 		for (int i = 0; i <= seg; i++) {
 			double a = i * 2 * Math.PI / seg;
 			rim[i] = r.scale(Math.cos(a)).add(u.scale(Math.sin(a)));
 		}
-		glass((m, b, tmp) -> {
-			for (int i = 0; i < seg; i++) quad4(m, b, tmp, c, c.add(rim[i]), c.add(rim[i + 1]), c, color, clear, clear, color);
-		});
-		glow((m, b, tmp) -> {
-			for (int i = 0; i < seg; i++) quad2(m, b, tmp, c, c.add(rim[i].scale(0.18)), c.add(rim[i + 1].scale(0.18)), c, core, core, core, core);
-		});
+		return rim;
 	}
 
 	/** A vertical glass panel: centre, facing yaw (degrees, Minecraft convention), width × height. */
