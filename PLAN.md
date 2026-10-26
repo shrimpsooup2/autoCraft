@@ -23,9 +23,16 @@ dissolves into redstone circuitry: its right-hand teeth turn into traces ending 
   (blue corner = made: crafted, smelted, hunted or by a procedure; the tooltip says how), click to add it with
   the amount in the box (right-click: a stack, Enter: the typed name, also groups like `log`) under the selected
   task, or at the top with nothing selected; adding an item again raises its amount.
+  **Plans:** every collect task carries the bot's own plan for it as folded steps, from the same planner the job
+  uses — what it mines, crafts or smelts, the pickaxe it makes before mining, crafting table, furnace and fuel
+  (32 diamond: mine diamond ore ← iron pickaxe ← smelt iron ← mine iron ore ← stone pickaxe ← cobblestone ←
+  wooden pickaxe ← planks ← chop trees). Each step shows how it's got and how much is carried; green = have it,
+  white = can be done now, dark = after the steps under it; parts already shown once read "see above". Steps are
+  read-only and never run on their own (the task runs the whole plan as one job); the plan of the running task
+  follows the bot every few seconds, *Plan* refreshes any other.
   Right, *Edit task* (opens when a row is clicked): title, item and amount or schematic (*From placement* takes
-  the ghost's spot and rotation; otherwise a spot is found when it runs), context notes; *Expand* breaks a task
-  into its parts (a crafted item's ingredients, a build's materials); *Up*/*Down* reorder, *Delete* removes. On
+  the ghost's spot and rotation; otherwise a spot is found when it runs), context notes; *Plan* (collect tasks)
+  or *Expand* (builds: their materials as collect subtasks); *Up*/*Down* reorder, *Delete* removes. On
   collect tasks *Source* switches between gathering and **getting it from a base** (a named base, or empty = the
   nearest base whose chests have it), e.g. Expand a build, then mark the materials you keep at base. *+ Group* /
   *+ Build* add under the selection, *Clear done* tidies. *Run all* works through the tree (subtasks before their
@@ -317,7 +324,7 @@ has settled and reached the server; untargeted item use (buckets, food) finishes
 | 14 | **Fixes** — shared station rules, multi-furnace smelting, station pickup, faster pathing, quick-kill combat with crits, drowning reflex, tool tiers scaled to work | code complete |
 | 15 | **Mob drops & procedures** — loot tables, hunting, honey/wool/milk/eggs, block work, copper garden, trial chambers | code complete |
 | 16 | **Additions** — smooth aim, mob farm, stonecutter, portal time costs + bucket portal, death recovery, player alert, big-build stash and tool investment, chest memory and base fetches, resume after relog, task tree | code complete |
-| 17 | **Hardening** — in-game testing; fixed so far: stalls (gear planning was blocked by any mob within 8 blocks, worn cheap tools refused, job loot never used for tools), far targets past chunk borders, sunken logs chosen over dry ones, hurt flee/work ping-pong, eating blocked by mobs behind walls, searching for crafted blocks (iron block for an iron pickaxe), saves leaking between same-named worlds, slow/re-planning swimming (now sprint-swims skimming the surface); boats over water, shipwreck wood; `!ac why` decision trace | in progress |
+| 17 | **Hardening** — in-game testing; fixed so far: stalls (gear planning was blocked by any mob within 8 blocks, worn cheap tools refused, job loot never used for tools, an iron pickaxe chosen to mine the iron for itself when a little raw iron was carried), far targets past chunk borders, sunken logs chosen over dry ones, hurt flee/work ping-pong, eating blocked by mobs behind walls, searching for crafted blocks (iron block for an iron pickaxe), saves leaking between same-named worlds, slow/re-planning swimming (now sprint-swims skimming the surface); boats over water, shipwreck wood; `!ac why` decision trace; idle reasons ("waiting for a pickaxe that mines iron") | in progress |
 
 "Code complete" = compiles against the real 26.3 client jar; not yet run in-game (see Build).
 
