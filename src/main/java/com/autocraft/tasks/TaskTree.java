@@ -11,7 +11,8 @@ import com.autocraft.build.BuildPlan;
 import com.autocraft.build.MaterialAdvisor;
 import com.autocraft.build.MaterialSettings;
 import com.autocraft.build.SiteFinder;
-import com.autocraft.craft.RecipeBook;
+import com.autocraft.craft.Planner;
+import com.autocraft.craft.Stations;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
 import com.autocraft.goal.Resources;
@@ -29,7 +30,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import net.fabricmc.loader.api.FabricLoader;
@@ -59,6 +59,9 @@ public final class TaskTree {
 	private static @Nullable TaskNode scope;
 	/** The world the run was started in ({@link WorldKey}): it only runs there, and resumes there after a relog. */
 	private static String runWorld = "";
+	/** Ticks since the running task's plan steps were refreshed. */
+	private static int planAge;
+	private static final int PLAN_REFRESH_TICKS = 20 * 3;
 
 	private TaskTree() {}
 
@@ -139,45 +142,85 @@ public final class TaskTree {
 	}
 
 	private static void clearDone(List<TaskNode> list) {
-		list.removeIf(n -> n.state == TaskNode.State.DONE && n.allChildrenDone());
+		list.removeIf(n -> n.kind != TaskNode.Kind.STEP && n.state == TaskNode.State.DONE && n.allChildrenDone()); // plans stay whole
 		for (TaskNode n : list) clearDone(n.children);
 	}
 
 	/**
-	 * Break a task into its parts as subtasks: a crafted/smelted/cut item into its ingredients (one recipe level),
-	 * a build into its bill of materials. False when there's nothing to break down.
+	 * Break a task down. A collect task gets the bot's own plan as steps (see {@link #plan}); expanding it again
+	 * refreshes them. A build gets its bill of materials as collect subtasks (mark some "from base", expand others).
+	 * False when there's nothing to break down.
 	 */
 	public static boolean expand(TaskNode node) {
-		if (!node.children.isEmpty()) return false;
-		Map<Item, Integer> parts = switch (node.kind) {
-			case COLLECT -> ingredients(item(node.item), node.amount);
-			case BUILD -> bill(node.schematic);
-			case GROUP, FETCH -> Map.of();
+		return switch (node.kind) {
+			case COLLECT -> (node.children.isEmpty() || node.hasPlan()) && plan(node);
+			case BUILD -> {
+				if (!node.children.isEmpty()) yield false;
+				Map<Item, Integer> parts = bill(node.schematic);
+				parts.forEach((item, n) -> node.children.add(TaskNode.collect(BuiltInRegistries.ITEM.getKey(item).getPath(), n)));
+				node.expanded = true;
+				save();
+				yield !parts.isEmpty();
+			}
+			case GROUP, FETCH, STEP -> false;
 		};
-		if (parts.isEmpty()) return false;
-		parts.forEach((item, n) -> node.children.add(TaskNode.collect(BuiltInRegistries.ITEM.getKey(item).getPath(), n)));
-		node.expanded = true;
-		save();
+	}
+
+	/**
+	 * Put the planner's plan for a collect task under it: what it would mine, craft or smelt, the pickaxe it makes
+	 * before mining, crafting table, furnace and fuel — the same choices the running job makes, against what's
+	 * carried now (diamond: mine diamond ore, after an iron pickaxe from smelted iron, after a stone pickaxe...).
+	 * Folding the user did is kept; the file is written only when the plan changed. False when the item is unknown
+	 * or there's no world.
+	 */
+	public static boolean plan(TaskNode node) {
+		Bot bot = Bot.get();
+		Requirement r = Resources.forJob(node.item, node.amount);
+		if (r == null || bot.player() == null) return false;
+		Planner.PlanNode root = Stations.planner(bot, r.counts()).explain(r);
+		String before = node.how + signature(node.children);
+		Map<String, Boolean> folds = new HashMap<>();
+		collectFolds(node.children, "", folds);
+		node.how = root.how();
+		node.children.clear();
+		for (Planner.PlanNode part : root.parts()) node.children.add(step(part, "", folds));
+		if (!before.equals(node.how + signature(node.children))) save();
 		return true;
 	}
 
-	private static Map<Item, Integer> ingredients(@Nullable Item item, int amount) {
-		Map<Item, Integer> out = new LinkedHashMap<>();
-		if (item == null) return out;
-		RecipeBook book = RecipeBook.get();
-		if (!book.crafting(item).isEmpty()) {
-			RecipeBook.Recipe r = book.crafting(item).getFirst();
-			int batches = (amount + r.count() - 1) / r.count();
-			for (RecipeBook.Ingredient ing : new LinkedHashSet<>(r.key().values())) {
-				out.merge(ing.options().getFirst(), r.amountOf(ing) * batches, Integer::sum);
-			}
-		} else if (!book.smelting(item).isEmpty()) {
-			out.put(book.smelting(item).getFirst().smeltInput().options().getFirst(), amount);
-		} else if (!book.cutting(item).isEmpty()) {
-			RecipeBook.Cut c = book.cutting(item).getFirst();
-			out.put(c.input().options().getFirst(), (amount + c.count() - 1) / c.count());
+	private static String signature(List<TaskNode> nodes) {
+		StringBuilder sb = new StringBuilder();
+		for (TaskNode n : nodes) sb.append('[').append(n.title).append('|').append(n.how).append('|').append(n.state).append(signature(n.children)).append(']');
+		return sb.toString();
+	}
+
+	private static TaskNode step(Planner.PlanNode p, String parentPath, Map<String, Boolean> folds) {
+		String path = parentPath + "/" + p.key();
+		TaskNode n = new TaskNode(p.amount() + " " + p.name(), TaskNode.Kind.STEP);
+		n.item = p.key();
+		n.amount = p.amount();
+		n.how = p.how();
+		n.state = p.have() >= p.amount() ? TaskNode.State.DONE : TaskNode.State.PENDING;
+		n.expanded = folds.getOrDefault(path, true);
+		for (Planner.PlanNode part : p.parts()) n.children.add(step(part, path, folds));
+		return n;
+	}
+
+	private static void collectFolds(List<TaskNode> nodes, String parentPath, Map<String, Boolean> out) {
+		for (TaskNode n : nodes) {
+			if (n.kind != TaskNode.Kind.STEP) continue;
+			String path = parentPath + "/" + n.item;
+			out.put(path, n.expanded);
+			collectFolds(n.children, path, out);
 		}
-		return out;
+	}
+
+	private static void markDone(List<TaskNode> nodes) {
+		for (TaskNode n : nodes) {
+			if (n.kind != TaskNode.Kind.STEP) continue;
+			n.state = TaskNode.State.DONE;
+			markDone(n.children);
+		}
 	}
 
 	private static Map<Item, Integer> bill(String schematicName) {
@@ -234,6 +277,7 @@ public final class TaskTree {
 	public static void completed() {
 		if (running == null || !active()) return; // a job in another world finished, not this run's task
 		running.state = TaskNode.State.DONE;
+		markDone(running.children);
 		running = null;
 		save();
 	}
@@ -245,7 +289,14 @@ public final class TaskTree {
 		if (!WorldKey.current().equals(runWorld) || TaskSave.restorePending()) return;
 		Bot bot = Bot.get();
 		if (running != null) {
-			if (bot.isRunning()) return;
+			if (bot.isRunning()) {
+				// the plan under the running task follows the bot's progress (steps done, the next one, a changed route)
+				if (running.hasPlan() && ++planAge >= PLAN_REFRESH_TICKS) {
+					planAge = 0;
+					plan(running);
+				}
+				return;
+			}
 			// stopped without finishing (stopped by hand, died, player nearby...): wait for the user
 			active = false;
 			scope = null;
@@ -292,6 +343,7 @@ public final class TaskTree {
 				Chat.warn("Task tree: don't know how to get \"" + n.item + "\"; fix the task and press Run.");
 				return false;
 			}
+			if (n.children.isEmpty()) plan(n); // the tree shows how the bot goes about it while it runs
 			bot.start(new Job(List.of(r)));
 			return true;
 		}
@@ -348,8 +400,8 @@ public final class TaskTree {
 	/** As {@link #next(List)}, counting {@code finishing} as done already. */
 	private static @Nullable TaskNode next(List<TaskNode> nodes, @Nullable TaskNode finishing) {
 		for (TaskNode n : nodes) {
-			if (n.state == TaskNode.State.DONE || n == finishing) continue;
-			boolean childrenDone = n.children.stream().allMatch(c -> c.state == TaskNode.State.DONE || c == finishing);
+			if (n.state == TaskNode.State.DONE || n == finishing || n.kind == TaskNode.Kind.STEP) continue;
+			boolean childrenDone = n.children.stream().allMatch(c -> c.kind == TaskNode.Kind.STEP || c.state == TaskNode.State.DONE || c == finishing);
 			if (!childrenDone) return next(n.children, finishing);
 			return n;
 		}

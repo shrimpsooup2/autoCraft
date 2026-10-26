@@ -34,7 +34,6 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.ItemAttributeModifiers;
 import net.minecraft.world.item.equipment.Equippable;
-import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
@@ -47,7 +46,6 @@ import org.jspecify.annotations.Nullable;
  */
 public final class GearBehavior implements Behavior {
 	private static final int PLAN_EVERY = 20;
-	private static final List<Item> PICKAXES = List.of(Items.WOODEN_PICKAXE, Items.STONE_PICKAXE, Items.IRON_PICKAXE, Items.DIAMOND_PICKAXE);
 	private static final int NETHER_BLOCKS = 32;
 	private static final int WATER_SEARCH_EVERY = 100;
 	/** Plain rockets to keep on hand when carrying an elytra. */
@@ -70,6 +68,8 @@ public final class GearBehavior implements Behavior {
 	private final Workshop workshop = new Workshop();
 	private int sincePlan = PLAN_EVERY;
 	private int failures;
+	/** Required gear already reported as impossible (warned once each). */
+	private final java.util.Set<String> warnedUnavailable = new java.util.HashSet<>();
 	private @Nullable BlockPos water;
 	private int waterTicks;
 	private int sinceWaterSearch = WATER_SEARCH_EVERY;
@@ -171,9 +171,13 @@ public final class GearBehavior implements Behavior {
 		Planner tools = Stations.planner(bot).borrowingJobLoot();
 		for (Want w : wants(bot, p, tools, bot.targetForGear())) {
 			Step s = w.plan.apply(w.required ? tools : strict);
-			if (s instanceof Planner.Done || s instanceof Planner.Unavailable) continue;
+			if (s instanceof Planner.Gather g) s = tools.toolFirst(g); // a pickaxe first when nothing carried mines it
+			if (s instanceof Planner.Unavailable u) {
+				if (w.required && warnedUnavailable.add(u.what())) Chat.warn("Can't get " + u.what() + "; carrying on with the rest.");
+				continue;
+			}
+			if (s instanceof Planner.Done) continue;
 			if (!w.required && !(s instanceof Planner.Craft c && w.finalItem.test(c.recipe().output()))) continue;
-			if (s instanceof Planner.Gather g) s = toolFirst(tools, p, g);
 			return s;
 		}
 		return new Planner.Done();
@@ -188,8 +192,10 @@ public final class GearBehavior implements Behavior {
 		List<Want> wants = new ArrayList<>();
 		int pick = 0, axe = 0, shovel = 0;
 		if (target != null) {
-			Item tool = cheapestPickaxe(planner, target);
-			if (tool != null && !canHarvestAny(p, target)) wants.add(Want.required(tool));
+			// the work needs a pickaxe nothing carried can stand in for: its first step (cycle-safe, see toolFirst)
+			if (!planner.pickaxeTiers(target).isEmpty() && !planner.canHarvest(target)) {
+				wants.add(new Want(pl -> pl.toolFirst(new Planner.Gather(target)), true, i -> i.getDefaultInstance().is(ItemTags.PICKAXES)));
+			}
 			boolean deep = target.strategy() == Requirement.Strategy.UNDERGROUND || target.dimension() == Requirement.Dim.NETHER;
 			int remaining = Math.max(0, target.amount() - InvUtil.count(p, target.counts()));
 			// a build's gathering comes in windows: the work ahead is the rest of the build
@@ -265,49 +271,6 @@ public final class GearBehavior implements Behavior {
 					NETHER_BLOCKS, Requirement.Strategy.ANYWHERE, 0, Requirement.Dim.OVERWORLD);
 			wants.add(new Want(pl -> new Planner.Gather(blocks), true, i -> false));
 		}
-	}
-
-	/** Before gathering something we can't harvest yet, plan the pickaxe for it (recursively). */
-	private static Step toolFirst(Planner planner, LocalPlayer p, Planner.Gather gather) {
-		Requirement req = gather.requirement();
-		for (int depth = 0; depth <= PICKAXES.size(); depth++) {
-			Item tool = cheapestPickaxe(planner, req);
-			if (tool == null || canHarvestAny(p, req)) return new Planner.Gather(req);
-			Step s = planner.next(tool, 1);
-			if (!(s instanceof Planner.Gather g)) return s;
-			req = g.requirement();
-		}
-		return new Planner.Gather(req);
-	}
-
-	/**
-	 * The pickaxe to make for a requirement: of the tiers that get drops from its blocks, the one that's cheapest
-	 * to make right now — a stone pickaxe when cobblestone is on hand (3 cobblestone instead of a trip for logs),
-	 * not always the lowest tier. Null if no tool is needed.
-	 */
-	private static @Nullable Item cheapestPickaxe(Planner planner, Requirement r) {
-		for (Block b : r.sources()) {
-			if (!b.defaultBlockState().requiresCorrectToolForDrops()) return null;
-		}
-		Item best = null;
-		double bestCost = Double.MAX_VALUE;
-		for (Item pick : PICKAXES) {
-			ItemStack stack = new ItemStack(pick);
-			if (r.sources().stream().noneMatch(b -> stack.isCorrectToolForDrops(b.defaultBlockState()))) continue;
-			double c = planner.costOf(pick);
-			if (best == null || c < bestCost) {
-				bestCost = c;
-				best = pick;
-			}
-		}
-		return best;
-	}
-
-	private static boolean canHarvestAny(LocalPlayer p, Requirement r) {
-		for (Block b : r.sources()) {
-			if (InvUtil.canHarvest(p, b.defaultBlockState())) return true;
-		}
-		return false;
 	}
 
 	/** The next work (job or a build/make need) is in the Nether and we're still in the Overworld. */

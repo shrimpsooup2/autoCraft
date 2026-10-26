@@ -135,6 +135,8 @@ public final class Bot {
 	private final java.util.ArrayDeque<String> trace = new java.util.ArrayDeque<>();
 	private String lastTrace = "";
 	private String status = "";
+	/** Tick of the last {@link #setStatus}: an idle tick keeps a reason a behavior gave while declining. */
+	private long statusTick = -1;
 	private @Nullable ElytraTravel flight;
 	private long ticks;
 	private int swimTicks;
@@ -205,7 +207,7 @@ public final class Bot {
 				break;
 			}
 		}
-		if (activeBehavior.equals("idle")) status = "nothing to do right now"; // not the last thing it did
+		if (activeBehavior.equals("idle") && statusTick != ticks) status = "nothing to do right now"; // not the last thing it did
 		trace();
 		if (running) controls.apply();
 	}
@@ -662,5 +664,8 @@ public final class Bot {
 	public String activeBehavior() { return activeBehavior; }
 	public String status() { return status; }
 	/** Short description of what the active behavior is doing, shown by {@code !ac status}. */
-	public void setStatus(String s) { status = s; }
+	public void setStatus(String s) {
+		status = s;
+		statusTick = ticks;
+	}
 }

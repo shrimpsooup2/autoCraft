@@ -46,6 +46,8 @@ final class TaskTreePanel {
 	private static final int ROW = 16;
 	private static final int LINE = 11;
 	private static final int INDENT = 10;
+	/** Narrowest indent a deep plan (diamond → … → logs) is squeezed to, so titles keep their room. */
+	private static final int MIN_INDENT = 5;
 	private static final int SLOT = 18;
 	private static final int DONE_COLOR = 0xFF6FD66F;
 	private static final int ACTIVE_COLOR = 0xFFFFC94F;
@@ -74,6 +76,8 @@ final class TaskTreePanel {
 	private final Consumer<AbstractWidget> add;
 	private final Runnable rebuild;
 	private @Nullable Button runAll;
+	/** Indent per tree level this frame (see {@link #indentFor}). */
+	private int indent = INDENT;
 	private @Nullable Button runSelected;
 	private @Nullable EditBox search;
 	private List<ItemCatalog.Entry> results = List.of();
@@ -167,10 +171,15 @@ final class TaskTreePanel {
 
 	/** Add a group/build under the selection and open it for editing (it needs a title or a schematic). */
 	private void addEdited(TaskNode node) {
-		TaskTree.add(selected, node);
+		TaskTree.add(target(), node);
 		selected = node;
 		mode = Mode.EDIT;
 		rebuild.run();
+	}
+
+	/** Where new tasks go: under the selection, at the top when nothing (or a plan step) is selected. */
+	private static @Nullable TaskNode target() {
+		return selected == null || selected.kind == TaskNode.Kind.STEP ? null : selected;
 	}
 
 	// ---- add items ------------------------------------------------------------------------------
@@ -210,18 +219,26 @@ final class TaskTreePanel {
 		}
 	}
 
-	/** A collect task under the selection (else at the top); the same item already waiting there just gets more. */
+	/**
+	 * A collect task under the selection (else at the top), with the bot's plan for it folded underneath; the same
+	 * item already waiting there just gets more.
+	 */
 	private void addItem(String key, int amount) {
-		List<TaskNode> list = selected == null ? TaskTree.roots() : selected.children;
+		TaskNode parent = target();
+		List<TaskNode> list = parent == null ? TaskTree.roots() : parent.children;
 		for (TaskNode n : list) {
 			if (n.kind != TaskNode.Kind.COLLECT || n.state != TaskNode.State.PENDING || !n.item.equals(key)) continue;
 			boolean defaultTitle = n.title.equals(TaskNode.collect(n.item, n.amount).title);
 			n.amount += amount;
 			if (defaultTitle) n.title = TaskNode.collect(n.item, n.amount).title;
+			if (n.children.isEmpty() || n.hasPlan()) TaskTree.plan(n);
 			TaskTree.save();
 			return;
 		}
-		TaskTree.add(selected, TaskNode.collect(key, amount));
+		TaskNode n = TaskNode.collect(key, amount);
+		TaskTree.add(parent, n);
+		if (TaskTree.plan(n)) n.expanded = false; // the plan is there to look at, not in the way
+		TaskTree.save();
 	}
 
 	/** Enter in the search box: the typed name if it is a resource ("log", "iron"), else the first result. */
@@ -275,6 +292,7 @@ final class TaskTreePanel {
 	// ---- edit -----------------------------------------------------------------------------------
 
 	private void initEditor(TaskNode n) {
+		if (n.kind == TaskNode.Kind.STEP) return; // the bot's plan: read-only (details are drawn)
 		int top = contentY + 20;
 		EditBox title = box(rightX, top, colW, 128, n.title, "Title");
 		title.setResponder(s -> {
@@ -322,9 +340,14 @@ final class TaskTreePanel {
 		});
 		int quarter = (colW - 12) / 4;
 		int by = top + 60;
-		add.accept(Button.builder(Component.literal("Expand"), b -> {
-			if (TaskTree.expand(n)) rebuild.run();
-		}).tooltip(Tooltip.create(Component.literal("Break it into parts: ingredients of a crafted item, materials of a build"))).bounds(rightX, by, quarter, 18).build());
+		boolean collect = n.kind == TaskNode.Kind.COLLECT;
+		add.accept(Button.builder(Component.literal(collect ? "Plan" : "Expand"), b -> {
+			if (TaskTree.expand(n)) {
+				n.expanded = true;
+				rebuild.run();
+			}
+		}).tooltip(Tooltip.create(Component.literal(collect ? "Show (or refresh) how the bot will get it: what it mines, crafts and smelts, and the tools it makes first"
+				: "Break it into parts: the materials of a build"))).bounds(rightX, by, quarter, 18).build());
 		add.accept(Button.builder(Component.literal("Up"), b -> {
 			TaskTree.move(n, -1);
 			rebuild.run();
@@ -366,7 +389,14 @@ final class TaskTreePanel {
 	}
 
 	private void extractDetails(GuiGraphicsExtractor g, TaskNode n) {
-		int y = contentY + 124;
+		int y = n.kind == TaskNode.Kind.STEP ? contentY + 24 : contentY + 124;
+		if (n.kind == TaskNode.Kind.STEP) {
+			g.text(font, font.plainSubstrByWidth(n.title, colW), rightX, y, Widgets.WHITE);
+			y += LINE + 2;
+			g.textWithWordWrap(font, Component.literal("A step of the bot's plan for the task above it — " + n.how + ". Plans are worked out"
+					+ " against what's carried and follow the bot while the task runs; select the task and press Plan to refresh."), rightX, y, colW, Widgets.GRAY);
+			y += 5 * LINE;
+		}
 		g.text(font, "Status: " + stateText(n), rightX, y, color(n));
 		y += LINE;
 		String problem = problem(n);
@@ -404,19 +434,20 @@ final class TaskTreePanel {
 	void tick() {
 		boolean active = TaskTree.active();
 		if (runAll != null) runAll.setMessage(Component.literal(active ? "Stop" : "Run all"));
-		if (runSelected != null) runSelected.active = !active && selected != null && selected.state != TaskNode.State.DONE;
+		if (runSelected != null) runSelected.active = !active && selected != null && selected.state != TaskNode.State.DONE && selected.kind != TaskNode.Kind.STEP;
 	}
 
 	/** Unfinished jobs, fetches and builds in the whole tree (folded parts too). */
 	private static int todo(List<TaskNode> nodes) {
 		int n = 0;
-		for (TaskNode t : nodes) n += (t.state != TaskNode.State.DONE && t.kind != TaskNode.Kind.GROUP ? 1 : 0) + todo(t.children);
+		for (TaskNode t : nodes) n += (t.state != TaskNode.State.DONE && t.kind != TaskNode.Kind.GROUP && t.kind != TaskNode.Kind.STEP ? 1 : 0) + todo(t.children);
 		return n;
 	}
 
 	void extract(GuiGraphicsExtractor g, int mouseX, int mouseY) {
 		int x = treeX();
 		List<Line> lines = lines();
+		indent = indentFor(lines);
 		int todo = todo(TaskTree.roots());
 		g.text(font, "Tasks" + (TaskTree.active() ? " — running" : lines.isEmpty() ? "" : " — " + todo + " to do"), x, contentY + 2, Widgets.WHITE);
 		if (lines.isEmpty()) {
@@ -458,7 +489,7 @@ final class TaskTreePanel {
 	private void row(GuiGraphicsExtractor g, int x, int y, Line l, boolean next) {
 		TaskNode n = l.node;
 		int mid = y + ROW / 2 - 1;
-		int nx = x + l.depth * INDENT;
+		int nx = x + l.depth * indent;
 		for (int k = 1; k < l.depth; k++) {
 			if (l.open[k]) g.fill(guideX(x, k - 1), y, guideX(x, k - 1) + 1, y + ROW, GUIDE_COLOR);
 		}
@@ -483,7 +514,12 @@ final class TaskTreePanel {
 		int[] pr = progress(n);
 		String count = pr == null ? "" : n.kind == TaskNode.Kind.GROUP ? pr[0] + "/" + pr[1] : shortCount(pr[0]) + "/" + shortCount(pr[1]);
 		int countX = right - font.width(count);
-		g.text(font, font.plainSubstrByWidth(n.title, Math.max(0, countX - textX - 4)), textX, y + 3, color(n));
+		String title = font.plainSubstrByWidth(n.title, Math.max(0, countX - textX - 4));
+		g.text(font, title, textX, y + 3, color(n));
+		int howX = textX + font.width(title) + 5;
+		if (!n.how.isEmpty() && n.kind != TaskNode.Kind.GROUP && countX - 4 - howX > 12) { // how it's got, if there's room
+			g.text(font, font.plainSubstrByWidth(n.how, countX - 4 - howX), howX, y + 3, 0xFF7A8696);
+		}
 		if (pr != null) {
 			g.text(font, count, countX, y + 3, Widgets.GRAY);
 			double f = pr[1] == 0 ? 0 : Math.min(1, (double) pr[0] / pr[1]);
@@ -492,8 +528,15 @@ final class TaskTreePanel {
 		}
 	}
 
-	private static int guideX(int x, int depth) {
-		return x + depth * INDENT + 2;
+	private int guideX(int x, int depth) {
+		return x + depth * indent + 2;
+	}
+
+	/** Full indent, or less when the deepest row would leave its title under ~90 px. */
+	private int indentFor(List<Line> lines) {
+		int deepest = lines.stream().mapToInt(Line::depth).max().orElse(0);
+		if (deepest == 0) return INDENT;
+		return Math.max(MIN_INDENT, Math.min(INDENT, (colW - 30 - 90) / deepest));
 	}
 
 	/** ▾ (open) or ▸ (folded), 5 px. */
@@ -526,6 +569,7 @@ final class TaskTreePanel {
 	}
 
 	private static int pipColor(TaskNode n, boolean next) {
+		if (n.kind == TaskNode.Kind.STEP && n.state == TaskNode.State.PENDING) return stepReady(n) ? NEXT_COLOR : BLOCKED_COLOR;
 		return switch (n.state) {
 			case DONE -> DONE_COLOR;
 			case ACTIVE -> System.currentTimeMillis() / 400 % 2 == 0 ? ACTIVE_COLOR : 0xFFB08A30; // blinking: working on it
@@ -533,7 +577,13 @@ final class TaskTreePanel {
 		};
 	}
 
+	/** A plan step whose own steps are all done: the bot can do it now. */
+	private static boolean stepReady(TaskNode n) {
+		return n.children.stream().allMatch(c -> c.state == TaskNode.State.DONE);
+	}
+
 	private static int color(TaskNode n) {
+		if (n.kind == TaskNode.Kind.STEP && n.state == TaskNode.State.PENDING) return stepReady(n) ? Widgets.WHITE : 0xFFB0B0B0;
 		return switch (n.state) {
 			case DONE -> 0xFF9FCF9F;
 			case ACTIVE -> ACTIVE_COLOR;
@@ -542,6 +592,9 @@ final class TaskTreePanel {
 	}
 
 	private static String stateText(TaskNode n) {
+		if (n.kind == TaskNode.Kind.STEP) {
+			return n.state == TaskNode.State.DONE ? "have it" : stepReady(n) ? "can be done now" : "after the steps under it";
+		}
 		return switch (n.state) {
 			case DONE -> "done";
 			case ACTIVE -> "running now";
@@ -566,8 +619,11 @@ final class TaskTreePanel {
 			case GROUP -> n.children.isEmpty() ? "Group: add subtasks under it" : "Group of " + n.children.size() + " subtask" + (n.children.size() == 1 ? "" : "s");
 			case COLLECT -> {
 				Requirement r = requirement(n.item);
-				yield "Collect " + n.amount + " × " + itemName(n) + (r == null ? "" : " · " + ItemCatalog.how(ItemCatalog.iconOf(r), r).toLowerCase());
+				String how = !n.how.isEmpty() ? n.how : r == null ? "" : ItemCatalog.how(ItemCatalog.iconOf(r), r).toLowerCase();
+				yield "Collect " + n.amount + " × " + itemName(n) + (how.isEmpty() ? "" : " · " + how);
 			}
+			case STEP -> n.how.equals("carried") ? n.amount + " carried already" : n.how.equals("see above") ? "made by an earlier step"
+					: n.how.substring(0, 1).toUpperCase() + n.how.substring(1) + ": " + n.amount + " × " + itemName(n);
 			case FETCH -> "Take " + n.amount + " × " + itemName(n) + " from " + (n.base.isBlank() ? "the nearest base that has it" : "base \"" + n.base + "\"");
 			case BUILD -> "Build " + n.schematic + (n.origin == null ? " (spot found when it runs)"
 					: " at " + n.origin[0] + " " + n.origin[1] + " " + n.origin[2] + (n.rotation == 0 ? "" : ", rotated " + n.rotation * 90 + "°"));
@@ -582,7 +638,7 @@ final class TaskTreePanel {
 					: !n.base.isBlank() && Bases.named(n.base) == null ? "No base named \"" + n.base + "\" (bases: " + Bases.all().stream().map(Bases.Base::name).toList() + ")"
 					: null;
 			case BUILD -> SchematicLibrary.get(n.schematic) == null ? "No schematic named \"" + n.schematic + "\"" : null;
-			case GROUP -> null;
+			case GROUP, STEP -> null;
 		};
 	}
 
@@ -595,7 +651,7 @@ final class TaskTreePanel {
 		return switch (n.kind) {
 			case GROUP -> Items.WRITABLE_BOOK;
 			case BUILD -> Items.BRICKS;
-			case COLLECT, FETCH -> {
+			case COLLECT, FETCH, STEP -> {
 				Requirement r = requirement(n.item);
 				Item item = TaskTree.item(n.item);
 				yield r != null ? ItemCatalog.iconOf(r) : item != null ? item : Items.BARRIER;
@@ -615,7 +671,7 @@ final class TaskTreePanel {
 			case GROUP -> n.children.isEmpty() ? null : new int[] {(int) n.children.stream().filter(c -> c.state == TaskNode.State.DONE).count(), n.children.size()};
 			case BUILD -> n.state == TaskNode.State.DONE ? new int[] {1, 1}
 					: n.state == TaskNode.State.ACTIVE && bot.buildTotal() > 0 ? new int[] {bot.buildPlaced(), bot.buildTotal()} : null;
-			case COLLECT, FETCH -> {
+			case COLLECT, FETCH, STEP -> {
 				if (n.state == TaskNode.State.DONE) yield new int[] {n.amount, n.amount};
 				Requirement r = requirement(n.item);
 				if (p == null || r == null) yield null;
@@ -633,6 +689,7 @@ final class TaskTreePanel {
 			case GROUP -> "subtasks done";
 			case BUILD -> "blocks placed";
 			case COLLECT, FETCH -> n.state == TaskNode.State.ACTIVE ? "collected" : "carried now";
+			case STEP -> "carried now";
 		};
 	}
 
@@ -659,7 +716,7 @@ final class TaskTreePanel {
 			return true;
 		}
 		Line l = lines.get(index);
-		int nx = x + l.depth * INDENT;
+		int nx = x + l.depth * indent;
 		if (!l.node.children.isEmpty() && mx >= nx - 2 && mx < nx + 7) {
 			l.node.expanded = !l.node.expanded;
 			TaskTree.save();

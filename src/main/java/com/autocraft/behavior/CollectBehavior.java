@@ -117,7 +117,10 @@ public final class CollectBehavior implements Behavior {
 		bot.setHuntTargets(Set.of());
 		if (wreckWoodAllowed(bot, target)) target = withWreckWood(target);
 		Set<Block> harvestable = harvestableSources(p, target);
-		if (harvestable.isEmpty()) return false; // gear planner will bring the right tool
+		if (harvestable.isEmpty()) { // the gear planner brings the right tool; say so, so "!ac why" isn't a mystery
+			bot.setStatus("waiting for a pickaxe that mines " + target.name());
+			return false;
+		}
 		onTargetChange(bot, target);
 
 		if (boat != null) {

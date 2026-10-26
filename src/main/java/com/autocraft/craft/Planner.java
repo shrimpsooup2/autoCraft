@@ -4,22 +4,30 @@ import com.autocraft.control.InvUtil;
 import com.autocraft.craft.RecipeBook.Ingredient;
 import com.autocraft.craft.RecipeBook.Recipe;
 import com.autocraft.goal.Requirement;
+import com.autocraft.loot.LootBook;
 import com.autocraft.procedure.Procedure;
 import com.autocraft.procedure.Procedures;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.Holder;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Block;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -54,6 +62,9 @@ public final class Planner {
 	private static final Done DONE = new Done();
 	private static final double INF = 1e9;
 	private static final int MAX_DEPTH = 8;
+	/** How deep an explained plan may go (diamond → iron pickaxe → … → logs is about 10). */
+	private static final int EXPLAIN_DEPTH = 16;
+	private static final List<Item> PICKAXES = List.of(Items.WOODEN_PICKAXE, Items.STONE_PICKAXE, Items.IRON_PICKAXE, Items.DIAMOND_PICKAXE);
 	private static final double CRAFT_COST = 1;
 	private static final double SMELT_COST = 4;
 	/** One click on a stonecutter, cheaper than laying out a crafting grid. */
@@ -89,8 +100,7 @@ public final class Planner {
 	/**
 	 * Job loot may be used as an ingredient: for a tool the job can't go on without, 3 of the 40 cobblestone mined
 	 * so far make a stone pickaxe and the job mines 3 more — instead of a trip for logs, or no pickaxe at all. The
-	 * total work is the same either way (protected loot would have to be gathered again for the tool). Also what
-	 * {@link #costOf} assumes, so tool choices and plans agree.
+	 * total work is the same either way (protected loot would have to be gathered again for the tool).
 	 */
 	public Planner borrowingJobLoot() {
 		borrowJobLoot = true;
@@ -124,9 +134,187 @@ public final class Planner {
 		return best == null ? new Unavailable("boat") : next(best, 1);
 	}
 
-	/** Rough effort to get one more of {@code item} (0 when a usable one is carried); compares alternatives. */
-	public double costOf(Item item) {
-		return cost(item, false, 0, new HashSet<>());
+	// ---- tools for gathering --------------------------------------------------------------------
+
+	/** A carried tool (or a bare hand) gets drops from at least one of the requirement's blocks. */
+	public boolean canHarvest(Requirement r) {
+		for (Block b : r.sources()) {
+			if (InvUtil.canHarvest(p, b.defaultBlockState())) return true;
+		}
+		return false;
+	}
+
+	/** Pickaxe tiers that get drops from the requirement's blocks, cheapest to make right now first; empty: no tool needed. */
+	public List<Item> pickaxeTiers(Requirement r) {
+		for (Block b : r.sources()) {
+			if (!b.defaultBlockState().requiresCorrectToolForDrops()) return List.of();
+		}
+		List<Item> out = new ArrayList<>();
+		for (Item pick : PICKAXES) {
+			ItemStack stack = new ItemStack(pick);
+			if (r.sources().stream().anyMatch(b -> stack.isCorrectToolForDrops(b.defaultBlockState()))) out.add(pick);
+		}
+		out.sort(Comparator.comparingDouble(pick -> cost(pick, false, 0, new HashSet<>()))); // stable: lower tier first on ties
+		return out;
+	}
+
+	/**
+	 * The next step toward gathering {@code gather}: the gather itself when a carried tool gets its drops, otherwise
+	 * the first step toward a pickaxe that does — the tier that's cheapest to make right now, but never one whose
+	 * making needs this very gathering. (Carrying a couple of raw iron made an iron pickaxe look cheapest for mining
+	 * iron ore; its first step was "gather iron", which needs the pickaxe, and the bot stood still.) Unavailable when
+	 * no pickaxe can be had.
+	 */
+	public Step toolFirst(Gather gather) {
+		ToolChoice c = chooseTool(gather.requirement(), new HashSet<>(), 0);
+		return c == null ? gather : c.step;
+	}
+
+	/** The pickaxe to make before gathering {@code r}, or null when a carried tool (or none) will do. */
+	private @Nullable ToolChoice chooseTool(Requirement r, Set<String> pending, int depth) {
+		List<Item> tiers = pickaxeTiers(r);
+		if (tiers.isEmpty() || canHarvest(r)) return null;
+		Unavailable none = new Unavailable("a pickaxe for " + r.name());
+		if (depth > PICKAXES.size() || !pending.add(r.name())) return new ToolChoice(null, none);
+		try {
+			for (Item tool : tiers) {
+				Step s = next(tool, 1);
+				if (s instanceof Unavailable || s instanceof Done) continue;
+				if (!(s instanceof Gather g)) return new ToolChoice(tool, s); // craft/smelt/cut toward it: actionable now
+				if (pending.contains(g.requirement().name())) continue; // needs what it's meant to mine
+				ToolChoice deeper = chooseTool(g.requirement(), pending, depth + 1);
+				if (deeper == null) return new ToolChoice(tool, s);
+				if (!(deeper.step instanceof Unavailable)) return new ToolChoice(tool, deeper.step);
+			}
+			return new ToolChoice(null, none);
+		} finally {
+			pending.remove(r.name());
+		}
+	}
+
+	/** {@code tool}: the pickaxe being made (null: none can be); {@code step}: what to do next toward it. */
+	private record ToolChoice(@Nullable Item tool, Step step) {}
+
+	// ---- explaining a plan ----------------------------------------------------------------------
+
+	/**
+	 * One step of a plan as the bot carries it out: get {@code amount} of {@code name} (icon {@code icon}, item id
+	 * {@code key}), {@code have} of it carried, by {@code how} ("carried", "mine iron ore", "craft", "smelt"...);
+	 * {@code parts} come first.
+	 */
+	public record PlanNode(Item icon, String key, String name, int amount, int have, String how, List<PlanNode> parts) {}
+
+	/**
+	 * The whole plan for a job requirement, followed all the way down with the same choices {@link #next} makes:
+	 * mined or crafted, which recipe, the pickaxe to make before mining, crafting table, furnace and fuel. Each part
+	 * is costed against what's carried now; something shown once (a wooden pickaxe two tools need) is "see above"
+	 * after that.
+	 */
+	public PlanNode explain(Requirement r) {
+		Set<Item> shown = new HashSet<>();
+		if (r.isCrafted()) return explain(r.product(), r.amount(), false, 0, new LinkedHashSet<>(), shown);
+		int have = InvUtil.count(p, r.counts());
+		Item icon = iconOf(r);
+		return gatherNode(r, icon, r.name(), display(r.name()), r.amount(), have, 0, new LinkedHashSet<>(), shown);
+	}
+
+	private PlanNode explain(Item want, int count, boolean flexible, int depth, Set<Item> path, Set<Item> shown) {
+		String key = name(want), name = want.getDefaultInstance().getHoverName().getString();
+		int have = carried(want);
+		if (have >= count) return new PlanNode(want, key, name, count, have, "carried", List.of());
+		if (!shown.add(want)) return new PlanNode(want, key, name, count, have, "see above", List.of());
+		if (depth > EXPLAIN_DEPTH || !path.add(want)) return new PlanNode(want, key, name, count, have, "can't be had", List.of());
+		try {
+			Route route = bestRoute(want, flexible, 0, new HashSet<>(path)); // like obtain: the item itself is on the path
+			if (route == null) return new PlanNode(want, key, name, count, have, "can't be had", List.of());
+			int missing = count - have;
+			List<PlanNode> parts = new ArrayList<>();
+			if (route.gather != null) {
+				Requirement g = Gatherable.requirementFor(want, count, dimension, flexible);
+				if (g == null) return new PlanNode(want, key, name, count, have, "can't be had", List.of());
+				boolean anyWood = flexible && want.getDefaultInstance().is(ItemTags.LOGS);
+				return gatherNode(g, want, anyWood ? g.name() : key, anyWood ? "Logs (any kind)" : name, count, have, depth, path, shown);
+			}
+			String how;
+			if (route.procedure != null) {
+				how = route.procedure.label().toLowerCase(Locale.ROOT);
+				for (Map.Entry<Item, Integer> need : route.procedure.needs(want, missing).entrySet()) {
+					if (need.getValue() > 0) parts.add(explain(need.getKey(), need.getValue(), false, depth + 1, path, shown));
+				}
+			} else if (route.cut != null) {
+				how = "stonecutter";
+				int cuts = (missing + route.cut.count() - 1) / route.cut.count();
+				parts.add(explainIngredient(route.cut.input(), cuts, depth, path, shown));
+				if (!cutterNearby && carried(Items.STONECUTTER) == 0) parts.add(explain(Items.STONECUTTER, 1, false, depth + 1, path, shown));
+			} else if (route.recipe.isSmelting()) {
+				how = "smelt";
+				parts.add(explainIngredient(route.recipe.smeltInput(), missing, depth, path, shown));
+				if (!furnaceNearby && carried(Items.FURNACE) == 0) parts.add(explain(Items.FURNACE, 1, false, depth + 1, path, shown));
+				if (Smelter.fuelValue(p) < missing) {
+					parts.add(explain(Items.COAL, carried(Items.COAL) + (missing + 7) / 8, false, depth + 1, path, shown));
+				}
+			} else {
+				Recipe r = route.recipe;
+				how = "craft";
+				int batches = (missing + r.count() - 1) / r.count();
+				for (Ingredient ing : new LinkedHashSet<>(r.key().values())) parts.add(explainIngredient(ing, r.amountOf(ing) * batches, depth, path, shown));
+				if (!r.fits2x2() && !tableNearby && carried(Items.CRAFTING_TABLE) == 0) {
+					parts.add(explain(Items.CRAFTING_TABLE, 1, false, depth + 1, path, shown));
+				}
+			}
+			return new PlanNode(want, key, name, count, have, how, parts);
+		} finally {
+			path.remove(want);
+		}
+	}
+
+	/** The option of an ingredient the planner would use (what's carried, else the cheapest to make). */
+	private PlanNode explainIngredient(Ingredient ing, int needed, int depth, Set<Item> path, Set<Item> shown) {
+		int have = InvUtil.count(p, s -> ing.test(s) && (borrowJobLoot || !protect.test(s)));
+		Item choice = have >= needed ? pickCarried(ing) : cheapestOption(ing, 0, new HashSet<>(path));
+		if (choice == null) choice = ing.options().getFirst();
+		boolean flexible = ing.options().size() > 1;
+		PlanNode n = explain(choice, Math.max(needed, carried(choice) + needed - have), flexible, depth + 1, path, shown);
+		if (flexible && have < needed && ing.options().stream().allMatch(o -> o.getDefaultInstance().is(ItemTags.PLANKS))) {
+			// any planks do: the bot makes them from whatever logs it finds
+			return new PlanNode(n.icon, n.key, "Planks (any wood)", n.amount, have, n.how, n.parts);
+		}
+		return n;
+	}
+
+	/** Mining or hunting {@code g}: the pickaxe (or shears) to make first, then the gathering itself. */
+	private PlanNode gatherNode(Requirement g, Item icon, String key, String name, int count, int have, int depth, Set<Item> path, Set<Item> shown) {
+		if (have >= count) return new PlanNode(icon, key, name, count, have, "carried", List.of());
+		List<PlanNode> parts = new ArrayList<>();
+		ToolChoice tool = chooseTool(g, new HashSet<>(), 0);
+		if (tool != null && tool.tool != null) parts.add(explain(tool.tool, 1, false, depth + 1, path, shown));
+		if (g.tool() == LootBook.ToolUse.SHEARS && !hasAny(s -> s.is(Items.SHEARS))) parts.add(explain(Items.SHEARS, 1, false, depth + 1, path, shown));
+		String how;
+		if (g.isHunted()) {
+			how = "hunt " + g.mobs().stream().map(t -> t.getDescription().getString().toLowerCase(Locale.ROOT)).sorted().limit(2).collect(Collectors.joining(" / "));
+		} else if (!g.sources().isEmpty() && g.sources().stream().allMatch(b -> b.defaultBlockState().is(BlockTags.LOGS))) {
+			how = "chop trees";
+		} else {
+			how = "mine " + g.sources().stream().map(b -> b.getName().getString().toLowerCase(Locale.ROOT)).sorted().limit(2).collect(Collectors.joining(" / "))
+					+ (g.sources().size() > 2 ? "…" : "");
+		}
+		if (g.dimension() == Requirement.Dim.NETHER) how += " (Nether)";
+		if (tool != null && tool.tool == null) how += " — no pickaxe can be had";
+		return new PlanNode(icon, key, name, count, have, how, parts);
+	}
+
+	private static Item iconOf(Requirement r) {
+		Item named = BuiltInRegistries.ITEM.getOptional(Identifier.withDefaultNamespace(r.name())).orElse(Items.AIR);
+		if (named != Items.AIR && r.counts().test(named.getDefaultInstance())) return named;
+		for (Block b : r.sources()) {
+			if (b.asItem() != Items.AIR) return b.asItem();
+		}
+		return Items.BARRIER;
+	}
+
+	private static String display(String id) {
+		String s = id.replace('_', ' ');
+		return s.isEmpty() ? s : Character.toUpperCase(s.charAt(0)) + s.substring(1);
 	}
 
 	// ---- planning -------------------------------------------------------------------------------
