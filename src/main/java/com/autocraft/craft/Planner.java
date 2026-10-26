@@ -8,6 +8,7 @@ import com.autocraft.loot.LootBook;
 import com.autocraft.procedure.Procedure;
 import com.autocraft.procedure.Procedures;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -20,6 +21,7 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.Holder;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.tags.BlockTags;
@@ -170,25 +172,30 @@ public final class Planner {
 		return c == null ? gather : c.step;
 	}
 
-	/** The pickaxe to make before gathering {@code r}, or null when a carried tool (or none) will do. */
-	private @Nullable ToolChoice chooseTool(Requirement r, Set<String> pending, int depth) {
+	/**
+	 * The pickaxe to make before gathering {@code r}, or null when a carried tool (or none) will do. {@code pending}:
+	 * the blocks of the gatherings this tool is for — a tier whose making needs any of them is a cycle (compared by
+	 * blocks, since "raw_iron" and "iron" mine the same ore).
+	 */
+	private @Nullable ToolChoice chooseTool(Requirement r, Set<Block> pending, int depth) {
 		List<Item> tiers = pickaxeTiers(r);
 		if (tiers.isEmpty() || canHarvest(r)) return null;
 		Unavailable none = new Unavailable("a pickaxe for " + r.name());
-		if (depth > PICKAXES.size() || !pending.add(r.name())) return new ToolChoice(null, none);
+		if (depth > PICKAXES.size() || !Collections.disjoint(pending, r.sources())) return new ToolChoice(null, none);
+		pending.addAll(r.sources());
 		try {
 			for (Item tool : tiers) {
 				Step s = next(tool, 1);
 				if (s instanceof Unavailable || s instanceof Done) continue;
 				if (!(s instanceof Gather g)) return new ToolChoice(tool, s); // craft/smelt/cut toward it: actionable now
-				if (pending.contains(g.requirement().name())) continue; // needs what it's meant to mine
+				if (!Collections.disjoint(pending, g.requirement().sources())) continue; // needs what it's meant to mine
 				ToolChoice deeper = chooseTool(g.requirement(), pending, depth + 1);
 				if (deeper == null) return new ToolChoice(tool, s);
 				if (!(deeper.step instanceof Unavailable)) return new ToolChoice(tool, deeper.step);
 			}
 			return new ToolChoice(null, none);
 		} finally {
-			pending.remove(r.name());
+			pending.removeAll(r.sources());
 		}
 	}
 
@@ -319,8 +326,13 @@ public final class Planner {
 
 	// ---- planning -------------------------------------------------------------------------------
 
+	/**
+	 * Usable ones carried (worn-out tools don't count). A tool in the offhand doesn't either: mining and fighting use
+	 * the main hand and nothing swaps it back, so counting it would have the planner "own" a pickaxe nothing can use.
+	 */
 	private int carried(Item item) {
-		return InvUtil.count(p, s -> s.is(item) && !InvUtil.nearlyBroken(s));
+		Predicate<ItemStack> usable = s -> s.is(item) && !InvUtil.nearlyBroken(s);
+		return item.components().has(DataComponents.MAX_DAMAGE) ? InvUtil.countMain(p, usable) : InvUtil.count(p, usable);
 	}
 
 	private Step obtain(Item want, int count, boolean flexible, int depth, Set<Item> visiting) {

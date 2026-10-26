@@ -61,6 +61,17 @@ public final class InvUtil {
 		return -1;
 	}
 
+	/** Like {@link #count} but the main inventory only (hotbar and backpack, no offhand). */
+	public static int countMain(Player p, Predicate<ItemStack> pred) {
+		Inventory inv = p.getInventory();
+		int n = 0;
+		for (int i = 0; i < MAIN_SIZE; i++) {
+			ItemStack s = inv.getItem(i);
+			if (!s.isEmpty() && pred.test(s)) n += s.getCount();
+		}
+		return n;
+	}
+
 	/** Items matching in the main inventory and offhand. */
 	public static int count(Player p, Predicate<ItemStack> pred) {
 		Inventory inv = p.getInventory();

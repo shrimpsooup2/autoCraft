@@ -87,6 +87,8 @@ public final class Bot {
 	private final ThreatNet threatNet;
 	private final List<Behavior> behaviors;
 	private final Map<NeedOwner, Requirement> needs = new EnumMap<>(NeedOwner.class);
+	private @Nullable Requirement toolRequest;
+	private String gearNote = "nothing yet";
 	private final Map<String, Integer> fruitlessLegs = new HashMap<>();
 	private final Set<Item> buildMaterials = new HashSet<>();
 	/** Ingredients (a few recipe levels deep) of the job's crafted items: kept, not junked or used as scaffolding. */
@@ -484,6 +486,27 @@ public final class Bot {
 
 	public @Nullable Requirement need(NeedOwner owner) {
 		return needs.get(owner);
+	}
+
+	/** The collector can't mine {@code r} with anything carried: the gear behavior answers on its next tick. */
+	public void requestToolFor(Requirement r) {
+		toolRequest = r;
+	}
+
+	/** The pending tool request, cleared (the gear behavior takes it). */
+	public @Nullable Requirement takeToolRequest() {
+		Requirement r = toolRequest;
+		toolRequest = null;
+		return r;
+	}
+
+	/** What the gear planner last decided ("tool for iron: gather 16 cobblestone"), for {@code !ac why}. */
+	public void noteGear(String note) {
+		gearNote = note;
+	}
+
+	public String gearNote() {
+		return gearNote;
 	}
 
 	/** Highest-priority outstanding need, or null. */

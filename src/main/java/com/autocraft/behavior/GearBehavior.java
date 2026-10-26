@@ -8,6 +8,7 @@ import com.autocraft.craft.Planner;
 import com.autocraft.craft.Planner.Step;
 import com.autocraft.craft.Stations;
 import com.autocraft.craft.Workshop;
+import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
 import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
@@ -46,6 +47,7 @@ import org.jspecify.annotations.Nullable;
  */
 public final class GearBehavior implements Behavior {
 	private static final int PLAN_EVERY = 20;
+	private static final int TOOL_ANSWER_TICKS = 10;
 	private static final int NETHER_BLOCKS = 32;
 	private static final int WATER_SEARCH_EVERY = 100;
 	/** Plain rockets to keep on hand when carrying an elytra. */
@@ -68,6 +70,8 @@ public final class GearBehavior implements Behavior {
 	private final Workshop workshop = new Workshop();
 	private int sincePlan = PLAN_EVERY;
 	private int failures;
+	/** Ticks until the next tool request is answered (each answer plans recursively; once per half second is plenty). */
+	private int toolAnswerCooldown;
 	/** Required gear already reported as impossible (warned once each). */
 	private final java.util.Set<String> warnedUnavailable = new java.util.HashSet<>();
 	private @Nullable BlockPos water;
@@ -108,12 +112,19 @@ public final class GearBehavior implements Behavior {
 		}
 		if (equip(bot, p)) return true;
 		if (fillBucket(bot, p)) return true;
-		if (++sincePlan < PLAN_EVERY) return false;
-		sincePlan = 0;
-		// no "mobs nearby" gate here: combat runs first and takes over when a mob matters; a mob behind a wall used
-		// to block all gear planning, and with the only pickaxe worn out the bot then stood still
-
-		Step step = plan(bot, p);
+		// the collector is stuck on something no carried tool mines: answer it now, for exactly that target, instead of
+		// waiting for the next planning round to (maybe) plan for a different one
+		Requirement stuck = bot.takeToolRequest();
+		if (toolAnswerCooldown > 0) toolAnswerCooldown--;
+		Step step = stuck == null || toolAnswerCooldown > 0 ? null : toolStepFor(bot, stuck);
+		if (step == null) {
+			if (++sincePlan < PLAN_EVERY) return false;
+			sincePlan = 0;
+			// no "mobs nearby" gate here: combat runs first and takes over when a mob matters; a mob behind a wall used
+			// to block all gear planning, and with the only pickaxe worn out the bot then stood still
+			step = plan(bot, p);
+			bot.noteGear("plan: " + describe(step));
+		}
 		switch (step) {
 			case Planner.Craft c -> {
 				bot.setNeed(Bot.NeedOwner.GEAR, null);
@@ -154,6 +165,34 @@ public final class GearBehavior implements Behavior {
 		}
 	}
 
+	/**
+	 * The first step toward a pickaxe for {@code r}, which the collector can't mine with anything carried; null when
+	 * the planner disagrees (it sees a usable tool), then the normal plan runs.
+	 */
+	private @Nullable Step toolStepFor(Bot bot, Requirement r) {
+		Step s = Stations.planner(bot).borrowingJobLoot().toolFirst(new Planner.Gather(r));
+		toolAnswerCooldown = TOOL_ANSWER_TICKS;
+		bot.noteGear("tool for " + r.name() + ": " + describe(s));
+		if (s instanceof Planner.Gather g && g.requirement().sources().equals(r.sources())) return null; // "can mine it already"
+		if (s instanceof Planner.Unavailable u) {
+			if (warnedUnavailable.add(u.what())) Chat.warn("Can't get " + u.what() + "; working on the rest.");
+			Job job = bot.job();
+			if (job != null && job.requirements().contains(r)) job.defer(r); // a job item: the rest of the job first
+		}
+		return s;
+	}
+
+	private static String describe(Step s) {
+		return switch (s) {
+			case Planner.Craft c -> "craft " + c.recipe().output().getDefaultInstance().getHoverName().getString();
+			case Planner.Smelt sm -> "smelt " + sm.count() + " " + sm.input().getDefaultInstance().getHoverName().getString();
+			case Planner.Cut c -> "cut " + c.output().getDefaultInstance().getHoverName().getString();
+			case Planner.Special sp -> "procedure for " + sp.item().getDefaultInstance().getHoverName().getString();
+			case Planner.Gather g -> "gather " + g.requirement();
+			case Planner.Unavailable u -> "can't get " + u.what();
+			case Planner.Done d -> "nothing needed";
+		};
+	}
 	private void onFailure() {
 		failures++;
 		Chat.warn("Crafting/smelting failed (" + failures + ")");

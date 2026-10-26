@@ -98,6 +98,7 @@ public final class Commands {
 				Requirement need = bot.activeNeed();
 				Requirement target = bot.currentTarget();
 				Chat.info("Prerequisite: " + (need == null ? "none" : need) + " · collector target: " + (target == null ? "none" : target));
+				Chat.info("Gear: " + bot.gearNote());
 				List<String> recent = bot.recentTrace();
 				for (String line : recent.subList(Math.max(0, recent.size() - 12), recent.size())) Chat.info("  " + line);
 			}
