@@ -12,10 +12,7 @@ import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Pose;
-import net.minecraft.world.entity.decoration.Mannequin;
 import net.minecraft.world.entity.monster.Creeper;
-import net.minecraft.world.entity.monster.skeleton.Skeleton;
-import net.minecraft.world.entity.monster.zombie.Zombie;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.ResolvableProfile;
@@ -68,7 +65,7 @@ final class Actor {
 	}
 
 	private static Actor mannequin(ClientLevel level, Vec3 pos, float yaw, ResolvableProfile profile) {
-		Puppets.Man m = new Puppets.Man(EntityTypes.MANNEQUIN, level);
+		Puppets.Man m = new Puppets.Man(level);
 		((MannequinAccessor) (Object) m).autocraft$setProfile(profile);
 		((MannequinAccessor) (Object) m).autocraft$setHideDescription(true);
 		return spawn(level, m, pos, yaw);
@@ -215,17 +212,5 @@ final class Actor {
 
 	void remove() {
 		if (!entity.isRemoved()) ((ClientLevel) entity.level()).removeEntity(entity.getId(), Entity.RemovalReason.DISCARDED);
-	}
-
-	boolean isMannequin() {
-		return entity instanceof Mannequin;
-	}
-
-	static boolean isZombie(LivingEntity e) {
-		return e instanceof Zombie;
-	}
-
-	static boolean isSkeleton(LivingEntity e) {
-		return e instanceof Skeleton;
 	}
 }

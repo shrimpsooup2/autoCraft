@@ -1,6 +1,7 @@
 package com.autocraft.mixin;
 
 import com.autocraft.Bot;
+import com.autocraft.cinema.Recorder;
 import net.minecraft.client.Minecraft;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -18,5 +19,11 @@ abstract class MinecraftMixin {
 		if (Bot.get().controls().isMining()) {
 			ci.cancel();
 		}
+	}
+
+	/** A recording film captures each frame once it's fully drawn, before it goes to the screen. */
+	@Inject(method = "renderFrame", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/GameRenderer;render()V", shift = At.Shift.AFTER))
+	private void autocraft$captureFilmFrame(boolean advanceGameTime, CallbackInfo ci) {
+		Recorder.afterRender();
 	}
 }

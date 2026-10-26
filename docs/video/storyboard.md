@@ -39,13 +39,22 @@ keycap), `Stage` (builds the sets on the integrated server), `Blueprint`, `Logo`
 1. Make a **throwaway** creative world (the sets are built into it and stay), turn shaders on, render distance 16+.
 2. Optional: put a schematic whose name starts with `film` (e.g. `film-modern_house.litematic`) in
    `config/autocraft/schematics/`; it is the house built in shot 7 and standing in shot 8. Without one, a cottage.
-3. Stand somewhere open, start recording, type `!ac film play` (or `!ac film play 4`, `!ac film play team end`;
-   `!ac film list`, `!ac film stop`).
+3. Stand somewhere open and type `!ac film record` (or `!ac film record 60fps`, `!ac film record 4`,
+   `!ac film record team end`). `!ac film play` plays it live instead, for a screen recorder; `!ac film list`,
+   `!ac film stop`.
 
 It switches you to spectator, sets peaceful and freezes time, weather and mob spawning, builds every set within about
 130 blocks of you (Plan in the sky above you, Pick west, Find east, Survive north, Loot underground to the south, Team
 south-east, End south-west), shows black until the chunks are drawn, then plays the shots (about 3:25 with a dip to
 black between them) and puts you back where you stood.
+
+**Recording** (`Recorder`): the game clock runs by frames, not by the wall clock — each captured frame moves the film
+exactly 1/fps of a second — so the video is smooth at true speed however slowly the computer draws it. Frames are
+read back from the screen at the window's size (make it 1920×1080, e.g. fullscreen on a 1080p monitor) and piped into
+ffmpeg: `autocraft-film/autocraft-film_<date>.mp4` in the game folder (H.264, CRF 16). Without ffmpeg (install it
+with `winget install ffmpeg`, then restart the game) the frames are saved as PNGs in a folder there to import as an
+image sequence. It's silent; add the music in an editor. Recording runs slower than real time; opening a menu
+(Esc) pauses it, and resizing the window stops it.
 
 ## Rendering
 Needs [Blender 5.x](https://www.blender.org/download/) (the scenes use Eevee and 5.x APIs) and Python 3:

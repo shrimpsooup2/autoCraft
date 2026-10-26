@@ -1,7 +1,8 @@
 package com.autocraft.cinema;
 
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.entity.ClientMannequin;
 import net.minecraft.world.entity.EntityType;
-import net.minecraft.world.entity.decoration.Mannequin;
 import net.minecraft.world.entity.monster.Creeper;
 import net.minecraft.world.entity.monster.skeleton.Skeleton;
 import net.minecraft.world.entity.monster.zombie.Zombie;
@@ -16,11 +17,12 @@ import org.jspecify.annotations.Nullable;
 final class Puppets {
 	private Puppets() {}
 
-	static final class Man extends Mannequin implements Actor.Puppet {
+	/** A player-shaped puppet. It must be the client's mannequin class: only that one has a renderer (with skins). */
+	static final class Man extends ClientMannequin implements Actor.Puppet {
 		private @Nullable Actor actor;
 
-		Man(EntityType<Mannequin> type, Level level) {
-			super(type, level);
+		Man(Level level) {
+			super(level, Minecraft.getInstance().playerSkinRenderCache());
 		}
 
 		@Override

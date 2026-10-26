@@ -97,7 +97,7 @@ hidden, blocks in the way get red outlines, water/lava and chest-like blocks get
 | `!ac logoff on\|off` | disconnect when the job is done (default on) |
 | `!ac goto <x> <y> <z>` | debug: pathfind to a block |
 | `!ac resources` | list named resources (any natural block's item id, craftable/smeltable item, mob drop or procedure item also works) |
-| `!ac film play [all \| 1-8 \| name…]` / `!ac film list` / `!ac film stop` | build the sets here and play the explainer video in this singleplayer world (throwaway world; see `docs/video/storyboard.md`) |
+| `!ac film play [all \| 1-8 \| name…]` / `!ac film record [60fps] [shots…]` / `!ac film list` / `!ac film stop` | build the sets here and play the explainer video in this singleplayer world, live or saved to `autocraft-film/` as an MP4 at an exact frame rate (throwaway world; see `docs/video/storyboard.md`) |
 
 ## Architecture
 One client-tick loop. Every tick the `Bot` releases all inputs, then asks behaviors **in priority

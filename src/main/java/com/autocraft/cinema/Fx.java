@@ -64,7 +64,10 @@ final class Fx {
 		return argb((int) (((argb >>> 24) & 0xFF) * Anim.clamp01(f)), argb);
 	}
 
-	// ---- glowing geometry (additive) ------------------------------------------------------------------------------
+	// ---- glowing geometry ------------------------------------------------------------------------------------------
+	// Solid cores are additive (lightning: bright, writes depth, culls back faces). The soft parts that fade to
+	// nothing — halos, the falloff of a light — are blended without writing depth (debug quads), so they never punch
+	// holes in the glass behind them or in water drawn later.
 
 	private interface Quads {
 		void emit(Matrix4f m, VertexConsumer b, Vector3f tmp);
@@ -74,6 +77,7 @@ final class Fx {
 		out.submitCustomGeometry(poses, RenderTypes.lightning(), (pose, buffer) -> q.emit(pose.pose(), buffer, new Vector3f()));
 	}
 
+	/** Blended, no depth write, no culling: glass, and the soft falloff of glows. */
 	private void glass(Quads q) {
 		out.submitCustomGeometry(poses, RenderTypes.debugQuads(), (pose, buffer) -> q.emit(pose.pose(), buffer, new Vector3f()));
 	}
@@ -92,14 +96,16 @@ final class Fx {
 
 	/** A quad with a colour per corner, wound both ways (the additive pipeline culls back faces). */
 	private void quad2(Matrix4f m, VertexConsumer b, Vector3f tmp, Vec3 p0, Vec3 p1, Vec3 p2, Vec3 p3, int c0, int c1, int c2, int c3) {
+		quad4(m, b, tmp, p0, p1, p2, p3, c0, c1, c2, c3);
+		quad4(m, b, tmp, p3, p2, p1, p0, c3, c2, c1, c0);
+	}
+
+	/** A quad with a colour per corner, wound once (for the unculled blended pipeline). */
+	private void quad4(Matrix4f m, VertexConsumer b, Vector3f tmp, Vec3 p0, Vec3 p1, Vec3 p2, Vec3 p3, int c0, int c1, int c2, int c3) {
 		v(m, b, tmp, p0, c0);
 		v(m, b, tmp, p1, c1);
 		v(m, b, tmp, p2, c2);
 		v(m, b, tmp, p3, c3);
-		v(m, b, tmp, p3, c3);
-		v(m, b, tmp, p2, c2);
-		v(m, b, tmp, p1, c1);
-		v(m, b, tmp, p0, c0);
 	}
 
 	/**
@@ -109,15 +115,20 @@ final class Fx {
 	void ribbon(List<Vec3> pts, double width, int color, double grow) {
 		if (pts.size() < 2 || grow <= 0) return;
 		List<Vec3> path = cut(pts, Anim.clamp01(grow));
-		int halo = fade(color, 0.35), clear = color & 0xFFFFFF;
+		int halo = fade(color, 0.4), clear = color & 0xFFFFFF;
+		List<Vec3[]> strips = new ArrayList<>(path.size());
+		for (int i = 0; i < path.size() - 1; i++) {
+			Vec3 p0 = path.get(i), p1 = path.get(i + 1);
+			Vec3 side = p1.subtract(p0).cross(cam.subtract(p0)).normalize();
+			strips.add(new Vec3[] {p0, p1, side.scale(width / 2), side.scale(width * 2)});
+		}
 		glow((m, b, tmp) -> {
-			for (int i = 0; i < path.size() - 1; i++) {
-				Vec3 p0 = path.get(i), p1 = path.get(i + 1);
-				Vec3 side = p1.subtract(p0).cross(cam.subtract(p0)).normalize();
-				Vec3 in = side.scale(width / 2), out = side.scale(width * 2);
-				quad2(m, b, tmp, p0.subtract(in), p0.add(in), p1.add(in), p1.subtract(in), color, color, color, color);
-				quad2(m, b, tmp, p0.add(in), p0.add(out), p1.add(out), p1.add(in), halo, clear, clear, halo);
-				quad2(m, b, tmp, p0.subtract(out), p0.subtract(in), p1.subtract(in), p1.subtract(out), clear, halo, halo, clear);
+			for (Vec3[] s : strips) quad2(m, b, tmp, s[0].subtract(s[2]), s[0].add(s[2]), s[1].add(s[2]), s[1].subtract(s[2]), color, color, color, color);
+		});
+		glass((m, b, tmp) -> {
+			for (Vec3[] s : strips) {
+				quad4(m, b, tmp, s[0].add(s[2]), s[0].add(s[3]), s[1].add(s[3]), s[1].add(s[2]), halo, clear, clear, halo);
+				quad4(m, b, tmp, s[0].subtract(s[3]), s[0].subtract(s[2]), s[1].subtract(s[2]), s[1].subtract(s[3]), clear, halo, halo, clear);
 			}
 		});
 	}
@@ -147,18 +158,21 @@ final class Fx {
 		if (grow <= 0 || radius <= 0) return;
 		int seg = Math.max(24, (int) (radius * 12));
 		int n = (int) Math.ceil(seg * Anim.clamp01(grow));
-		int halo = fade(color, 0.35), clear = color & 0xFFFFFF;
+		int halo = fade(color, 0.4), clear = color & 0xFFFFFF;
 		double[] r = {Math.max(0, radius - thickness * 2), radius - thickness / 2, radius + thickness / 2, radius + thickness * 2};
-		int[] col = {clear, halo, halo, clear};
 		glow((m, b, tmp) -> {
 			for (int i = 0; i < n; i++) {
 				double a0 = i * 2 * Math.PI / seg, a1 = (i + 1) * 2 * Math.PI / seg;
-				double c0 = Math.cos(a0), s0 = Math.sin(a0), c1 = Math.cos(a1), s1 = Math.sin(a1);
-				for (int k = 0; k < 3; k++) {
-					int ci = k == 1 ? color : col[k], co = k == 1 ? color : col[k + 1];
-					quad2(m, b, tmp, c.add(c0 * r[k], 0, s0 * r[k]), c.add(c0 * r[k + 1], 0, s0 * r[k + 1]), c.add(c1 * r[k + 1], 0, s1 * r[k + 1]),
-							c.add(c1 * r[k], 0, s1 * r[k]), ci, co, co, ci);
-				}
+				Vec3 d0 = new Vec3(Math.cos(a0), 0, Math.sin(a0)), d1 = new Vec3(Math.cos(a1), 0, Math.sin(a1));
+				quad2(m, b, tmp, c.add(d0.scale(r[1])), c.add(d0.scale(r[2])), c.add(d1.scale(r[2])), c.add(d1.scale(r[1])), color, color, color, color);
+			}
+		});
+		glass((m, b, tmp) -> {
+			for (int i = 0; i < n; i++) {
+				double a0 = i * 2 * Math.PI / seg, a1 = (i + 1) * 2 * Math.PI / seg;
+				Vec3 d0 = new Vec3(Math.cos(a0), 0, Math.sin(a0)), d1 = new Vec3(Math.cos(a1), 0, Math.sin(a1));
+				quad4(m, b, tmp, c.add(d0.scale(r[0])), c.add(d0.scale(r[1])), c.add(d1.scale(r[1])), c.add(d1.scale(r[0])), clear, halo, halo, clear);
+				quad4(m, b, tmp, c.add(d0.scale(r[2])), c.add(d0.scale(r[3])), c.add(d1.scale(r[3])), c.add(d1.scale(r[2])), halo, clear, clear, halo);
 			}
 		});
 	}
@@ -185,18 +199,22 @@ final class Fx {
 		quad(m, b, tmp, p001, p101, p100, p000, color);
 	}
 
-	/** A soft round glow facing the camera (a light, a spark, a glint): bright in the middle, fading to nothing. */
+	/** A soft round glow facing the camera (a light, a spark, a glint): a small bright core in a fading halo. */
 	void spark(Vec3 c, double size, int color) {
 		Vector3f right = new Vector3f(1, 0, 0).rotate(camRot), up = new Vector3f(0, 1, 0).rotate(camRot);
 		Vec3 r = new Vec3(right.x, right.y, right.z).scale(size / 2), u = new Vec3(up.x, up.y, up.z).scale(size / 2);
-		int clear = color & 0xFFFFFF;
+		int clear = color & 0xFFFFFF, core = fade(color, 1);
+		int seg = 16;
+		Vec3[] rim = new Vec3[seg + 1];
+		for (int i = 0; i <= seg; i++) {
+			double a = i * 2 * Math.PI / seg;
+			rim[i] = r.scale(Math.cos(a)).add(u.scale(Math.sin(a)));
+		}
+		glass((m, b, tmp) -> {
+			for (int i = 0; i < seg; i++) quad4(m, b, tmp, c, c.add(rim[i]), c.add(rim[i + 1]), c, color, clear, clear, color);
+		});
 		glow((m, b, tmp) -> {
-			int seg = 16;
-			for (int i = 0; i < seg; i++) {
-				double a0 = i * 2 * Math.PI / seg, a1 = (i + 1) * 2 * Math.PI / seg;
-				Vec3 e0 = c.add(r.scale(Math.cos(a0))).add(u.scale(Math.sin(a0))), e1 = c.add(r.scale(Math.cos(a1))).add(u.scale(Math.sin(a1)));
-				quad2(m, b, tmp, c, e0, e1, c, color, clear, clear, color);
-			}
+			for (int i = 0; i < seg; i++) quad2(m, b, tmp, c, c.add(rim[i].scale(0.18)), c.add(rim[i + 1].scale(0.18)), c, core, core, core, core);
 		});
 	}
 

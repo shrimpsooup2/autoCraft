@@ -41,6 +41,7 @@ public final class Film {
 	private static int chapter;
 	private static @Nullable Vec3 restorePos;
 	private static @Nullable GameType restoreMode;
+	private static @Nullable Boolean restorePauseOnLostFocus;
 
 	private Film() {}
 
@@ -59,18 +60,40 @@ public final class Film {
 	public static void command(String[] args) {
 		String sub = args.length > 1 ? args[1].toLowerCase(Locale.ROOT) : "";
 		switch (sub) {
-			case "play" -> play(args);
+			case "play" -> play(args, 0);
+			case "record" -> record(args);
 			case "stop" -> stop("Stopped.");
 			case "list" -> {
 				int i = 1;
 				for (Shot s : all()) Chat.info(i++ + ". " + s.name + " (" + Math.round(s.duration) + " s)");
 			}
-			default -> Chat.info("!ac film play [all | 1-8 | name...]  — builds the sets here and plays the explainer (record your screen). "
-					+ "!ac film list, !ac film stop. Use a fresh creative world, stand somewhere open and flat-ish, render distance 16+.");
+			default -> Chat.info("!ac film play [all | 1-8 | name...]  — builds the sets here and plays the explainer (record your screen), or "
+					+ "!ac film record [60fps] [shots...] to have it saved as a video by itself (exact frame rate; an MP4 with ffmpeg installed, "
+					+ "else PNG frames). !ac film list, !ac film stop. Use a throwaway creative world, stand somewhere open, render distance 16+.");
 		}
 	}
 
-	private static void play(String[] args) {
+	/** {@code !ac film record [24fps|30fps|60fps] [shots...]}: play the film and save it frame by frame. */
+	private static void record(String[] args) {
+		int fps = 30;
+		List<String> rest = new ArrayList<>();
+		for (String a : args) {
+			String l = a.toLowerCase(Locale.ROOT);
+			if (l.endsWith("fps")) {
+				try {
+					fps = Math.max(10, Math.min(120, Integer.parseInt(l.substring(0, l.length() - 3))));
+				} catch (NumberFormatException e) {
+					Chat.warn("Not a frame rate: " + a + " (try 30fps or 60fps).");
+					return;
+				}
+			} else {
+				rest.add(a);
+			}
+		}
+		play(rest.toArray(String[]::new), fps);
+	}
+
+	private static void play(String[] args, int recordFps) {
 		Minecraft mc = Minecraft.getInstance();
 		LocalPlayer player = mc.player;
 		if (player == null || mc.level == null || Stage.server() == null) {
@@ -97,6 +120,8 @@ public final class Film {
 			Stage.command("gamerule " + rule);
 		}
 		Stage.command("weather clear");
+		restorePauseOnLostFocus = mc.options.pauseOnLostFocus;
+		mc.options.pauseOnLostFocus = false;   // clicking away mustn't pause the take
 		try {
 			for (Shot s : chosen) {
 				BlockPos at = hub.offset(s.offset());
@@ -114,6 +139,7 @@ public final class Film {
 		chapter = 0;
 		tick = 0;
 		phase = Phase.LOADING;
+		if (recordFps > 0) Recorder.arm(recordFps);
 	}
 
 	private static List<Shot> pick(String[] args) {
@@ -134,12 +160,15 @@ public final class Film {
 		current = null;
 		shots.clear();
 		phase = Phase.IDLE;
+		Recorder.finish();
 		restore();
 		if (message != null) Chat.info(message);
 	}
 
 	private static void restore() {
 		Minecraft mc = Minecraft.getInstance();
+		if (restorePauseOnLostFocus != null) mc.options.pauseOnLostFocus = restorePauseOnLostFocus;
+		restorePauseOnLostFocus = null;
 		if (mc.player == null) return;
 		String name = mc.player.getGameProfile().name();
 		if (restoreMode != null) Stage.command("gamemode " + restoreMode.getName() + " " + name);
@@ -153,9 +182,12 @@ public final class Film {
 	/** End of every client tick. */
 	public static void clientTick(Minecraft mc) {
 		if (phase == Phase.IDLE) return;
-		if (mc.level == null || mc.player == null) {
+		if (mc.level == null || mc.player == null) {   // left the world mid-film
 			phase = Phase.IDLE;
 			current = null;
+			shots.clear();
+			Recorder.finish();
+			restore();
 			return;
 		}
 		tick++;
@@ -184,6 +216,7 @@ public final class Film {
 	}
 
 	private static void startShot(Minecraft mc) {
+		Recorder.begin(mc);   // no-op unless recording; from the first shot on, the clock runs by frames
 		Shot s = shots.get(index);
 		Stage.command("time set " + s.dayTime);
 		if (s.tag != null) chapter++;
