@@ -64,6 +64,15 @@ final class Fx {
 		return argb((int) (((argb >>> 24) & 0xFF) * Anim.clamp01(f)), argb);
 	}
 
+	/** An RGB colour a fraction u of the way from `from` to `to`. */
+	static int mix(int from, int to, double u) {
+		double k = Anim.clamp01(u);
+		int r = (int) Math.round(((from >> 16) & 255) + (((to >> 16) & 255) - ((from >> 16) & 255)) * k);
+		int g = (int) Math.round(((from >> 8) & 255) + (((to >> 8) & 255) - ((from >> 8) & 255)) * k);
+		int b = (int) Math.round((from & 255) + ((to & 255) - (from & 255)) * k);
+		return (r << 16) | (g << 8) | b;
+	}
+
 	// ---- glowing geometry ------------------------------------------------------------------------------------------
 	// Solid cores are additive (lightning: bright, writes depth, culls back faces). The soft parts that fade to
 	// nothing — halos, the falloff of a light — are blended without writing depth (debug quads), so they never punch
@@ -201,7 +210,7 @@ final class Fx {
 
 	/** Pixels across each face of {@link #pixelCube}, and how bright each ring is from the rim (0) to the middle. */
 	private static final int CUBE_PX = 8;
-	private static final double[] CUBE_RINGS = {0.42, 0.62, 0.82, 1.0};
+	private static final double[] CUBE_RINGS = {0.5, 0.68, 0.86, 1.0};
 	private static final Vec3 CUBE_SUN = new Vec3(0.3, 1, 0.5).normalize();
 
 	/**
@@ -222,7 +231,7 @@ final class Fx {
 					for (int j = 0; j < CUBE_PX; j++) {
 						int ring = Math.min(Math.min(i, j), Math.min(CUBE_PX - 1 - i, CUBE_PX - 1 - j));
 						double k = CUBE_RINGS[ring] * shade * (0.95 + 0.1 * (((i * 73 + j * 151 + f * 37) * 2654435761L >>> 16) & 255) / 255.0);
-						double white = ring == CUBE_RINGS.length - 1 ? 0.35 : 0;
+						double white = ring == CUBE_RINGS.length - 1 ? 0.45 : ring == CUBE_RINGS.length - 2 ? 0.12 : 0;
 						white = white + (1 - white) * 0.35 * flash;
 						int color = argb(255, rgbOf(lerp(r * k, 1, white), lerp(g * k, 1, white), lerp(b * k, 1, white)));
 						Vec3 p00 = corner.add(a.scale(i * px)).add(v.scale(j * px));
@@ -256,10 +265,15 @@ final class Fx {
 		halo(c, rim(size), color);
 	}
 
+	/** Falls off like bloom: steeply near the middle (to 35% halfway out), then a long faint tail to the rim. */
 	private void halo(Vec3 c, Vec3[] rim, int color) {
-		int clear = color & 0xFFFFFF;
+		int mid = fade(color, 0.35), clear = color & 0xFFFFFF;
 		glass((m, b, tmp) -> {
-			for (int i = 0; i < rim.length - 1; i++) quad4(m, b, tmp, c, c.add(rim[i]), c.add(rim[i + 1]), c, color, clear, clear, color);
+			for (int i = 0; i < rim.length - 1; i++) {
+				Vec3 h0 = c.add(rim[i].scale(0.5)), h1 = c.add(rim[i + 1].scale(0.5));
+				quad4(m, b, tmp, c, h0, h1, c, color, mid, mid, color);
+				quad4(m, b, tmp, h0, c.add(rim[i]), c.add(rim[i + 1]), h1, mid, clear, clear, mid);
+			}
 		});
 	}
 

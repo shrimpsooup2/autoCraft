@@ -67,7 +67,8 @@ abstract class Shot {
 			double phase = a.entity.getId() * 1.7;   // so several bots don't bob in step
 			Vec3 p = a.entity.getPosition(fx.partial).add(0, a.entity.getBbHeight() + 0.45 + 0.05 * Math.sin(t * 2.4 + phase), 0);
 			double f = a.lightFlash;
-			fx.halo(p, 0.55 * (1 + 1.5 * f), Fx.argb((int) (25 + 110 * f), a.light));
+			fx.halo(p, 1.5 * (1 + 1.2 * f), Fx.argb((int) (120 + 100 * f), a.light));                // wide bloom
+			fx.halo(p, 0.55 * (1 + 0.8 * f), Fx.argb(235, Fx.mix(a.light, 0xFFFFFF, 0.35 + 0.4 * f)));  // hot rim round the cube
 			fx.pixelCube(p, 0.2 * (1 + 0.5 * f), (float) (t * 75 + phase * 40), a.light, f);
 		}
 	}
