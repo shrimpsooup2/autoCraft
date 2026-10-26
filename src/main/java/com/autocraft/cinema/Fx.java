@@ -273,15 +273,21 @@ final class Fx {
 
 	/** An item floating in the world: size in blocks, turned `spinDeg` about Y (or facing the camera). */
 	void item(Vec3 pos, ItemStack stack, double size, float spinDeg, boolean billboard) {
+		item(pos, stack, size, billboard ? null : new Matrix4f().rotationY((float) Math.toRadians(spinDeg)), ItemDisplayContext.FIXED);
+	}
+
+	/** An item as the inventory shows it (blocks as little 3D cubes), facing the camera: for icons on panels. */
+	void guiItem(Vec3 pos, ItemStack stack, double size) {
+		item(pos, stack, size, null, ItemDisplayContext.GUI);
+	}
+
+	/** turn: the item's orientation, or null to face the camera. */
+	private void item(Vec3 pos, ItemStack stack, double size, Matrix4f turn, ItemDisplayContext context) {
 		if (stack.isEmpty() || size <= 0.001) return;
-		mc.getItemModelResolver().updateForTopItem(itemState, stack, ItemDisplayContext.FIXED, mc.level, null, 0);
+		mc.getItemModelResolver().updateForTopItem(itemState, stack, context, mc.level, null, 0);
 		poses.pushPose();
 		poses.translate(pos.x - cam.x, pos.y - cam.y, pos.z - cam.z);
-		if (billboard) {
-			poses.mulPose(new Matrix4f().rotation(camRot).rotateY((float) Math.PI));
-		} else {
-			poses.mulPose(new Matrix4f().rotationY((float) Math.toRadians(spinDeg)));
-		}
+		poses.mulPose(turn != null ? turn : new Matrix4f().rotation(camRot).rotateY((float) Math.PI));
 		poses.scale((float) size * 2, (float) size * 2, (float) size * 2);
 		itemState.submit(poses, out, LightCoordsUtil.FULL_BRIGHT, OverlayTexture.NO_OVERLAY, 0);
 		poses.popPose();

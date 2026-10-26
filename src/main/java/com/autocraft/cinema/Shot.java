@@ -62,9 +62,8 @@ abstract class Shot {
 		for (Actor a : actors) {
 			if (a.light == 0 || a.entity.isRemoved()) continue;
 			Vec3 p = a.entity.getPosition(fx.partial).add(0, a.entity.getBbHeight() + 0.4, 0);
-			double s = 0.09 * (1 + a.lightFlash);
-			fx.glowBox(new net.minecraft.world.phys.AABB(p.subtract(s, s, s), p.add(s, s, s)), Fx.argb(255, a.light));
-			fx.spark(p, 0.5 + 1.2 * a.lightFlash, Fx.argb((int) (90 + 120 * a.lightFlash), a.light));
+			fx.spark(p, 0.28 * (1 + a.lightFlash), Fx.argb(255, a.light));
+			fx.spark(p, 0.7 + 1.4 * a.lightFlash, Fx.argb((int) (50 + 120 * a.lightFlash), a.light));
 		}
 	}
 

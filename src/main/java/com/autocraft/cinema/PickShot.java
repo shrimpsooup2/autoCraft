@@ -2,6 +2,7 @@ package com.autocraft.cinema;
 
 import java.util.ArrayList;
 import java.util.List;
+import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.network.chat.Component;
@@ -14,17 +15,24 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * How to use it. Over your shoulder: K is pressed and the Tasks panel unfolds in front of you as a glowing glass
- * screen. You tap the search box, "diamond" types in, 32 goes in the amount box, you tap the diamond, open its
- * plan (every step down to chopping a tree unfolds) and tap Run all. The panel folds away, your status light
- * flips from red to green, and you walk off on your own. The same job as a chat command types in below.
+ * How to use it. Over your shoulder: K is pressed and the Tasks panel unfolds off to your right as a glowing glass
+ * screen turned toward you. You tap the search box, "diamond" types in, 32 goes in the amount box, you tap the
+ * diamond, open its plan (every step down to chopping a tree unfolds) and tap Run all. The panel folds away, your
+ * status light flips from red to green, and you walk off on your own. The same job as a chat command types in below.
+ * Layout: texts are placed by their real width, so nothing overlaps whatever the font.
  */
 final class PickShot extends Shot {
-	private static final double W = 2.2, H = 1.25;
+	private static final double W = 2.6, H = 1.45;
+	/** Blocks per font pixel at text size 1. */
+	private static final double TS = 0.0073;
 	private static final int CYAN = 0x39D0FF, AMBER = 0xFFBF3C, GREEN = 0x5EE36A;
 	private static final String SEARCH = "diamond", COMMAND = "!ac collect diamond 32";
 	private static final double KEY = 1.8, OPEN = 2.2, TYPE = 3.6, AMOUNT = 5.4, ADD = 6.3, UNFOLD = 7.4, RUN = 11.6, FOLD = 12.6, GO = 13.6;
 	private static final double ROW_GAP = 0.36;
+	/** Panel columns (u): tasks from LEFT, items from MID to RIGHT. */
+	private static final double LEFT = 0.03, MID = 0.60, RIGHT = 0.975;
+	private static final double ROW0 = 0.76, ROW_STEP = 0.058;
+	private static final double SLOT_GAP = 0.007, SLOT_W = (RIGHT - MID - 5 * SLOT_GAP) / 6, SLOT_H = SLOT_W * W / H, GRID_TOP = 0.71;
 
 	private record Row(int depth, String title, Item icon, String how) {}
 
@@ -38,12 +46,15 @@ final class PickShot extends Shot {
 			Items.DIAMOND, Items.BREAD, Items.TORCH, Items.FURNACE, Items.CHEST, Items.GLASS, Items.BRICKS, Items.IRON_PICKAXE,
 			Items.WHEAT, Items.SAND, Items.COAL, Items.WOOL.pick(DyeColor.RED), Items.CRAFTING_TABLE);
 	private static final List<Item> FOUND = List.of(Items.DIAMOND, Items.DIAMOND_ORE, Items.DEEPSLATE_DIAMOND_ORE, Items.DIAMOND_PICKAXE);
-	/** Where the finger taps (time, panel u, panel v). */
-	private static final double[][] TAPS = {{3.3, 0.70, 0.81}, {AMOUNT - 0.2, 0.93, 0.81}, {ADD, 0.556, 0.68}, {UNFOLD, 0.035, 0.76},
-			{RUN, 0.62, 0.08}};
+	/** Where the finger taps (time, panel u, panel v): the search box, the amount, the diamond, the task's plan, Run all. */
+	private static final double[][] TAPS = {{3.3, 0.73, 0.8175}, {AMOUNT - 0.2, 0.92, 0.8175}, {ADD, MID + SLOT_W / 2, GRID_TOP - SLOT_H / 2},
+			{UNFOLD, LEFT + 0.01, ROW0}, {RUN, 0.69, 0.0775}};
 
 	private Actor me;
 	private Vec3 screen;
+	/** The way the panel's face points (toward the bot). */
+	private Vec3 front;
+	private float panelYaw;
 	private Anim.Track walk;
 
 	PickShot() {
@@ -65,15 +76,19 @@ final class PickShot extends Shot {
 
 	@Override
 	void start() {
-		Vec3 p = v(0.5, 0, 0.5);
-		me = add(Actor.me(level, p, 0));
+		Vec3 p = v(0.5, 0, 0.5), eye = p.add(0, 1.62, 0);
+		screen = p.add(-1.2, 1.5, 1.75);   // off to the bot's right, so the camera behind it sees all of it
+		panelYaw = Anim.yawTo(screen, eye);
+		double yr = Math.toRadians(panelYaw);
+		front = new Vec3(-Math.sin(yr), 0, Math.cos(yr));
+		me = add(Actor.me(level, p, Anim.yawTo(p, screen)));
 		me.light = FilmHud.RED;
-		screen = p.add(0, 1.45, 1.35);
 		walk = new Anim.Track().at(GO, p).to(v(3.5, 0, 6.5), 3.6).to(v(4.5, 0, 14.5), 4.0);
-		Vec3 over = p.add(-0.9, 1.85, -2.3);
-		cam.key(0, over.add(-0.3, 0.2, -0.6), screen.add(0, -0.1, 0), 60)
-				.key(FOLD - 1.0, over.add(0.05, 0, 0.35), screen, 56)
-				.key(GO + 1.6, p.add(2.8, 1.5, 2.4), p.add(0, 1.6, 0), 60)
+		Vec3 shoulder = eye.add(-0.7, 0.2, -2.2);
+		cam.key(0, shoulder.add(0, 0.12, -0.5), screen.add(0, -0.1, 0), 42)
+				.key(FOLD - 1.0, shoulder.add(0, 0, 0.2), screen, 40)
+				.key(FOLD + 0.6, eye.add(-1.6, 0.9, -3.4), p.add(0.6, 1.2, 2.0), 50)   // back off round the bot, not through it
+				.key(16.0, p.add(-1.0, 3.2, -3.5), v(3.6, 1.0, 7.6), 56)                // and follow it walking off
 				.key(duration, p.add(-3.5, 4.2, -3.0), walk.last().add(0, 1.0, 0), 58);
 	}
 
@@ -105,78 +120,85 @@ final class PickShot extends Shot {
 
 	/** A point on the panel's face (u: 0 left → 1 right, v: 0 bottom → 1 top), just in front of the glass. */
 	private Vec3 pt(double u, double v) {
-		Vec3[] k = Fx.panelCorners(screen, 180, W, H);
-		return k[0].add(k[1].subtract(k[0]).scale(u)).add(k[3].subtract(k[0]).scale(v)).add(0, 0, -0.008);
+		Vec3[] k = Fx.panelCorners(screen, panelYaw, W, H);
+		return k[0].add(k[1].subtract(k[0]).scale(u)).add(k[3].subtract(k[0]).scale(v)).add(front.scale(0.008));
+	}
+
+	/** Slot i of the item grid: u0, v0, u1, v1. */
+	private static double[] slot(int i) {
+		int r = i / 6, k = i % 6;
+		double u0 = MID + k * (SLOT_W + SLOT_GAP), v1 = GRID_TOP - r * (SLOT_H + 0.012);
+		return new double[] {u0, v1 - SLOT_H, u0 + SLOT_W, v1};
 	}
 
 	@Override
 	void draw(Fx fx, double t) {
 		double s = scale(t);
 		if (s <= 0.001) return;
-		fx.panel(screen, 180, W * s, H * (0.15 + 0.85 * s), Fx.argb(190, 0x0A1015), Fx.argb(230, CYAN), 0.012);
+		fx.panel(screen, panelYaw, W * s, H * (0.15 + 0.85 * s), Fx.argb(190, 0x0A1015), Fx.argb(230, CYAN), 0.012);
 		double c = Anim.ramp(s, 0.85, 1.0);
 		if (c <= 0) return;
 		int white = Fx.argb((int) (255 * c), 0xFFFFFF), grey = Fx.argb((int) (255 * c), 0x9AA3AE), dim = Fx.argb((int) (255 * c), 0x7A8696);
 		boolean running = t >= RUN;
-		text(fx, 0.03, 0.95, "autoCraft", white, 1.1f);
-		text(fx, 0.17, 0.95, running ? "collect" : "idle", grey, 1f);
+		// header: name, status, tabs
+		text(fx, LEFT, 0.945, "autoCraft", white, 1.15, 0);
+		text(fx, LEFT + tw("autoCraft", 1.15) + 0.02, 0.945, running ? "collect" : "idle", grey, 0.95, 0);
 		String[] tabs = {"Tasks", "Build", "Team", "Bot", "Settings"};
+		double[] widths = new double[tabs.length];
+		double total = 0.008 * (tabs.length - 1);
+		for (int i = 0; i < tabs.length; i++) total += widths[i] = tw(tabs[i], 0.85) + 0.022;
+		double u = RIGHT - total;
 		for (int i = 0; i < tabs.length; i++) {
-			double u = 0.53 + i * 0.094;
-			box(fx, u, 0.915, u + 0.088, 0.985, i == 0 ? 60 : 30, c);
-			text(fx, u + 0.044 - tabs[i].length() * 0.0045, 0.95, tabs[i], i == 0 ? white : grey, 0.9f);
+			box(fx, u, 0.905, u + widths[i], 0.985, i == 0 ? 70 : 30, c);
+			text(fx, u + widths[i] / 2, 0.945, tabs[i], i == 0 ? white : grey, 0.85, 1);
+			u += widths[i] + 0.008;
 		}
 		// left: the tasks
 		boolean added = t >= ADD + 0.1;
 		int shown = t < UNFOLD + 0.2 ? 0 : Math.min(PLAN.size(), (int) ((t - UNFOLD - 0.2) / ROW_GAP) + 1);
-		text(fx, 0.03, 0.865, running ? "Tasks — running" : added ? "Tasks — " + (1 + shown) + " to do" : "Tasks", white, 1f);
+		text(fx, LEFT, 0.855, running ? "Tasks — running" : added ? "Tasks — " + (1 + shown) + " to do" : "Tasks", white, 1, 0);
 		if (!added) {
-			text(fx, 0.03, 0.80, "Nothing to do yet. Pick items on the right", dim, 0.8f);
-			text(fx, 0.03, 0.765, "to collect them.", dim, 0.8f);
+			text(fx, LEFT, 0.79, "Nothing to do yet. Pick items on the right", dim, 0.8, 0);
+			text(fx, LEFT, 0.755, "to collect them.", dim, 0.8, 0);
 		} else {
 			double a = Anim.ramp(t, ADD + 0.1, ADD + 0.4) * c;
-			row(fx, 0, 0.76, "32 Diamond", Items.DIAMOND, "mine diamond ore", running ? AMBER : 0xFFFFFF, a, true, t);
+			row(fx, 0, ROW0, "32 Diamond", Items.DIAMOND, "mine diamond ore", running ? AMBER : 0xFFFFFF, a, true, t);
 			for (int i = 0; i < shown; i++) {
 				Row r = PLAN.get(i);
 				double ra = Anim.ramp(t, UNFOLD + 0.2 + i * ROW_GAP, UNFOLD + 0.45 + i * ROW_GAP) * c;
-				row(fx, r.depth(), 0.76 - (i + 1) * 0.06, r.title(), r.icon(), r.how(), r.depth() == 8 ? 0xFFFFFF : 0xBEC6D0, ra, false, t);
+				row(fx, r.depth(), ROW0 - (i + 1) * ROW_STEP, r.title(), r.icon(), r.how(), r.depth() == 8 ? 0xFFFFFF : 0xBEC6D0, ra, false, t);
 			}
 		}
 		// right: search, amount, the item grid
 		int typed = t < TYPE ? 0 : Math.min(SEARCH.length(), (int) ((t - TYPE) / 0.17) + 1);
-		box(fx, 0.52, 0.785, 0.865, 0.835, t >= 3.3 && t < AMOUNT - 0.2 ? 120 : 50, c);
+		box(fx, MID, 0.79, 0.86, 0.845, t >= 3.3 && t < AMOUNT - 0.2 ? 120 : 50, c);
 		boolean caret = ((int) (t * 3)) % 2 == 0 && t < AMOUNT;
-		text(fx, 0.53, 0.81, typed == 0 ? "Search items..." : SEARCH.substring(0, typed) + (caret ? "_" : ""), typed == 0 ? dim : white, 0.95f);
-		box(fx, 0.875, 0.785, 0.98, 0.835, t >= AMOUNT - 0.2 && t < ADD ? 120 : 50, c);
-		text(fx, 0.888, 0.81, t >= AMOUNT + 0.3 ? "32" : t >= AMOUNT ? "3" : "64", white, 0.95f);
-		text(fx, 0.52, 0.755, "Adds new top-level tasks", dim, 0.75f);
+		text(fx, MID + 0.01, 0.8175, typed == 0 ? "Search items..." : SEARCH.substring(0, typed) + (caret ? "_" : ""), typed == 0 ? dim : white, 0.95, 0);
+		box(fx, 0.87, 0.79, RIGHT, 0.845, t >= AMOUNT - 0.2 && t < ADD ? 120 : 50, c);
+		text(fx, (0.87 + RIGHT) / 2, 0.8175, t >= AMOUNT + 0.3 ? "32" : t >= AMOUNT ? "3" : "64", white, 0.95, 1);
+		text(fx, MID, 0.755, "Adds new top-level tasks", dim, 0.75, 0);
 		List<Item> items = typed >= 3 ? FOUND : ALL;
-		for (int r = 0; r < 3; r++) {
-			for (int k = 0; k < 6; k++) {
-				int i = r * 6 + k;
-				double u0 = 0.52 + k * 0.077, v0 = 0.62 - r * 0.13;
-				boolean hot = i == 0 && items == FOUND && t > ADD - 0.4 && t < ADD + 0.3;
-				box(fx, u0, v0, u0 + 0.07, v0 + 0.12, hot ? 160 : 40, c);
-				if (i < items.size()) fx.item(pt(u0 + 0.035, v0 + 0.06), new ItemStack(items.get(i)), 0.055 * c, 0, true);
-			}
+		for (int i = 0; i < 18; i++) {
+			double[] sl = slot(i);
+			boolean hot = i == 0 && items == FOUND && t > ADD - 0.4 && t < ADD + 0.3;
+			box(fx, sl[0], sl[1], sl[2], sl[3], hot ? 160 : 40, c);
+			if (i < items.size()) fx.guiItem(pt((sl[0] + sl[2]) / 2, (sl[1] + sl[3]) / 2), new ItemStack(items.get(i)), 0.058 * c);
 		}
 		// buttons
-		String[] left = {"+ Group", "+ Build", "Clear done"};
-		for (int i = 0; i < 3; i++) {
-			double u = 0.03 + i * 0.152;
-			box(fx, u, 0.04, u + 0.145, 0.12, 40, c);
-			text(fx, u + 0.02, 0.08, left[i], white, 0.9f);
+		u = LEFT;
+		for (String label : new String[] {"+ Group", "+ Build", "Clear done"}) {
+			double w = tw(label, 0.9) + 0.04;
+			button(fx, u, u + w, label, 0.9, 40, white, c);
+			u += w + 0.012;
 		}
 		boolean pressed = t >= RUN && t < RUN + 0.25;
-		box(fx, 0.52, 0.04, 0.745, 0.12, pressed ? 220 : running ? 90 : 60, c);
-		text(fx, 0.58, 0.08, running ? "Stop" : "Run all", white, 1f);
-		box(fx, 0.755, 0.04, 0.98, 0.12, 35, c);
-		text(fx, 0.79, 0.08, "Run selected", running ? dim : white, 0.9f);
+		button(fx, MID, 0.78, running ? "Stop" : "Run all", 1, pressed ? 220 : running ? 90 : 60, white, c);
+		button(fx, 0.79, RIGHT, "Run selected", 0.9, 35, running ? dim : white, c);
 		// the finger's touch: a dot while touching and a ripple after
 		for (double[] k : TAPS) {
 			double since = t - k[0];
 			if (since < -0.2 || since > 0.6) continue;
-			if (since < 0.15) fx.spark(pt(k[1], k[2]).add(0, 0, -0.004), 0.05, Fx.argb(230, 0xBFEFFF));
+			if (since < 0.15) fx.spark(pt(k[1], k[2]).add(front.scale(0.004)), 0.05, Fx.argb(230, 0xBFEFFF));
 			if (since >= 0) ripple(fx, k[1], k[2], since);
 		}
 	}
@@ -194,31 +216,46 @@ final class PickShot extends Shot {
 
 	private void row(Fx fx, int depth, double v, String title, Item icon, String how, int color, double a, boolean root, double t) {
 		if (a <= 0.01) return;
-		double u = 0.03 + depth * 0.022;
+		double u = LEFT + depth * 0.016;
 		if (depth > 0) {   // a guide line from the parent
-			double gu = 0.03 + (depth - 1) * 0.022 + 0.008;
-			fx.ribbon(List.of(pt(gu, v + 0.045), pt(gu, v), pt(u + 0.004, v)), 0.0035, Fx.argb((int) (140 * a), 0x8899AA), 1);
+			double gu = LEFT + (depth - 1) * 0.016 + 0.006;
+			fx.ribbon(List.of(pt(gu, v + 0.04), pt(gu, v), pt(u + 0.002, v)), 0.0035, Fx.argb((int) (140 * a), 0x8899AA), 1);
 		}
 		int pip = root ? (t >= RUN ? AMBER : 0xFFFFFF) : depth == 8 ? 0xFFFFFF : 0x9A9A9A;
-		Vec3 pp = pt(u + 0.012, v);
-		fx.glowBox(new AABB(pp.subtract(0.008, 0.008, 0.003), pp.add(0.008, 0.008, 0.003)), Fx.argb((int) (230 * a), pip));
-		fx.item(pt(u + 0.04, v), new ItemStack(icon), 0.045 * a, 0, true);
-		text(fx, u + 0.065, v, title, Fx.argb((int) (255 * a), color), 0.95f);
-		text(fx, u + 0.065 + title.length() * 0.0108, v, how, Fx.argb((int) (255 * a), 0x7A8696), 0.95f);
+		Vec3 pp = pt(u + 0.006, v);
+		fx.glowBox(new AABB(pp.subtract(0.008, 0.008, 0.008), pp.add(0.008, 0.008, 0.008)), Fx.argb((int) (230 * a), pip));
+		fx.guiItem(pt(u + 0.034, v), new ItemStack(icon), 0.042 * a);
+		double x = u + 0.058;
+		text(fx, x, v, title, Fx.argb((int) (255 * a), color), 0.9, 0);
+		text(fx, x + tw(title, 0.9) + 0.012, v, how, Fx.argb((int) (255 * a), 0x7A8696), 0.8, 0);
 		if (root) {
-			text(fx, 0.43, v, "0/32", Fx.argb((int) (255 * a), 0x9AA3AE), 0.9f);
-			fx.ribbon(List.of(pt(u + 0.065, v - 0.026), pt(0.475, v - 0.026)), 0.004, Fx.argb((int) (120 * a), 0x2B2B2B), 1);
+			text(fx, MID - 0.03, v, "0/32", Fx.argb((int) (255 * a), 0x9AA3AE), 0.9, 2);
+			fx.ribbon(List.of(pt(x, v - 0.03), pt(MID - 0.03, v - 0.03)), 0.004, Fx.argb((int) (120 * a), 0x2B2B2B), 1);
 		}
 	}
 
-	private void text(Fx fx, double u, double v, String s, int color, float size) {
-		fx.text(pt(u, v), Component.literal(s), 0.0062f * size, color, 0, false, 180, false);
+	/** Text width in panel units. */
+	private static double tw(String s, double size) {
+		return Minecraft.getInstance().font.width(s) * TS * size / W;
+	}
+
+	/** Text on the panel; align 0 left, 1 centred, 2 right. */
+	private void text(Fx fx, double u, double v, String s, int color, double size, int align) {
+		if (align == 1) u -= tw(s, size) / 2;
+		else if (align == 2) u -= tw(s, size);
+		fx.text(pt(u, v), Component.literal(s), (float) (TS * size), color, 0, false, panelYaw, false);
 	}
 
 	/** A button / field / slot: its edge glows (brightness 0..255). */
 	private void box(Fx fx, double u0, double v0, double u1, double v1, int glow, double c) {
 		Vec3 a = pt(u0, v0), b = pt(u1, v0), cc = pt(u1, v1), d = pt(u0, v1);
 		fx.ribbon(List.of(a, b, cc, d, a), 0.004, Fx.argb((int) (glow * c), CYAN), 1);
+	}
+
+	/** A button along the bottom with its label centred. */
+	private void button(Fx fx, double u0, double u1, String label, double size, int glow, int color, double c) {
+		box(fx, u0, 0.035, u1, 0.12, glow, c);
+		text(fx, (u0 + u1) / 2, 0.0775, label, color, size, 1);
 	}
 
 	@Override
