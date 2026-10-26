@@ -4,6 +4,8 @@
 	"compatibilityLevel": "JAVA_25",
 	"client": [
 		"BiomeManagerAccessor",
+		"CameraMixin",
+		"MannequinAccessor",
 		"MinecraftMixin",
 		"MouseHandlerMixin"
 	],

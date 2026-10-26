@@ -110,6 +110,7 @@ public final class Commands {
 			case "farm" -> farm(bot, args);
 			case "built", "farms" -> built();
 			case "team" -> team(args);
+			case "film" -> com.autocraft.cinema.Film.command(args);
 			default -> help();
 		}
 	}
@@ -266,6 +267,6 @@ public final class Commands {
 				+ " <schematic> (ghost preview, then position it) | build <schematic> <x y z|here> [rot] | farm <resource> [x y z|here] | team"
 				+ " host|join|leave | schematics | built | stop | pause | resume | status | base [name] | base remove <name> | bases"
 				+ " | base stocked on|off | logoff on|off | goto x y z"
-				+ " | resources");
+				+ " | resources | film play|list|stop (plays the explainer video in this world)");
 	}
 }

@@ -11,7 +11,8 @@ in a browser to scrub through it scene by scene (tick loop, planner, scanner + A
 then does on its own — the plan, x-ray scan and A*, survival at night, ancient city loot, a team build, the end card.
 Generated entirely by the scripts in `docs/video/` with original textures; `python docs/video/render_all.py` renders
 it (Blender 5.x) to `docs/video/autocraft-explainer.mp4`. Stills of every shot are in `docs/video/previews/`; the
-shot list and options are in `docs/video/storyboard.md`.
+shot list and options are in `docs/video/storyboard.md`. **In game**, `!ac film play` stages and plays the same eight
+shots in a singleplayer world (your skin, your shader pack) for screen recording; see the storyboard's "In game" part.
 The mod icon (`src/main/resources/assets/autocraft/icon.png`, enlarged in `docs/logo-512.png`) is a gear that
 dissolves into redstone circuitry: its right-hand teeth turn into traces ending in pads, and bits break off it.
 
@@ -96,6 +97,7 @@ hidden, blocks in the way get red outlines, water/lava and chest-like blocks get
 | `!ac logoff on\|off` | disconnect when the job is done (default on) |
 | `!ac goto <x> <y> <z>` | debug: pathfind to a block |
 | `!ac resources` | list named resources (any natural block's item id, craftable/smeltable item, mob drop or procedure item also works) |
+| `!ac film play [all \| 1-8 \| name…]` / `!ac film list` / `!ac film stop` | build the sets here and play the explainer video in this singleplayer world (throwaway world; see `docs/video/storyboard.md`) |
 
 ## Architecture
 One client-tick loop. Every tick the `Bot` releases all inputs, then asks behaviors **in priority

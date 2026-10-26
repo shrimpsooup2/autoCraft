@@ -1,5 +1,6 @@
 package com.autocraft;
 
+import com.autocraft.cinema.Film;
 import com.autocraft.command.Commands;
 import com.autocraft.schematic.SchematicLibrary;
 import com.autocraft.ui.AutoCraftScreen;
@@ -41,10 +42,14 @@ public final class AutoCraftClient implements ClientModInitializer {
 			ChestMemory.tick(mc); // remembers what's in every chest screen that opens, ours or yours
 			TaskSave.tick(mc);
 			TaskTree.tick(mc);
+			Film.clientTick(mc);
 		});
 		LevelRenderEvents.COLLECT_SUBMITS.register(GhostRenderer::collect);
+		LevelRenderEvents.COLLECT_SUBMITS.register(Film::collect);
 		HudElementRegistry.addLast(Identifier.fromNamespaceAndPath(MOD_ID, "status"), HudOverlay::extract);
 		HudElementRegistry.addLast(Identifier.fromNamespaceAndPath(MOD_ID, "placement"), Placements::extractHud);
+		HudElementRegistry.addLast(Identifier.fromNamespaceAndPath(MOD_ID, "film"), Film::hud);
+		Film.hideVanillaHud();
 		// "!ac ..." chat lines are commands for us and never reach the server.
 		ClientSendMessageEvents.ALLOW_CHAT.register(message -> !Commands.handle(message));
 		ClientPlayConnectionEvents.JOIN.register((handler, sender, mc) -> TaskSave.onJoin());

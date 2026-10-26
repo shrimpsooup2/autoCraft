@@ -29,6 +29,24 @@ short chapter tags ("1 · Pick", "2 · Plan" …) and the end card. No narration
 ## Sound
 None in the render. The music (a Newgrounds track chosen by the author, licence permitting) is laid in at the edit.
 
+## In game: `!ac film`
+The mod can also play the explainer itself, in a singleplayer world: real terrain, your skin, your shader pack, so
+what you screen-record is the cut. Code: `src/main/java/com/autocraft/cinema/` — `Film` (the director), `Shot` and one
+class per shot, `Cam` (spline camera), `Actor`/`Puppets` (client-only mannequins and mobs driven every tick), `Fx`
+(glowing ribbons, rings and glass, text, items and ghost blocks drawn into the world), `FilmHud` (fades, chat, hearts,
+keycap), `Stage` (builds the sets on the integrated server), `Blueprint`, `Logo`, `Sets`.
+
+1. Make a **throwaway** creative world (the sets are built into it and stay), turn shaders on, render distance 16+.
+2. Optional: put a schematic whose name starts with `film` (e.g. `film-modern_house.litematic`) in
+   `config/autocraft/schematics/`; it is the house built in shot 7 and standing in shot 8. Without one, a cottage.
+3. Stand somewhere open, start recording, type `!ac film play` (or `!ac film play 4`, `!ac film play team end`;
+   `!ac film list`, `!ac film stop`).
+
+It switches you to spectator, sets peaceful and freezes time, weather and mob spawning, builds every set within about
+130 blocks of you (Plan in the sky above you, Pick west, Find east, Survive north, Loot underground to the south, Team
+south-east, End south-west), shows black until the chunks are drawn, then plays the shots (about 3:25 with a dip to
+black between them) and puts you back where you stood.
+
 ## Rendering
 Needs [Blender 5.x](https://www.blender.org/download/) (the scenes use Eevee and 5.x APIs) and Python 3:
 
