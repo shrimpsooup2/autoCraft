@@ -1,7 +1,11 @@
 package com.autocraft.schematic;
 
 import com.autocraft.Chat;
+import java.io.BufferedInputStream;
+import java.io.DataInputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -32,7 +36,7 @@ public final class SchematicLoader {
 	public static Schematic load(Path file) throws IOException {
 		String fileName = file.getFileName().toString();
 		String lower = fileName.toLowerCase();
-		CompoundTag root = NbtIo.readCompressed(file, NbtAccounter.unlimitedHeap());
+		CompoundTag root = readNbt(file);
 		Raw raw;
 		if (lower.endsWith(".litematic")) raw = litematic(root);
 		else if (lower.endsWith(".schem")) raw = sponge(root);
@@ -44,6 +48,18 @@ public final class SchematicLoader {
 		List<Schematic.Cell> cells = normalise(raw.cells);
 		Vec3i size = size(cells);
 		return new Schematic(name, size, cells, FarmNames.farmFor(name, cells), null, false);
+	}
+
+	/** Gzipped NBT (the usual) or plain NBT (some sites and tools save it uncompressed): tell them apart by the gzip magic. */
+	private static CompoundTag readNbt(Path file) throws IOException {
+		byte[] head = new byte[2];
+		try (InputStream in = Files.newInputStream(file)) {
+			if (in.readNBytes(head, 0, 2) < 2) throw new IOException("empty file: " + file.getFileName());
+		}
+		if ((head[0] & 0xFF) == 0x1F && (head[1] & 0xFF) == 0x8B) return NbtIo.readCompressed(file, NbtAccounter.unlimitedHeap());
+		try (DataInputStream in = new DataInputStream(new BufferedInputStream(Files.newInputStream(file)))) {
+			return NbtIo.read(in, NbtAccounter.unlimitedHeap());
+		}
 	}
 
 	/** Move the minimum corner to (0,0,0). */

@@ -2,7 +2,6 @@ package com.autocraft.cinema;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.function.Consumer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
@@ -26,13 +25,6 @@ final class Stage {
 
 	static @Nullable MinecraftServer server() {
 		return Minecraft.getInstance().getSingleplayerServer();
-	}
-
-	/** Run `work` on the server thread against the overworld and wait for it. */
-	static void sync(Consumer<ServerLevel> work) {
-		MinecraftServer server = server();
-		if (server == null) throw new IllegalStateException("films need a singleplayer world");
-		server.submit(() -> work.accept(server.overworld())).join();
 	}
 
 	/** A command as the server (no chat feedback). */

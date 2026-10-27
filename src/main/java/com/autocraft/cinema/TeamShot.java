@@ -58,6 +58,8 @@ final class TeamShot extends Shot {
 	private Warp story;
 	private double prevStory = -1;
 	private Loop[] loops;
+	/** The digger, in story seconds: when it sets off for each boulder, starts breaking it, and it breaks; and when it's done. */
+	private double[] digWalk = new double[0], digBreak = new double[0], digAt = new double[0];
 	private double digEnd;
 	private boolean lidOpen;
 	private Anim.Track leaderToPole;
@@ -162,7 +164,17 @@ final class TeamShot extends Shot {
 		a = new Loop(a.home, a.source, a.walk, a.work, a.drop, walkA + 1.3 - sA, a.carry);
 		Loop b = new Loop(dropSpot.add(0, 0, 0.6), sources[2], walkB, 2.2, 0.8, 0, Items.COBBLESTONE);
 		b = new Loop(b.home, b.source, b.walk, b.work, b.drop, 2 * walkB + 2.2 + 0.4 - sB, b.carry);
-		digEnd = 0.6 + boulders.size() * 2.0;
+		// the digger: the walk to the first boulder before the camera drops in, the break during it, then the rest quickly
+		int nb = boulders.size();
+		digWalk = new double[nb];
+		digBreak = new double[nb];
+		digAt = new double[nb];
+		for (int k = 0; k < nb; k++) {
+			digWalk[k] = k == 0 ? 0.1 : digAt[k - 1];
+			digBreak[k] = k == 0 ? 1.05 : digWalk[k] + 0.3;
+			digAt[k] = k == 0 ? 1.6 : digBreak[k] + 0.5;
+		}
+		digEnd = nb == 0 ? 0 : digAt[nb - 1];
 		Loop d = new Loop(dropSpot.add(0, 0, -0.6), sources[1], walkD, 2.4, 0.6, -digEnd + 0.3, Items.OAK_LOG);
 		loops = new Loop[] {d, a, b};
 		planStands();
@@ -374,20 +386,20 @@ final class TeamShot extends Shot {
 				continue;
 			}
 			if (i == 0 && s < digEnd) {   // the digger clears the site first: walk to each boulder, break it
-				int k = Math.min(boulders.size() - 1, (int) ((s - 0.6) / 2.0));
-				BlockPos boulder = boulders.get(Math.max(0, k));
+				int k = 0;
+				while (k < boulders.size() - 1 && s >= digAt[k]) k++;
+				BlockPos boulder = boulders.get(k);
 				Vec3 stand = Vec3.atBottomCenterOf(boulder).add(-1.1, 0, 0);
-				double local = s - 0.6 - k * 2.0;
 				Vec3 from = k == 0 ? spots[0] : Vec3.atBottomCenterOf(boulders.get(k - 1)).add(-1.1, 0, 0);
-				if (s < 0.6 || local < 0.8) {
-					a.moveTo(Anim.lerp(from, stand, Anim.smooth(s < 0.6 ? 0 : local / 0.8))).look(null);
+				if (s < digBreak[k]) {
+					a.moveTo(Anim.lerp(from, stand, Anim.ramp(s, digWalk[k], digBreak[k]))).look(null);
 				} else {
 					a.moveTo(stand).look(Vec3.atCenterOf(boulder));
-					crack(boulder, (int) Math.min(9, (local - 0.8) / 1.2 * 10));
+					crack(boulder, (int) Math.min(9, (s - digBreak[k]) / (digAt[k] - digBreak[k]) * 10));
 					if (every(t, 0, duration, 0.25)) a.swing();
 				}
 				for (int b = 0; b < boulders.size(); b++) {
-					if (atStory(s, 0.6 + b * 2.0 + 2.0)) dig(boulders.get(b));
+					if (atStory(s, digAt[b])) dig(boulders.get(b));
 				}
 				continue;
 			}

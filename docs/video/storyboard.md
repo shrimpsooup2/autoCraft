@@ -27,34 +27,60 @@ short chapter tags ("1 · Pick", "2 · Plan" …) and the end card. No narration
 | 8 | 1:42–1:52 | End card | Sunset over the base and its wheat farm, the team still at work; a chest lid opens and diamonds fountain out. Crane up to the sky: the logo assembles, *autoCraft*, "Press **K** in game" (the keycap presses itself) and the repository address. |
 
 ## Sound
-None in the render. The music (a Newgrounds track chosen by the author, licence permitting) is laid in at the edit.
+ParagonX9 — *Chaoz Fantazy* (Newgrounds, CC BY-SA: credit the artist; a video with music set to it counts as an
+adaptation, so Share Alike asks for the video to be under the same licence — awkward for footage of Mojang's game,
+which can't be relicensed; worth asking the artist for plain permission). The Blender render is silent and the music
+is laid in at the edit; the in-game film is cut to it and its recorder lays it in itself.
 
 ## In game: `!ac film`
-The mod can also play the explainer itself, in a singleplayer world: real terrain, your skin, your shader pack, so
-what you screen-record is the cut. Code: `src/main/java/com/autocraft/cinema/` — `Film` (the director), `Shot` and one
-class per shot, `Cam` (spline camera), `Actor`/`Puppets` (client-only mannequins and mobs driven every tick), `Fx`
-(glowing ribbons, rings and glass, text, items and ghost blocks drawn into the world), `FilmHud` (fades, chat, hearts,
-keycap), `Stage` (builds the sets on the integrated server), `Blueprint`, `Logo`, `Sets`.
+The mod can also play the explainer itself, in a singleplayer world: real terrain, your skin, your shader pack, cut
+to the music, so what it records is the finished film. Code: `src/main/java/com/autocraft/cinema/` — `Film` (the
+director), `Score` (the song's bars and the cut list), `Shot` and one class per shot, `Cam` (spline camera, moves
+that ride on a bot, watches, cuts), `Rig` (keeps the camera out of blocks, smoothly), `Actor`/`Puppets`
+(client-only mannequins and mobs that stand on the ground and don't walk through blocks), `Walker` (walks round
+trees and walls), `Fx` (glowing ribbons, rings and glass, text, items and ghost blocks drawn into the world),
+`FilmHud` (fades, chat, hearts, keycap), `Stage` (builds the sets on the integrated server), `Recorder`,
+`Blueprint`, `Logo`, `Sets`.
 
 1. Make a **throwaway** creative world (the sets are built into it and stay), turn shaders on, render distance 16+.
-2. Optional: put a schematic whose name starts with `film` (e.g. `film-modern_house.litematic`) in
-   `config/autocraft/schematics/`; it is the house built in shot 7 and standing in shot 8. Without one, a cottage.
-3. Stand somewhere open and type `!ac film record` (or `!ac film record 60fps`, `!ac film record 4`,
+   A forest is fine: nothing is cut down; the camera and the bots go round the trees.
+2. Put the song in the game folder as `autocraft-film/music.mp3` (ParagonX9 — *Chaoz Fantazy*; .ogg, .wav, .m4a
+   and .flac work too). It's laid under the recording in sync. Credit it in the video description:
+   "Music: ParagonX9 — Chaoz Fantazy (CC BY-SA)" (the end card says it too).
+3. Optional: put a schematic whose name starts with `film` (`film.litematic`, `film-modern_house.schem` …) in
+   `config/autocraft/schematics/`; it is the house the team builds in shot 8 and the base in shot 9. Without one,
+   a cottage.
+4. Stand somewhere open and type `!ac film record` (or `!ac film record 60fps`, `!ac film record 6`,
    `!ac film record team end`). `!ac film play` plays it live instead, for a screen recorder; `!ac film list`,
    `!ac film stop`.
 
-It switches you to spectator, sets peaceful and freezes time, weather and mob spawning, builds every set within about
-130 blocks of you (Plan in the sky above you, Pick west, Find east, Survive north, Loot underground to the south, Team
-south-east, End south-west), shows black until the chunks are drawn, then plays the shots (about 3:25 with a dip to
-black between them) and puts you back where you stood.
+It switches you to spectator, sets peaceful and freezes time, weather and mob spawning, and builds the sets in the
+background ("Building the sets…"; finding and loading the nearest real ancient city can take a minute): Plan in the
+sky above you, Pick, Find, Survive and Nether around you, Loot in the ancient city, Team and End at their own sites
+about 220 blocks away. Far sets are travelled to between shots while the screen is black. Then it plays the shots
+(2:16, every cut on a bar of the song) and puts you back where you stood. If anything in the film breaks, it stops
+and says what and where in chat ("Film stopped (…): … at File.java:line"); the full error is in `logs/latest.log`.
+
+| # | Shot | Bars (162.34 BPM) | On the music |
+|---|---|---|---|
+| 1 | Open | 0–18 | Dawn, the bot walks out of the trees; the camera rises; the logo lands on the drop (bar 16) |
+| 2 | Pick | 18–32 | K, the panel, "diamond", 32, the plan unfolds a row a beat, Run all (bar 26), off it goes |
+| 3 | Plan | 32–40 | The tower of steps; each island's step finishes on the music |
+| 4 | Find | 40–48 | X-ray on the beat, the search, the route, the walk, the diamond out on bar 47 |
+| 5 | Survive | 48–51 | A crit on the creeper on the beat, an arrow, the sprint and the kill |
+| 6 | Nether | 51–57 | The drop, the water bucket clutch on bar 52, a portal cast a block a beat, through it |
+| 7 | Loot | 57–68 | Sneaking in an ancient city over the breakdown; the wool as the music comes back (bar 64) |
+| 8 | Build together | 68–81 | Hosting, friends join a beat apart, roles; the time-lapse from bar 73 with a slow-motion look at each player |
+| 9 | End | 81–end | Diamonds, the logo, the pillar a block a beat, the logoff on the last hit (bar 88), the end card |
 
 **Recording** (`Recorder`): the game clock runs by frames, not by the wall clock — each captured frame moves the film
 exactly 1/fps of a second — so the video is smooth at true speed however slowly the computer draws it. Frames are
 read back from the screen at the window's size (make it 1920×1080, e.g. fullscreen on a 1080p monitor) and piped into
-ffmpeg: `autocraft-film/autocraft-film_<date>.mp4` in the game folder (H.264, CRF 16). Without ffmpeg (install it
-with `winget install ffmpeg`, then restart the game) the frames are saved as PNGs in a folder there to import as an
-image sequence. It's silent; add the music in an editor. Recording runs slower than real time; opening a menu
-(Esc) pauses it, and resizing the window stops it.
+ffmpeg: `autocraft-film/autocraft-film_<date>.mp4` in the game folder (H.264, CRF 16), with the song from
+`autocraft-film/music.*` laid under it from the right place (when the recorded shots are one unbroken stretch of the
+film). Without ffmpeg (install it with `winget install ffmpeg`, then restart the game) the frames are saved as PNGs
+in a folder there to import as an image sequence. Recording runs slower than real time; opening a menu (Esc) pauses
+it, and resizing the window stops it.
 
 ## Rendering
 Needs [Blender 5.x](https://www.blender.org/download/) (the scenes use Eevee and 5.x APIs) and Python 3:

@@ -59,21 +59,33 @@ Done in the last round (untested in game):
 - Logos are raised above whatever is under them (`Logo.above`); the End logo used to clip into the ground.
 - Status light: small bobbing/turning pixel cube with a bloom halo (`Fx.pixelCube`, `Shot.lights`).
 
+## Done from the last list (this round, still untested in game)
+- **The user's `film.litematic` never loaded**: it's plain (uncompressed) NBT, and the loader only read gzip, so the
+  film fell back to the cottage. `SchematicLoader` now reads both. It is not the modern house: 51×42×57, 25,922
+  blocks, 501 block states (spruce, bamboo, beehives, its own dirt and grass base). Checked offline with a Python
+  copy of `TeamShot.planStands` on the real file: every block has a spot within reach (0 misses), ~19,800 moves
+  over the build. The time-lapse places ~75 blocks a tick at full speed — heavy live, fine when recording.
+- **Sets build in the background** (`Film.building`): the window stays alive with "Building the sets…" while the
+  server works (the ancient city search and chunk loading used to freeze the game), then it goes up over the hub.
+- Team: the digger's first boulder now breaks inside its slow-motion drop-in (it used to still be walking).
+- Survive: the sprint at the skeleton arrives as the blow lands (it used to swing 0.2 s early, short of it).
+- `docs/video/storyboard.md` "In game" section: the cut list on the music, the song, recording with it.
+
 ## Next steps
 1. Have the user run `!ac film record` (or single shots: `!ac film record open`) and send the video or the chat
    lines ("Film stopped (…):", "Recording stopped:"). Fix what breaks — first whatever crashed the opening.
-2. Things most likely to need tuning in game, untested so far:
-   - LootShot city survey: route quality, chests with unreachable wool spots, darkness (light block levels),
-     the time `findNearestMapStructure` + chunk generation takes (the client freezes while sets build).
-   - TeamShot with the user's schematic (`film*.litematic` in `config/autocraft/schematics/`; they downloaded
-     `film.litematic`): placer spots, camera drop-ins framing, gatherer timing at the chest.
-   - NetherShot geometry/camera; the fall reads fast (15 blocks in one bar).
+2. Things to judge on the user's video, then tune:
+   - LootShot in the real city: route, wool spots, darkness (light block levels).
+   - TeamShot with the 25,922-block build: frame rate of the ghost (all remaining blocks are drawn every frame;
+     limit it to the next few layers if it's slow), the camera drop-ins framing, the gatherers at the chest.
+   - NetherShot geometry/camera; the fall reads fast (15 blocks in under a bar).
    - Camera feel: `Rig` timings (`EASE`, `STEADY`), the candidate offsets, `SUBJECT` (how close to the look
      point a block counts as part of the subject); the forest opening is the hardest case.
    - Puppet collision: waiting at walls / going through after `PATIENCE`, the step and drop limits, shots where a
      script deliberately moves through blocks and needs `free` or `teleport`.
-   - Shot pacing against the music now that shots are much shorter (Plan and Find are 8 bars each).
-3. Update `docs/video/storyboard.md` ("In game" section) to the new cut list and the music, once it plays right.
+   - Shot pacing against the music (Plan and Find are 8 bars each).
+3. The music licence (CC BY-SA) asks for the video to be shared alike, which game footage can't be; the user may
+   want to ask the artist.
 
 ## Checking
 Gradle can't build here (`libraries.minecraft.net` is blocked). Compile with

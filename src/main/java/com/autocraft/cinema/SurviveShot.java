@@ -70,7 +70,7 @@ final class SurviveShot extends Shot {
 		skeleton.aggressive(true);
 		Vec3 toBot = new Vec3(work.x - skel.x, 0, work.z - skel.z).normalize();
 		reach = new Vec3(skel.x + toBot.x * 2.4, origin.getY() + 1, skel.z + toBot.z * 2.4);   // the mound's lower step, in reach
-		charge = new Anim.Track().at(CHARGE, work).to(reach, 9);
+		charge = new Anim.Track().at(CHARGE, work).to(reach, work.distanceTo(reach) / (STRIKE - CHARGE - 0.05));   // there just as the blow lands
 		home = new Anim.Track().at(BACK, reach).to(work, 6);
 		Vec3 mid = work.lerp(skel, 0.5);
 		cam.key(0, v(4.6, 1.6, -4.4), v(1.6, 1.2, -0.8), 54)

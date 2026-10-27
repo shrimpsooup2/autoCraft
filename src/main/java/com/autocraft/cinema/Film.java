@@ -4,6 +4,9 @@ import com.autocraft.Chat;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext;
@@ -14,6 +17,7 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
@@ -55,6 +59,8 @@ public final class Film {
 	private static final Rig rig = new Rig();
 	/** Something broke mid-frame: stop at the next tick (a safe point). */
 	private static boolean failed;
+	/** The sets being built on the server (null once done). */
+	private static @Nullable CompletableFuture<Void> building;
 
 	private Film() {}
 
@@ -130,7 +136,7 @@ public final class Film {
 		restoreMode = mc.gameMode != null ? mc.gameMode.getPlayerMode() : GameType.CREATIVE;
 		String name = player.getGameProfile().name();
 		hub = player.blockPosition();
-		Chat.info("Building " + chosen.size() + " set(s)…");
+		Chat.info("Building " + chosen.size() + " set(s)… (finding and loading a real ancient city can take a minute)");
 		Stage.command("gamemode spectator " + name);
 		Stage.command("difficulty peaceful");
 		for (String rule : List.of("advance_time false", "advance_weather false", "spawn_mobs false", "random_tick_speed 0",
@@ -140,17 +146,12 @@ public final class Film {
 		Stage.command("weather clear");
 		restorePauseOnLostFocus = mc.options.pauseOnLostFocus;
 		mc.options.pauseOnLostFocus = false;   // clicking away mustn't pause the take
-		try {
-			for (Shot s : chosen) {
-				BlockPos at = hub.offset(s.offset());
-				Stage.sync(level -> s.build(level, at));
-			}
-		} catch (RuntimeException e) {
-			report("building the sets", e);
-			restore();
-			return;
-		}
-		Stage.command("tp " + name + " " + hub.getX() + " " + (hub.getY() + 24) + " " + hub.getZ());
+		// the sets are built on the server while the screen shows "Building the sets…" (the window stays alive)
+		MinecraftServer server = Stage.server();
+		BlockPos h = hub;
+		building = server.submit(() -> {
+			for (Shot s : chosen) s.build(server.overworld(), h.offset(s.offset()));
+		});
 		shots.clear();
 		shots.addAll(chosen);
 		index = 0;
@@ -186,6 +187,7 @@ public final class Film {
 
 	private static void stop(@Nullable String message) {
 		failed = false;
+		building = null;   // a build still running just finishes; nothing waits for it
 		Shot s = current;
 		current = null;
 		phase = Phase.IDLE;
@@ -252,6 +254,21 @@ public final class Film {
 		}
 		try {
 			if (phase == Phase.LOADING) {
+				CompletableFuture<Void> b = building;
+				if (b != null) {   // still building: wait; then go up over the hub and let the chunks draw
+					if (!b.isDone()) return;
+					building = null;
+					try {
+						b.join();
+					} catch (CompletionException | CancellationException e) {
+						report("building the sets", e.getCause() != null ? e.getCause() : e);
+						stop(null);
+						return;
+					}
+					Stage.command("tp " + mc.player.getGameProfile().name() + " " + hub.getX() + " " + (hub.getY() + 24) + " " + hub.getZ());
+					loadTicks = 0;
+					return;
+				}
 				loadTicks++;
 				if (loadTicks >= LOAD_MAX_TICKS || loadTicks >= LOAD_MIN_TICKS && mc.levelRenderer.hasRenderedAllSections()) beginShot(mc);
 				return;
@@ -355,7 +372,7 @@ public final class Film {
 			FilmHud hud = new FilmHud(g);
 			if (phase == Phase.LOADING) {
 				hud.fade(1);
-				hud.text(Component.literal("Setting up the shot…"), hud.w / 2.0, hud.h - 20, 1, 0x808080, 0.6, false);
+				hud.text(Component.literal(building != null ? "Building the sets…" : "Setting up the shot…"), hud.w / 2.0, hud.h - 20, 1, 0x808080, 0.6, false);
 				return;
 			}
 			Shot s = current;
