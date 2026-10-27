@@ -1,9 +1,7 @@
 package com.autocraft.cinema;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.function.Supplier;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -11,7 +9,6 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleOptions;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.LevelEvent;
@@ -77,46 +74,6 @@ abstract class Shot {
 
 	static float partialTick() {
 		return Minecraft.getInstance().getDeltaTracker().getGameTimeDeltaPartialTick(false);
-	}
-
-	/**
-	 * Before the shot shows: take away leaves, logs and plants (never the sets' own blocks) where the camera will
-	 * pass and in the few blocks in front of it, so it never flies through a tree or looks through a bush.
-	 */
-	final void clearCameraPath() {
-		if (cam.isEmpty()) return;
-		Set<Long> gone = new HashSet<>();
-		BlockPos.MutableBlockPos m = new BlockPos.MutableBlockPos();
-		for (double t = 0; t <= duration; t += 0.1) {
-			Cam.Pose p = cam.at(t);
-			Vec3 dir = p.look().subtract(p.pos());
-			double len = dir.length();
-			Vec3 ahead = len > 1e-6 ? dir.scale(Math.min(5, len) / len) : Vec3.ZERO;
-			for (int k = 0; k <= 5; k++) {
-				Vec3 c = p.pos().add(ahead.scale(k / 5.0));
-				double r = k == 0 ? 1.7 : 1.0;
-				int ri = (int) Math.ceil(r);
-				for (int x = -ri; x <= ri; x++) {
-					for (int y = -ri; y <= ri; y++) {
-						for (int z = -ri; z <= ri; z++) {
-							m.set(Math.floor(c.x) + x, Math.floor(c.y) + y, Math.floor(c.z) + z);
-							if (Vec3.atCenterOf(m).distanceToSqr(c) > r * r) continue;
-							long key = m.asLong();
-							if (!gone.contains(key) && softNatural(m)) gone.add(key);
-						}
-					}
-				}
-			}
-		}
-		for (long key : gone) place(BlockPos.of(key), Blocks.AIR.defaultBlockState());
-	}
-
-	/** Foliage the camera may clear: leaves, logs and see-through plants that no set put there. */
-	private boolean softNatural(BlockPos p) {
-		if (Stage.BUILT.contains(p.asLong())) return false;
-		BlockState s = level.getBlockState(p);
-		if (s.isAir() || !s.getFluidState().isEmpty() || s.hasBlockEntity()) return false;
-		return s.is(BlockTags.LEAVES) || s.is(BlockTags.LOGS) || s.getCollisionShape(level, p).isEmpty();
 	}
 
 	/**

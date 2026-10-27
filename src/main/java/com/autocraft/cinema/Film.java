@@ -10,25 +10,21 @@ import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
-import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
-import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.GameType;
-import net.minecraft.world.phys.BlockHitResult;
-import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
-import net.minecraft.world.phys.shapes.CollisionContext;
 import org.jspecify.annotations.Nullable;
 
 /**
  * The director: `!ac film` plays the explainer as a film in this singleplayer world, with whatever shader pack is
  * on. It builds every shot's set near you (all within render distance, so cuts are instant; a shot set somewhere
  * far, like a real ancient city, is travelled to while the screen is black), then plays the shots back to back —
- * puppets, camera moves, floating graphics, titles — with a dip to black between shots. The camera never goes
- * through blocks: leaves, logs and plants in its way are cleared before a shot, and solid blocks push it in.
+ * puppets, camera moves, floating graphics, titles — with a dip to black between shots. The camera goes round
+ * blocks ({@link Rig}); the puppets don't walk through them ({@link Actor}). If anything in the film breaks, it
+ * says what and where in chat, logs it, and stops — it never takes the game down.
  */
 public final class Film {
 	public record CameraPose(double x, double y, double z, float yaw, float pitch, float fov) {}
@@ -41,8 +37,6 @@ public final class Film {
 	private static final int LOAD_MAX_TICKS = 20 * 40;
 	/** A shot whose set is further than this from the hub is travelled to (the hub's chunks wouldn't reach it). */
 	private static final double FAR = 120;
-	/** How far in front of the camera solid blocks are looked for. */
-	private static final double NEAR = 6;
 
 	private static Phase phase = Phase.IDLE;
 	private static final List<Shot> shots = new ArrayList<>();
@@ -58,10 +52,9 @@ public final class Film {
 	private static @Nullable Vec3 restorePos;
 	private static @Nullable GameType restoreMode;
 	private static @Nullable Boolean restorePauseOnLostFocus;
-	/** Camera collision: the fraction of the way out it's allowed, and when that was worked out (film time). */
-	private static double pull = 1;
-	private static double pullTime = -1;
-	private static @Nullable Vec3 lastCam;
+	private static final Rig rig = new Rig();
+	/** Something broke mid-frame: stop at the next tick (a safe point). */
+	private static boolean failed;
 
 	private Film() {}
 
@@ -71,7 +64,7 @@ public final class Film {
 
 	/** A shot is on screen (not idle, not loading). */
 	static boolean playing() {
-		return phase == Phase.PLAYING;
+		return phase == Phase.PLAYING && !failed;
 	}
 
 	/** All shots, in order. */
@@ -92,7 +85,7 @@ public final class Film {
 				int i = 1;
 				for (Shot s : all()) Chat.info(i++ + ". " + s.name + " (" + Math.round(s.duration) + " s)");
 			}
-			default -> Chat.info("!ac film play [all | 1-8 | name...]  — builds the sets here and plays the explainer (record your screen), or "
+			default -> Chat.info("!ac film play [all | 1-9 | name...]  — builds the sets here and plays the explainer (record your screen), or "
 					+ "!ac film record [60fps] [shots...] to have it saved as a video by itself (exact frame rate; an MP4 with ffmpeg installed, "
 					+ "else PNG frames). !ac film list, !ac film stop. Use a throwaway creative world, stand somewhere open, render distance 16+.");
 		}
@@ -147,21 +140,13 @@ public final class Film {
 		Stage.command("weather clear");
 		restorePauseOnLostFocus = mc.options.pauseOnLostFocus;
 		mc.options.pauseOnLostFocus = false;   // clicking away mustn't pause the take
-		Stage.BUILT.clear();
 		try {
 			for (Shot s : chosen) {
 				BlockPos at = hub.offset(s.offset());
-				Stage.sync(level -> {
-					Stage.recording = true;
-					try {
-						s.build(level, at);
-					} finally {
-						Stage.recording = false;
-					}
-				});
+				Stage.sync(level -> s.build(level, at));
 			}
 		} catch (RuntimeException e) {
-			Chat.warn("Building the sets failed: " + e);
+			report("building the sets", e);
 			restore();
 			return;
 		}
@@ -173,6 +158,7 @@ public final class Film {
 		ticks = 0;
 		loadTicks = 0;
 		shotStart = 0;
+		failed = false;
 		phase = Phase.LOADING;
 		if (recordFps > 0) Recorder.arm(recordFps, musicStart(chosen));
 	}
@@ -199,10 +185,16 @@ public final class Film {
 	}
 
 	private static void stop(@Nullable String message) {
-		if (current != null) current.end();
+		failed = false;
+		Shot s = current;
 		current = null;
-		shots.clear();
 		phase = Phase.IDLE;
+		try {
+			if (s != null) s.end();
+		} catch (RuntimeException e) {
+			report("cleaning up", e);
+		}
+		shots.clear();
 		Recorder.finish();
 		restore();
 		if (message != null) Chat.info(message);
@@ -220,11 +212,36 @@ public final class Film {
 		restoreMode = null;
 	}
 
+	/** Something in the film broke outside a tick (camera, drawing, a puppet): report it, stop at the next tick. */
+	static void fail(String where, Throwable e) {
+		if (failed || phase == Phase.IDLE) return;
+		failed = true;
+		report(where, e);
+	}
+
+	/** In chat: what broke and the first line of ours it went through; the whole trace goes to the game log. */
+	private static void report(String where, Throwable e) {
+		Chat.LOG.error("Film stopped ({})", where, e);
+		StackTraceElement at = null;
+		for (StackTraceElement s : e.getStackTrace()) {
+			if (s.getClassName().startsWith("com.autocraft")) {
+				at = s;
+				break;
+			}
+		}
+		Chat.warn("Film stopped (" + where + "): " + e + (at != null ? " at " + at.getFileName() + ":" + at.getLineNumber() : "")
+				+ ". The full error is in logs/latest.log.");
+	}
+
 	// ---- playback ------------------------------------------------------------------------------------------------
 
 	/** End of every client tick. */
 	public static void clientTick(Minecraft mc) {
 		if (phase == Phase.IDLE) return;
+		if (failed) {
+			stop(null);
+			return;
+		}
 		if (mc.level == null || mc.player == null) {   // left the world mid-film
 			phase = Phase.IDLE;
 			current = null;
@@ -256,7 +273,7 @@ public final class Film {
 				}
 			}
 		} catch (RuntimeException e) {
-			Chat.warn("Film stopped: " + e);
+			report("tick", e);
 			stop(null);
 		}
 	}
@@ -291,12 +308,9 @@ public final class Film {
 		if (s.tag != null) chapter++;
 		current = s;
 		loadTicks = 0;
-		pull = 1;
-		pullTime = -1;
-		lastCam = null;
+		rig.reset();
 		phase = Phase.PLAYING;
 		s.begin(mc.level);
-		s.clearCameraPath();
 	}
 
 	private static double time(float partial) {
@@ -305,87 +319,56 @@ public final class Film {
 
 	public static @Nullable CameraPose camera(float partial) {
 		Shot s = current;
-		if (phase != Phase.PLAYING || s == null || s.cam.isEmpty()) return null;
-		double t = Math.min(s.duration, time(partial));
-		Cam.Pose p = s.cam.at(t);
-		Vec3 pos = clearView(p.pos(), p.look(), t);
-		Cam.Pose q = Cam.pose(pos, p.look(), p.fov());
-		return new CameraPose(pos.x, pos.y, pos.z, q.yaw(), q.pitch(), q.fov());
-	}
-
-	/**
-	 * Keep the camera out of solid blocks: if something solid stands within a few blocks in front of it, between it
-	 * and what it looks at, move it forward to just in front of that (at once), and ease back out once it's clear.
-	 * If the camera itself is inside a block, lift it out.
-	 */
-	private static Vec3 clearView(Vec3 cam, Vec3 look, double t) {
-		ClientLevel level = Minecraft.getInstance().level;
-		if (level == null) return cam;
-		double dt = pullTime < 0 ? 0 : Math.max(0, t - pullTime);
-		pullTime = t;
-		if (lastCam != null && lastCam.distanceTo(cam) > 4) pull = 1;   // a cut: start clear
-		lastCam = cam;
-		Vec3 dir = look.subtract(cam);
-		double len = dir.length();
-		double free = 1;
-		if (len > 0.5) {
-			Vec3 near = cam.add(dir.scale(Math.min(NEAR, len) / len));
-			if (!solidAt(level, near)) {
-				BlockHitResult hit = level.clip(new ClipContext(near, cam, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, CollisionContext.empty()));
-				if (hit.getType() == HitResult.Type.BLOCK) {
-					double span = near.distanceTo(cam);
-					free = Math.max(0, (hit.getLocation().distanceTo(near) - 0.35) / span);
-				}
-			}
-			if (free < pull) pull = free;
-			else pull = Math.min(free, pull + dt * 0.6);
-			cam = near.add(cam.subtract(near).scale(pull));
+		Minecraft mc = Minecraft.getInstance();
+		if (phase != Phase.PLAYING || failed || s == null || s.cam.isEmpty() || mc.level == null) return null;
+		try {
+			double t = Math.min(s.duration, time(partial));
+			Cam.Pose p = s.cam.at(t);
+			Rig.View v = rig.place(mc.level, p.pos(), p.look(), t);
+			Cam.Pose q = Cam.pose(v.pos(), v.look(), p.fov());
+			return new CameraPose(v.pos().x, v.pos().y, v.pos().z, q.yaw(), q.pitch(), q.fov());
+		} catch (RuntimeException e) {
+			fail("camera", e);
+			return null;
 		}
-		for (int i = 0; i < 12 && solidAt(level, cam); i++) cam = cam.add(0, 0.25, 0);
-		return cam;
-	}
-
-	private static boolean solidAt(ClientLevel level, Vec3 p) {
-		BlockPos b = BlockPos.containing(p);
-		var shape = level.getBlockState(b).getCollisionShape(level, b);
-		if (shape.isEmpty()) return false;
-		Vec3 local = p.subtract(b.getX(), b.getY(), b.getZ());
-		return shape.bounds().inflate(0.05).contains(local);
 	}
 
 	/** Level render: the shot's floating graphics. */
 	public static void collect(LevelRenderContext ctx) {
 		Shot s = current;
-		if (phase != Phase.PLAYING || s == null) return;
-		float partial = Minecraft.getInstance().getDeltaTracker().getGameTimeDeltaPartialTick(false);
+		if (phase != Phase.PLAYING || failed || s == null) return;
 		try {
+			float partial = Minecraft.getInstance().getDeltaTracker().getGameTimeDeltaPartialTick(false);
 			Fx fx = new Fx(ctx, partial);
 			double t = time(partial);
 			s.lights(fx, t);
 			s.draw(fx, t);
 		} catch (RuntimeException e) {
-			Chat.warn("Film graphics failed: " + e);
-			stop(null);
+			fail("graphics", e);
 		}
 	}
 
 	/** HUD: the shot's overlays, the chapter tag, the dip to black between shots, or black while loading. */
 	public static void hud(GuiGraphicsExtractor g, DeltaTracker delta) {
-		if (phase == Phase.IDLE) return;
-		FilmHud hud = new FilmHud(g);
-		if (phase == Phase.LOADING) {
-			hud.fade(1);
-			hud.text(Component.literal("Setting up the shot…"), hud.w / 2.0, hud.h - 20, 1, 0x808080, 0.6, false);
-			return;
+		if (phase == Phase.IDLE || failed) return;
+		try {
+			FilmHud hud = new FilmHud(g);
+			if (phase == Phase.LOADING) {
+				hud.fade(1);
+				hud.text(Component.literal("Setting up the shot…"), hud.w / 2.0, hud.h - 20, 1, 0x808080, 0.6, false);
+				return;
+			}
+			Shot s = current;
+			if (s == null) return;
+			double t = time(delta.getGameTimeDeltaPartialTick(false));
+			s.hud(hud, t);
+			if (s.tag != null) hud.tag(chapter, s.tag, Anim.window(t, 0.9, 1.4, 4.2, 4.8));
+			double black = Math.max(1 - Anim.ramp(t, 0, FADE), Anim.ramp(t, s.duration - FADE, s.duration));
+			if (index == 0) black = Math.max(black, 1 - Anim.ramp(t, 0, 1.6));
+			hud.fade(black);
+		} catch (RuntimeException e) {
+			fail("overlay", e);
 		}
-		Shot s = current;
-		if (s == null) return;
-		double t = time(delta.getGameTimeDeltaPartialTick(false));
-		s.hud(hud, t);
-		if (s.tag != null) hud.tag(chapter, s.tag, Anim.window(t, 0.9, 1.4, 4.2, 4.8));
-		double black = Math.max(1 - Anim.ramp(t, 0, FADE), Anim.ramp(t, s.duration - FADE, s.duration));
-		if (index == 0) black = Math.max(black, 1 - Anim.ramp(t, 0, 1.6));
-		hud.fade(black);
 	}
 
 	/** Hide the game's own HUD while a film plays (registered once at startup). */

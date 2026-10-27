@@ -159,7 +159,7 @@ final class PlanShot extends Shot {
 			default -> on(5, 0, -0.8);
 		};
 		particles(ParticleTypes.END_ROD, bot.pos().add(0, 1, 0), 12, 0.8, 0.08);
-		bot.moveTo(p);
+		bot.teleport(p);
 		particles(ParticleTypes.END_ROD, p.add(0, 1, 0), 12, 0.8, 0.08);
 		Vec3 aim = switch (i) {
 			case 0 -> on(0, 1, 0);

@@ -87,9 +87,11 @@ final class SurviveShot extends Shot {
 			creeper.look(bot.eyes());
 			bot.look(creeper.eyes());
 			double jump = Math.sin(Math.PI * Anim.clamp01((t - bar(48.25)) / (CRIT - bar(48.25) + 0.12))) * 0.9;
+			bot.free = t >= bar(48.25) && t < CRIT + 0.15;   // the jump
 			bot.moveTo(work.add(0, Math.max(0, jump), 0));
 		}
 		if (at(t, CRIT)) hit(creeper, true);
+		creeper.free = t >= CRIT;   // knocked through the air
 		if (t >= CRIT && t < POOF) creeper.moveTo(Anim.arc(cStart, kb, Anim.ramp(t, CRIT, POOF - 0.05), 0.4));
 		if (at(t, HIT2)) hit(creeper, false);
 		if (at(t, POOF)) creeper.poof();

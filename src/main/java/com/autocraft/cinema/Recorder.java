@@ -181,6 +181,17 @@ public final class Recorder {
 		}
 	}
 
+	/** The recorder itself threw: stop recording (what's saved is kept), let the film play on, never crash the frame. */
+	public static void broke(Throwable e) {
+		Chat.LOG.error("Film recording failed", e);
+		if (failure == null) failure = "the recorder broke (" + e + ")";
+		captureNow = false;
+		if (driving) {
+			driving = false;
+			closing = true;
+		}
+	}
+
 	/** The film ended or was stopped: hand the clock back; the file is closed once the last frames are saved. */
 	static void finish() {
 		armed = false;

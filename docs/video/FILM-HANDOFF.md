@@ -23,9 +23,24 @@ Done in the last round (untested in game):
   `85046_newgrounds_paragonX9_Chaoz_Fantasy.mp3` in the repo root — **do not commit it**; it goes in the game's
   `autocraft-film/` folder as `music.mp3`.
 - **Camera**: keys can ride on actors (`Shot.on(actor, dx, dy, dz)` suppliers), `Cam.watch` keeps a subject in
-  frame, `Cam.cut` for hard cuts. `Film.clearView` pushes the camera in front of solid blocks within 6 blocks
-  ahead (and out of blocks); `Shot.clearCameraPath()` removes leaves/logs/plants (never blocks the sets placed,
-  tracked in `Stage.BUILT`) along the camera's path before each shot — for filming in forests.
+  frame, `Cam.cut` for hard cuts. Between the scripted move and the screen sits `Rig`: it steadies the move a little
+  (0.1 s), and when the scripted spot is inside a block or something stands between it and the look point it picks
+  the smallest nearby offset that sees clearly (up, in toward the subject, sideways, mixes; current offset kept
+  while it still works) and eases there and back (two 0.22 s stages) — it may pass through a block while easing
+  rather than jump. Nothing in the world is cleared any more (the old foliage clearing and the opening's trunk
+  cutting are gone).
+- **Puppets don't go through blocks** (`Actor.settle`): on their feet they stand on the floor under the scripted spot
+  (a step up to 1.1, down to 1.3; water holds them where scripted), are pushed up out of blocks, and wait at a wall
+  (after 20 ticks they go through anyway to stay with the script). `Actor.free` (jumps, falls, the placer perched on
+  its walls, the pillar) only keeps them out of blocks; `Actor.teleport` skips everything in between (Plan's hops).
+  `Walker` plans walks on real ground (A* over standable cells, straightened); the opening's walk goes round the
+  trees with it, and LootShot uses its cell rules (with sculk to avoid).
+- **Crash-proofing**: every hook the film has in the game (camera mixin, HUD, level drawing, puppet ticks, the
+  recorder's timer and frame hooks) catches what it throws: `Film.fail` puts "Film stopped (where): error at
+  File.java:line" in chat, logs the full trace, and stops the film at the next tick. The user reported a crash
+  in the opening of the previous build; no log was available here, so the cause is unknown — the next run should
+  show it as one of those chat lines instead of a crash (if it still crashes, it's outside our hooks: ask for the
+  crash report from `.minecraft/crash-reports/`).
 - **Travel**: sets further than `Film.FAR` (120) from the hub are teleported to between shots (black loading
   screen; the recorder doesn't capture it). Team (+40, +220) and End (−220, +40) are now far from the other sets;
   Loot goes to the nearest real ancient city.
@@ -45,16 +60,18 @@ Done in the last round (untested in game):
 - Status light: small bobbing/turning pixel cube with a bloom halo (`Fx.pixelCube`, `Shot.lights`).
 
 ## Next steps
-1. Have the user run `!ac film record` (or single shots: `!ac film record nether`) and send the video or the
-   chat errors ("Film stopped:", "Film graphics failed:", "Recording stopped:"). Fix what breaks.
+1. Have the user run `!ac film record` (or single shots: `!ac film record open`) and send the video or the chat
+   lines ("Film stopped (…):", "Recording stopped:"). Fix what breaks — first whatever crashed the opening.
 2. Things most likely to need tuning in game, untested so far:
    - LootShot city survey: route quality, chests with unreachable wool spots, darkness (light block levels),
      the time `findNearestMapStructure` + chunk generation takes (the client freezes while sets build).
    - TeamShot with the user's schematic (`film*.litematic` in `config/autocraft/schematics/`; they downloaded
      `film.litematic`): placer spots, camera drop-ins framing, gatherer timing at the chest.
    - NetherShot geometry/camera; the fall reads fast (15 blocks in one bar).
-   - Camera collision feel (`Film.clearView`: snap in, ease out at 0.6/s) and how much foliage
-     `clearCameraPath` removes in a forest.
+   - Camera feel: `Rig` timings (`EASE`, `STEADY`), the candidate offsets, `SUBJECT` (how close to the look
+     point a block counts as part of the subject); the forest opening is the hardest case.
+   - Puppet collision: waiting at walls / going through after `PATIENCE`, the step and drop limits, shots where a
+     script deliberately moves through blocks and needs `free` or `teleport`.
    - Shot pacing against the music now that shots are much shorter (Plan and Find are 8 bars each).
 3. Update `docs/video/storyboard.md` ("In game" section) to the new cut list and the music, once it plays right.
 

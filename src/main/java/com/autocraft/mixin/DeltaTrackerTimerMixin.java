@@ -22,7 +22,13 @@ abstract class DeltaTrackerTimerMixin {
 
 	@Inject(method = "advanceGameTime", at = @At("HEAD"), cancellable = true)
 	private void autocraft$filmClock(long currentMs, CallbackInfoReturnable<Integer> cir) {
-		Recorder.Step step = Recorder.step();
+		Recorder.Step step;
+		try {
+			step = Recorder.step();
+		} catch (RuntimeException e) {
+			Recorder.broke(e);
+			return;
+		}
 		if (step == null) return;
 		deltaTicks = step.delta();
 		deltaTickResidual = step.residual();

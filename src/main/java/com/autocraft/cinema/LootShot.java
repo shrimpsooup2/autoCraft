@@ -37,7 +37,6 @@ import net.minecraft.world.level.levelgen.structure.Structure;
 import net.minecraft.world.level.levelgen.structure.StructureStart;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
-import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
  * Looting an ancient city, quietly — in the nearest real one (found and travelled to while the screen is black; a
@@ -264,27 +263,15 @@ final class LootShot extends Shot {
 
 	/** Nothing to bump into (and not sculk). */
 	private static boolean open(Level level, BlockPos p) {
-		BlockState s = level.getBlockState(p);
-		return !loud(s) && s.getFluidState().isEmpty() && s.getCollisionShape(level, p).isEmpty();
-	}
-
-	/** The top of what's under feet cell f, or -1 if it can't be stood on (or is sculk). */
-	private static double floor(Level level, BlockPos f) {
-		BlockPos below = f.below();
-		BlockState s = level.getBlockState(below);
-		if (loud(s)) return -1;
-		VoxelShape shape = s.getCollisionShape(level, below);
-		if (shape.isEmpty()) return -1;
-		double top = shape.max(Direction.Axis.Y);
-		return top >= 0.5 ? top : -1;
+		return Walker.open(level, p, LootShot::loud);
 	}
 
 	private static boolean standable(Level level, BlockPos f) {
-		return open(level, f) && open(level, f.above()) && floor(level, f) >= 0;
+		return Walker.standable(level, f, LootShot::loud);
 	}
 
 	private static Vec3 feet(Level level, BlockPos f) {
-		return new Vec3(f.getX() + 0.5, f.getY() - 1 + Math.max(0, floor(level, f)), f.getZ() + 0.5);
+		return Walker.feet(level, f);
 	}
 
 	/** Faint, invisible lights along the way (light blocks) so the camera can see in the dark. */

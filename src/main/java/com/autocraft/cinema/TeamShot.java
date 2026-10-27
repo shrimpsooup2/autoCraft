@@ -321,6 +321,7 @@ final class TeamShot extends Shot {
 		prevStory = s;
 		// the flag
 		if (at(t, bar(BUILD1) + 0.05)) {
+			me.free = false;
 			leaderToPole = new Anim.Track().at(bar(BUILD1) + 0.05, me.pos()).to(Vec3.atBottomCenterOf(pole).add(1.3, 0, -0.9), 12).hold(bar(POLE) + 0.5);
 		}
 		if (leaderToPole != null && t > bar(BUILD1)) {
@@ -356,6 +357,7 @@ final class TeamShot extends Shot {
 		for (; placed < target; placed++) place(ghosts.get(placed).pos(), plan.states.get(placed));
 		if (every(t, bar(BUILD0), bar(BUILD1), 0.1)) Stage.command("time set " + (long) (DAY0 + (DAY1 - DAY0) * Anim.clamp01(s / endStory)));
 		if (t >= bar(BUILD1)) return;
+		me.free = true;   // perched where it can reach the block (on the walls it has built), not dropped to the floor
 		me.moveTo(placerAt(s)).look(currentCell());
 		if (any) me.swing();
 		me.hold(placed < plan.count() ? plan.states.get(Math.min(placed, plan.count() - 1)).getBlock().asItem() : Items.AIR);

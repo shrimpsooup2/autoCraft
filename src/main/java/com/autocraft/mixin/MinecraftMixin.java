@@ -24,6 +24,10 @@ abstract class MinecraftMixin {
 	/** A recording film captures each frame once it's fully drawn, before it goes to the screen. */
 	@Inject(method = "renderFrame", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/GameRenderer;render()V", shift = At.Shift.AFTER))
 	private void autocraft$captureFilmFrame(boolean advanceGameTime, CallbackInfo ci) {
-		Recorder.afterRender();
+		try {
+			Recorder.afterRender();
+		} catch (RuntimeException e) {
+			Recorder.broke(e);
+		}
 	}
 }

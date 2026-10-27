@@ -148,6 +148,7 @@ final class NetherShot extends Shot {
 	@Override
 	void tick(double t) {
 		// the drop: off the ledge, falling ever faster; water poured just before the floor; the landing in it
+		bot.free = t >= STEP_OFF && t < LAND;   // over the edge and down
 		if (t < STEP_OFF) {
 			bot.moveTo(ledge);
 		} else if (t < LAND) {   // over the edge in the first quarter of the fall, then straight down, faster and faster

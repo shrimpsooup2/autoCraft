@@ -32,7 +32,7 @@ final class Puppets {
 
 		@Override
 		public void tick() {
-			if (actor != null) actor.apply(this);
+			Actor.drive(actor, this);
 			super.tick();
 		}
 	}
@@ -51,7 +51,7 @@ final class Puppets {
 
 		@Override
 		public void tick() {
-			if (actor != null) actor.apply(this);
+			Actor.drive(actor, this);
 			super.tick();
 		}
 	}
@@ -70,7 +70,7 @@ final class Puppets {
 
 		@Override
 		public void tick() {
-			if (actor != null) actor.apply(this);
+			Actor.drive(actor, this);
 			super.tick();
 		}
 	}
@@ -89,7 +89,7 @@ final class Puppets {
 
 		@Override
 		public void tick() {
-			if (actor != null) actor.apply(this);
+			Actor.drive(actor, this);
 			super.tick();
 		}
 	}

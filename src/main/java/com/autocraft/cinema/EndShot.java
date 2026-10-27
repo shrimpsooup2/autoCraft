@@ -101,6 +101,7 @@ final class EndShot extends Shot {
 		if (at(t, Logo.landed(LOGO_T0))) logo.place(this);
 		// pillar up: jump, put a block under, land on it
 		if (at(t, PILLAR - 0.3)) bot.hold(Items.COBBLESTONE);
+		bot.free = t >= PILLAR;   // jumping up the pillar, then standing on top of it
 		if (t >= PILLAR && t < top + 0.2) {
 			int k = Math.min(HEIGHT - 1, (int) ((t - PILLAR) / JUMP));
 			double u = Anim.clamp01((t - PILLAR - k * JUMP) / JUMP);
