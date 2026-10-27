@@ -7,8 +7,10 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.DyeColor;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.Vec3;
 
 /**
@@ -41,6 +43,27 @@ final class Logo {
 	/** When the last column lands, for a fly-in starting at t0. */
 	static double landed(double t0) {
 		return t0 + 32 * COLUMN_DELAY + FLIGHT;
+	}
+
+	/** When the fly-in must start for the last column to land at `t`. */
+	static double flyFrom(double t) {
+		return t - (32 * COLUMN_DELAY + FLIGHT);
+	}
+
+	/**
+	 * A centre at least as high as asked and high enough that the logo and the title hanging 27 blocks under it
+	 * clear everything below them (hills, trees) by `clearance` blocks.
+	 */
+	static BlockPos above(Level level, BlockPos centre, Direction toward, int clearance) {
+		Direction right = toward.getCounterClockWise();
+		int top = level.getMinY();
+		for (int col = -18; col <= 18; col += 2) {
+			for (int d = -3; d <= 3; d += 3) {
+				BlockPos p = centre.relative(right, col).relative(toward, d);
+				top = Math.max(top, level.getHeight(Heightmap.Types.MOTION_BLOCKING, p.getX(), p.getZ()));
+			}
+		}
+		return new BlockPos(centre.getX(), Math.max(centre.getY(), top + 28 + clearance), centre.getZ());
 	}
 
 	/** Columns flying in from t0 (drawn as block models until they land and become real blocks). */

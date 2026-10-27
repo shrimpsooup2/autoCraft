@@ -2,6 +2,8 @@ package com.autocraft.cinema;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
@@ -42,12 +44,18 @@ final class Stage {
 		server.execute(() -> server.getCommands().performPrefixedCommand(server.createCommandSourceStack().withSuppressedOutput(), cmd));
 	}
 
+	/** Every block the sets put down this film (packed positions), so clearing the camera's way never touches them. */
+	static final Set<Long> BUILT = ConcurrentHashMap.newKeySet();
+	/** True while a set is being built: its blocks go into {@link #BUILT}. */
+	static volatile boolean recording;
+
 	static void set(ServerLevel level, BlockPos pos, BlockState state) {
 		level.setBlock(pos, state, SET_FLAGS);
+		if (recording) BUILT.add(pos.asLong());
 	}
 
 	static void set(ServerLevel level, int x, int y, int z, BlockState state) {
-		level.setBlock(new BlockPos(x, y, z), state, SET_FLAGS);
+		set(level, new BlockPos(x, y, z), state);
 	}
 
 	static void fill(ServerLevel level, int x0, int y0, int z0, int x1, int y1, int z1, BlockState state) {

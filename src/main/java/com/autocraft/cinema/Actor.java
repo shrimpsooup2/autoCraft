@@ -105,6 +105,14 @@ final class Actor {
 		return this;
 	}
 
+	/** Jump straight there: no frame is drawn of it sliding across (for a cut). */
+	Actor teleport(Vec3 p) {
+		pos = p;
+		entity.setPos(p.x, p.y, p.z);
+		entity.setOldPosAndRot();
+		return this;
+	}
+
 	Actor face(float yawDegrees) {
 		yaw = headYaw = yawDegrees;
 		lookAt = null;

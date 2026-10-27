@@ -1,13 +1,17 @@
 package com.autocraft.cinema;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.function.Supplier;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleOptions;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.LevelEvent;
@@ -18,12 +22,15 @@ import net.minecraft.world.phys.Vec3;
 /**
  * One shot of the film. The server builds its set ({@link #build}); then on the client it spawns its actors and
  * camera keys ({@link #start}), drives them every tick ({@link #tick}) and draws its floating graphics and 2D
- * overlays every frame ({@link #draw}, {@link #hud}). Times are seconds into the shot.
+ * overlays every frame ({@link #draw}, {@link #hud}). Times are seconds into the shot; {@link #bar} turns a bar of
+ * the song ({@link Score}) into a time in this shot, so what happens lands on the music.
  */
 abstract class Shot {
 	final String name;
 	/** Chapter label shown at the start ("Plan", "Find" …), or null. */
 	final String tag;
+	/** Its place in the film (and so in the song). */
+	final int slot;
 	final double duration;
 	/** Minecraft time of day for this shot (0 = sunrise, 6000 = noon, 12000 = sunset, 18000 = midnight). */
 	final long dayTime;
@@ -34,11 +41,17 @@ abstract class Shot {
 	ClientLevel level;
 	private double prev = -1;
 
-	Shot(String name, String tag, double duration, long dayTime) {
+	Shot(String name, String tag, int slot, long dayTime) {
 		this.name = name;
 		this.tag = tag;
-		this.duration = duration;
+		this.slot = slot;
+		this.duration = Score.length(slot);
 		this.dayTime = dayTime;
+	}
+
+	/** The time in this shot of bar b of the song (16.5 = two beats into bar 16). */
+	final double bar(double b) {
+		return Score.bar(b) - Score.start(slot);
 	}
 
 	/** Where this shot's set goes relative to the film's hub (sets stay within render distance of each other). */
@@ -56,6 +69,55 @@ abstract class Shot {
 	abstract void tick(double t);
 
 	void draw(Fx fx, double t) {}
+
+	/** Where an actor is drawn this frame, plus an offset: for camera keys and watches that move with it. */
+	static Supplier<Vec3> on(Actor a, double dx, double dy, double dz) {
+		return () -> a.entity.getPosition(partialTick()).add(dx, dy, dz);
+	}
+
+	static float partialTick() {
+		return Minecraft.getInstance().getDeltaTracker().getGameTimeDeltaPartialTick(false);
+	}
+
+	/**
+	 * Before the shot shows: take away leaves, logs and plants (never the sets' own blocks) where the camera will
+	 * pass and in the few blocks in front of it, so it never flies through a tree or looks through a bush.
+	 */
+	final void clearCameraPath() {
+		if (cam.isEmpty()) return;
+		Set<Long> gone = new HashSet<>();
+		BlockPos.MutableBlockPos m = new BlockPos.MutableBlockPos();
+		for (double t = 0; t <= duration; t += 0.1) {
+			Cam.Pose p = cam.at(t);
+			Vec3 dir = p.look().subtract(p.pos());
+			double len = dir.length();
+			Vec3 ahead = len > 1e-6 ? dir.scale(Math.min(5, len) / len) : Vec3.ZERO;
+			for (int k = 0; k <= 5; k++) {
+				Vec3 c = p.pos().add(ahead.scale(k / 5.0));
+				double r = k == 0 ? 1.7 : 1.0;
+				int ri = (int) Math.ceil(r);
+				for (int x = -ri; x <= ri; x++) {
+					for (int y = -ri; y <= ri; y++) {
+						for (int z = -ri; z <= ri; z++) {
+							m.set(Math.floor(c.x) + x, Math.floor(c.y) + y, Math.floor(c.z) + z);
+							if (Vec3.atCenterOf(m).distanceToSqr(c) > r * r) continue;
+							long key = m.asLong();
+							if (!gone.contains(key) && softNatural(m)) gone.add(key);
+						}
+					}
+				}
+			}
+		}
+		for (long key : gone) place(BlockPos.of(key), Blocks.AIR.defaultBlockState());
+	}
+
+	/** Foliage the camera may clear: leaves, logs and see-through plants that no set put there. */
+	private boolean softNatural(BlockPos p) {
+		if (Stage.BUILT.contains(p.asLong())) return false;
+		BlockState s = level.getBlockState(p);
+		if (s.isAir() || !s.getFluidState().isEmpty() || s.hasBlockEntity()) return false;
+		return s.is(BlockTags.LEAVES) || s.is(BlockTags.LOGS) || s.getCollisionShape(level, p).isEmpty();
+	}
 
 	/**
 	 * The status light over each actor that has one — red idle, green running, amber recovering: a small cube that
@@ -88,9 +150,54 @@ abstract class Shot {
 		start();
 	}
 
+	/**
+	 * The shot's own story clock at film time t (what tick gets, and what {@link #at}/{@link #every} count in): the
+	 * same by default; a shot told faster, slower or in slow motion maps it.
+	 */
+	double clock(double t) {
+		return t;
+	}
+
+	/**
+	 * A story told faster or slower in places: pairs of (bars into the shot, story seconds), straight between them.
+	 * A shot's {@link #clock} can run on one so its moments land on chosen bars.
+	 */
+	static final class Warp {
+		private final double[][] pts;
+
+		Warp(double[][] barsToStory) {
+			this.pts = barsToStory;
+		}
+
+		double story(double filmTime) {
+			return map(filmTime / Score.BAR, 0, 1);
+		}
+
+		/** The film time at which the story reaches `story` seconds. */
+		double film(double story) {
+			return map(story, 1, 0) * Score.BAR;
+		}
+
+		private double map(double v, int from, int to) {
+			if (v <= pts[0][from]) return pts[0][to] + (v - pts[0][from]) * slope(0, from, to);
+			for (int i = 1; i < pts.length; i++) {
+				if (v <= pts[i][from]) {
+					double u = (v - pts[i - 1][from]) / (pts[i][from] - pts[i - 1][from]);
+					return pts[i - 1][to] + (pts[i][to] - pts[i - 1][to]) * u;
+				}
+			}
+			return pts[pts.length - 1][to] + (v - pts[pts.length - 1][from]) * slope(pts.length - 2, from, to);
+		}
+
+		private double slope(int i, int from, int to) {
+			return (pts[i + 1][to] - pts[i][to]) / (pts[i + 1][from] - pts[i][from]);
+		}
+	}
+
 	final void step(double t) {
-		tick(t);
-		prev = t;
+		double c = clock(t);
+		tick(c);
+		prev = c;
 	}
 
 	void end() {

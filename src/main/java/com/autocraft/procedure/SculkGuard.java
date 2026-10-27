@@ -9,6 +9,7 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.entity.EntityTypes;
+import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.ClipBlockStateContext;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.SculkShriekerBlock;
@@ -25,7 +26,7 @@ import org.jspecify.annotations.Nullable;
  * Shrieks are counted (the fourth summons the warden; the count drops by one every ten minutes), and a warden in
  * sight means leave now.
  */
-final class SculkGuard {
+public final class SculkGuard {
 	/** Sculk sensors hear 8 blocks (calibrated ones 16). */
 	private static final int SENSOR_RANGE = 8;
 	private static final int CALIBRATED_RANGE = 16;
@@ -41,21 +42,26 @@ final class SculkGuard {
 		List<BlockPos> out = new ArrayList<>();
 		ClientLevel level = bot.level();
 		for (BlockPos s : bot.scanner().findBlocks(st -> st.is(Blocks.SCULK_SENSOR) || st.is(Blocks.CALIBRATED_SCULK_SENSOR), 2, 256)) {
-			int range = level.getBlockState(s).is(Blocks.CALIBRATED_SCULK_SENSOR) ? CALIBRATED_RANGE : SENSOR_RANGE;
+			int range = range(level.getBlockState(s));
 			if (s.distSqr(source) > (double) range * range) continue;
 			if (!occluded(level, source, s)) out.add(s.immutable());
 		}
 		return out;
 	}
 
+	/** How far a sculk sensor hears. */
+	public static int range(BlockState sensor) {
+		return sensor.is(Blocks.CALIBRATED_SCULK_SENSOR) ? CALIBRATED_RANGE : SENSOR_RANGE;
+	}
+
 	/** True when a wool block sits on the line between the two blocks (as the game checks it). */
-	static boolean occluded(ClientLevel level, BlockPos from, BlockPos to) {
+	public static boolean occluded(BlockGetter level, BlockPos from, BlockPos to) {
 		Vec3 a = Vec3.atCenterOf(from), b = Vec3.atCenterOf(to);
 		return level.isBlockInLine(new ClipBlockStateContext(a, b, s -> s.is(BlockTags.OCCLUDES_VIBRATION_SIGNALS))).getType() == HitResult.Type.BLOCK;
 	}
 
 	/** Empty cells on the line from {@code source} to {@code sensor} (nearest the source first) where wool would block the vibration. */
-	static List<BlockPos> woolSpots(ClientLevel level, BlockPos source, BlockPos sensor) {
+	public static List<BlockPos> woolSpots(BlockGetter level, BlockPos source, BlockPos sensor) {
 		List<BlockPos> out = new ArrayList<>();
 		Vec3 a = Vec3.atCenterOf(source), b = Vec3.atCenterOf(sensor);
 		for (double t = 0.05; t < 1; t += 0.05) {

@@ -27,8 +27,8 @@ final class PickShot extends Shot {
 	private static final double TS = 0.0073;
 	private static final int CYAN = 0x39D0FF, AMBER = 0xFFBF3C, GREEN = 0x5EE36A;
 	private static final String SEARCH = "diamond", COMMAND = "!ac collect diamond 32";
-	private static final double KEY = 1.8, OPEN = 2.2, TYPE = 3.6, AMOUNT = 5.4, ADD = 6.3, UNFOLD = 7.4, RUN = 11.6, FOLD = 12.6, GO = 13.6;
-	private static final double ROW_GAP = 0.36;
+	/** Each row of the plan unfolds on the next beat. */
+	private static final double ROW_GAP = Score.BEAT;
 	/** Panel columns (u): tasks from LEFT, items from MID to RIGHT. */
 	private static final double LEFT = 0.03, MID = 0.60, RIGHT = 0.975;
 	private static final double ROW0 = 0.76, ROW_STEP = 0.058;
@@ -46,8 +46,11 @@ final class PickShot extends Shot {
 			Items.DIAMOND, Items.BREAD, Items.TORCH, Items.FURNACE, Items.CHEST, Items.GLASS, Items.BRICKS, Items.IRON_PICKAXE,
 			Items.WHEAT, Items.SAND, Items.COAL, Items.WOOL.pick(DyeColor.RED), Items.CRAFTING_TABLE);
 	private static final List<Item> FOUND = List.of(Items.DIAMOND, Items.DIAMOND_ORE, Items.DEEPSLATE_DIAMOND_ORE, Items.DIAMOND_PICKAXE);
+	/** On the music (bars of the song): K, the panel, the search box, typing, the amount, adding, the plan, Run all, folding, off it goes. */
+	private final double KEY = bar(19), OPEN = bar(19.25), SEARCH_TAP = bar(20), TYPE = bar(20.25), AMOUNT_TAP = bar(21.5), AMOUNT = bar(21.75),
+			ADD = bar(22.25), UNFOLD = bar(23), RUN = bar(26), FOLD = bar(26.5), GO = bar(27), CHAT = bar(28);
 	/** Where the finger taps (time, panel u, panel v): the search box, the amount, the diamond, the task's plan, Run all. */
-	private static final double[][] TAPS = {{3.3, 0.73, 0.8175}, {AMOUNT - 0.2, 0.92, 0.8175}, {ADD, MID + SLOT_W / 2, GRID_TOP - SLOT_H / 2},
+	private final double[][] TAPS = {{SEARCH_TAP, 0.73, 0.8175}, {AMOUNT_TAP, 0.92, 0.8175}, {ADD, MID + SLOT_W / 2, GRID_TOP - SLOT_H / 2},
 			{UNFOLD, LEFT + 0.01, ROW0}, {RUN, 0.69, 0.0775}};
 
 	private Actor me;
@@ -58,7 +61,7 @@ final class PickShot extends Shot {
 	private Anim.Track walk;
 
 	PickShot() {
-		super("Pick", "Pick", 22, 1000);
+		super("Pick", "Pick", 1, 1000);
 	}
 
 	@Override
@@ -88,8 +91,9 @@ final class PickShot extends Shot {
 		cam.key(0, shoulder.add(0, 0.12, -0.5), screen.add(0, -0.1, 0), 42)
 				.key(FOLD - 1.0, shoulder.add(0, 0, 0.2), screen, 40)
 				.key(FOLD + 0.6, eye.add(-1.6, 0.9, -3.4), p.add(0.6, 1.2, 2.0), 50)   // back off round the bot, not through it
-				.key(16.0, p.add(-1.0, 3.2, -3.5), v(3.6, 1.0, 7.6), 56)                // and follow it walking off
+				.key(GO + 2.7, p.add(-1.0, 3.2, -3.5), v(3.6, 1.0, 7.6), 56)             // and follow it walking off
 				.key(duration, p.add(-3.5, 4.2, -3.0), walk.last().add(0, 1.0, 0), 58);
+		cam.watch(on(me, 0, 1.0, 0), GO, duration, 0.7);
 	}
 
 	@Override
@@ -114,7 +118,7 @@ final class PickShot extends Shot {
 	}
 
 	/** Panel scale: unfolds at OPEN, folds at FOLD. */
-	private static double scale(double t) {
+	private double scale(double t) {
 		return Anim.ramp(t, OPEN, OPEN + 0.7) * (1 - Anim.ramp(t, FOLD, FOLD + 0.55));
 	}
 
@@ -170,12 +174,12 @@ final class PickShot extends Shot {
 			}
 		}
 		// right: search, amount, the item grid
-		int typed = t < TYPE ? 0 : Math.min(SEARCH.length(), (int) ((t - TYPE) / 0.17) + 1);
-		box(fx, MID, 0.79, 0.86, 0.845, t >= 3.3 && t < AMOUNT - 0.2 ? 120 : 50, c);
+		int typed = t < TYPE ? 0 : Math.min(SEARCH.length(), (int) ((t - TYPE) / (Score.BEAT / 2)) + 1);
+		box(fx, MID, 0.79, 0.86, 0.845, t >= SEARCH_TAP && t < AMOUNT_TAP ? 120 : 50, c);
 		boolean caret = ((int) (t * 3)) % 2 == 0 && t < AMOUNT;
 		text(fx, MID + 0.01, 0.8175, typed == 0 ? "Search items..." : SEARCH.substring(0, typed) + (caret ? "_" : ""), typed == 0 ? dim : white, 0.95, 0);
-		box(fx, 0.87, 0.79, RIGHT, 0.845, t >= AMOUNT - 0.2 && t < ADD ? 120 : 50, c);
-		text(fx, (0.87 + RIGHT) / 2, 0.8175, t >= AMOUNT + 0.3 ? "32" : t >= AMOUNT ? "3" : "64", white, 0.95, 1);
+		box(fx, 0.87, 0.79, RIGHT, 0.845, t >= AMOUNT_TAP && t < ADD ? 120 : 50, c);
+		text(fx, (0.87 + RIGHT) / 2, 0.8175, t >= AMOUNT + Score.BEAT ? "32" : t >= AMOUNT ? "3" : "64", white, 0.95, 1);
 		text(fx, MID, 0.755, "Adds new top-level tasks", dim, 0.75, 0);
 		List<Item> items = typed >= 3 ? FOUND : ALL;
 		for (int i = 0; i < 18; i++) {
@@ -263,7 +267,7 @@ final class PickShot extends Shot {
 		double k = Anim.window(t, KEY - 0.6, KEY - 0.3, OPEN + 0.6, OPEN + 1.0);
 		double press = Anim.window(t, KEY - 0.05, KEY, KEY + 0.1, KEY + 0.2);
 		hud.keycap("K", 34, hud.h - 40, 2.2f, press, k);
-		double typing = t - (GO + 1.6);
+		double typing = t - CHAT;
 		int n = typing < 0 ? 0 : Math.min(COMMAND.length(), (int) (typing / 0.06));
 		double typed = COMMAND.length() * 0.06;
 		if (typing > 0 && n < COMMAND.length()) hud.chatInput(COMMAND.substring(0, n), true, 1);

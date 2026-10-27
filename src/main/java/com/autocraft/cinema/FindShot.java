@@ -42,8 +42,10 @@ final class FindShot extends Shot {
 	private double mineAt;
 	private boolean xrayOn;
 
+	private Warp warp;
+
 	FindShot() {
-		super("Find", "Find", 23, 4000);
+		super("Find", "Find", 3, 4000);
 	}
 
 	@Override
@@ -217,14 +219,23 @@ final class FindShot extends Shot {
 			stepTimes.add(t);
 		}
 		mineAt = t + 0.3;
+		// on the music: x-ray on the beat, the search, the route, the walk, the diamond out on bar 47
+		warp = new Warp(new double[][] {{0, 1.4}, {0.25, XRAY_ON}, {1, SEARCH}, {2, PATH}, {3, WALK}, {6.75, mineAt}, {7.25, mineAt + 1.2},
+			{8, mineAt + 1.2 + 2.6}});
 		Vec3 c = v(0, 4, -26);
 		Vec3 end = Vec3.atCenterOf(target);
 		cam.key(0, v(-3, 8, -27), v(-2, 3, 2), 60)
-				.key(SEARCH, v(-1, 7, -25), v(-0.5, 2.5, 2))
-				.key(WALK, c.add(0, 3.5, 0), v(0, 2.5, 2))
-				.key((WALK + mineAt) / 2, v(1, 5.5, -14), v(2, 2.5, 1))
-				.key(mineAt, end.add(-2.4, 2.3, -7.5), end.add(-0.8, 0, 0), 58)
+				.key(warp.film(SEARCH), v(-1, 7, -25), v(-0.5, 2.5, 2))
+				.key(warp.film(WALK), c.add(0, 3.5, 0), v(0, 2.5, 2))
+				.key(warp.film((WALK + mineAt) / 2), v(1, 5.5, -14), v(2, 2.5, 1))
+				.key(warp.film(mineAt), end.add(-2.4, 2.3, -7.5), end.add(-0.8, 0, 0), 58)
 				.key(duration, end.add(-1.9, 2.0, -6.5), end.add(-0.7, 0, 0));
+		cam.watch(on(bot, 0, 1.0, 0), warp.film(WALK), warp.film(mineAt), 0.6);
+	}
+
+	@Override
+	double clock(double t) {
+		return warp == null ? t : warp.story(t);
 	}
 
 	private Vec3 foot(int[] cell) {
@@ -286,6 +297,7 @@ final class FindShot extends Shot {
 
 	@Override
 	void draw(Fx fx, double t) {
+		t = clock(t);
 		boolean xr = t >= XRAY_ON && t < XRAY_OFF;
 		Vec3 bp = bot.entity.getPosition(fx.partial);
 		// scan pulses spreading from the bot

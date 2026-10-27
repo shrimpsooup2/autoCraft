@@ -53,6 +53,11 @@ final class FilmHud {
 		if (alpha > 0.002) g.fill(0, 0, w, h, argb(alpha, 0x000000));
 	}
 
+	/** The whole screen washed with a colour (a portal's purple). */
+	void tint(int rgb, double alpha) {
+		if (alpha > 0.002) g.fill(0, 0, w, h, argb(alpha, rgb));
+	}
+
 	/** Text at a scale, its centre at (cx, cy) in GUI units. */
 	void text(Component text, double cx, double cy, float scale, int rgb, double alpha, boolean shadow) {
 		if (alpha <= 0.01) return;

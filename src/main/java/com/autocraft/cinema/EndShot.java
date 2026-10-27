@@ -21,7 +21,9 @@ import net.minecraft.world.phys.Vec3;
  */
 final class EndShot extends Shot {
 	private static final int GREEN = 0x5EE36A;
-	private static final double OPEN = 5.0, CLOSE = 8.6, LOGO_T0 = 10.0, PILLAR = 15.6, JUMP = 0.55, LOOK = 19.2, OFF = 21.0;
+	/** On the music: the lid, diamonds, the logo landing on bar 85, a block a beat up the pillar, the logoff on the last hit (bar 88). */
+	private final double OPEN = bar(81.5), CLOSE = bar(83), LOGO_T0 = Logo.flyFrom(bar(85)), PILLAR = bar(85.25), JUMP = Score.BEAT, LOOK = bar(87),
+			OFF = bar(88);
 	private static final int HEIGHT = 6;
 
 	private Blueprint plan;
@@ -32,12 +34,12 @@ final class EndShot extends Shot {
 	private Logo logo;
 
 	EndShot() {
-		super("End", null, 30, 12300);
+		super("End", null, 8, 12300);
 	}
 
 	@Override
 	BlockPos offset() {
-		return new BlockPos(-55, 0, 55);
+		return new BlockPos(-220, 0, 40);   // its own base, well away from everything else
 	}
 
 	@Override
@@ -61,18 +63,21 @@ final class EndShot extends Shot {
 		chest = b(1, 0, yard);
 		pillar = b(-3, 0, yard + 2);
 		Vec3 stand = v(0.5, 0, yard + 0.5), q = Vec3.atBottomCenterOf(pillar);
-		walk = new Anim.Track().at(1.6, v(-7.5, 0, yard + 3.5)).to(stand, 2.6).hold(CLOSE + 0.4).to(q, 2.4);
+		walk = new Anim.Track().at(0, v(-1.5, 0, yard + 1.5)).to(stand, 3).hold(CLOSE + 0.4).to(q, 3);
 		bot = add(Actor.me(level, walk.pos(0), -90));
 		bot.light = GREEN;
-		logo = new Logo(new BlockPos(origin.getX() - 70, origin.getY() + 32, origin.getZ() + yard), Direction.EAST);
+		logo = new Logo(Logo.above(level, new BlockPos(origin.getX() - 70, origin.getY() + 32, origin.getZ() + yard), Direction.EAST, 6), Direction.EAST);
 		Vec3 sky = Vec3.atCenterOf(logo.centre);
-		Vec3 c = q.add(6.5, 5.5, 3.5), aim = q.add(-30, 14, 0);
-		cam.key(0, v(9, 4.5, yard + 10), v(-2, 2.5, yard - 4), 62)
-				.key(OPEN - 0.2, v(3.8, 2.4, yard + 3.8), v(0.8, 0.9, yard + 0.5), 56)
-				.key(CLOSE, v(3.4, 2.6, yard + 3.2), v(0.8, 1.6, yard + 0.5))
-				.key(12.0, v(4, 22, yard + 8), sky.add(0, -6, 0), 64)
-				.key(14.4, v(2, 25, yard + 6), sky.add(0, -8, 0))
-				.key(PILLAR + 0.2, c, aim, 62)
+		double up = sky.y - origin.getY();
+		Vec3 c = q.add(6.5, 5.5, 3.5);
+		// from up here both the bot on its pillar and the logo behind it are in the picture
+		Vec3 aimDir = sky.subtract(c).normalize().scale(0.62).add(q.add(0, HEIGHT + 0.5, 0).subtract(c).normalize().scale(0.38)).normalize();
+		Vec3 aim = c.add(aimDir.scale(30));
+		cam.key(0, v(4.6, 2.8, yard + 4.8), v(0.8, 1.2, yard + 0.5), 58)
+				.key(CLOSE, v(3.4, 2.6, yard + 3.2), v(0.8, 1.6, yard + 0.5), 56)
+				.key(bar(84.2), v(4, up - 10, yard + 8), sky.add(0, -6, 0), 64)
+				.key(bar(85.1), v(2, up - 7, yard + 6), sky.add(0, -8, 0))
+				.key(PILLAR + 0.4, c, aim, 62)
 				.key(OFF + 1.0, c.add(-1.0, 0.3, -0.5), aim)
 				.key(duration, c.add(-1.6, 0.6, -0.9), aim.add(0, 1, 0));
 	}
@@ -159,7 +164,8 @@ final class EndShot extends Shot {
 		double[] times = {OPEN + 1.2, OFF - 0.2, OFF + 0.4};
 		hud.chat(FilmHud.upTo(t, times, lines), Anim.window(t, OPEN + 1.0, OPEN + 1.2, duration - 4, duration - 3));
 		hud.title("Press K in game", 0.76, 2.0f, 0xFFFFFF, Anim.ramp(t, OFF + 1.6, OFF + 2.6));
-		hud.title("github.com/shrimpsooup2/autoCraft", 0.84, 1.2f, 0xD8DEE6, Anim.ramp(t, OFF + 2.2, OFF + 3.2));
+		hud.title("modrinth.com/mod/autoCraft_", 0.84, 1.2f, 0xD8DEE6, Anim.ramp(t, OFF + 2.2, OFF + 3.2));
+		hud.title(Score.CREDIT, 0.92, 0.8f, 0xAAB2BC, Anim.ramp(t, OFF + 2.8, OFF + 3.8));
 		hud.fade(Anim.ramp(t, duration - 2.2, duration));
 	}
 }

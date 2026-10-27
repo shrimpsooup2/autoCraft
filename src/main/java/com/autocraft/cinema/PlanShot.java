@@ -33,8 +33,17 @@ final class PlanShot extends Shot {
 
 	private Actor bot;
 
+	/** Its story (seconds) against bars into the shot: each island's step ends on the music, the diamonds by the last bar. */
+	private static final Warp WARP = new Warp(new double[][] {{0, 0}, {0.5, 1.5}, {1.75, 5.5}, {3, 9.5}, {4.25, 13.5}, {5.25, 17}, {6.5, 21},
+		{7.8, 25.5}, {8, 27}});
+
 	PlanShot() {
-		super("Plan", "Plan", 27, 2000);
+		super("Plan", "Plan", 2, 2000);
+	}
+
+	@Override
+	double clock(double t) {
+		return WARP.story(t);
 	}
 
 	@Override
@@ -85,9 +94,10 @@ final class PlanShot extends Shot {
 		cam.key(0, v(-4, 2.5, -15), v(-3.5, 1.0, 0.5), 62);
 		for (double[] is : ISLANDS) {
 			double mid = (is[2] + is[3]) / 2;
-			cam.key(mid, v(is[0] * 0.32, is[1] + 3.0, -13.2), v(is[0] * 0.52, is[1] + 1.8, 0.5));
+			cam.key(WARP.film(mid), v(is[0] * 0.32, is[1] + 3.0, -13.2), v(is[0] * 0.52, is[1] + 1.8, 0.5));
 		}
 		cam.key(duration, v(0, 22, -58), top.add(0, 0, 0), 60);
+		cam.watch(on(bot, 0, 1.0, 0), 0, WARP.film(25.5), 0.35);
 	}
 
 	@Override
@@ -177,6 +187,7 @@ final class PlanShot extends Shot {
 
 	@Override
 	void draw(Fx fx, double t) {
+		t = clock(t);
 		for (int i = 0; i < NODES.length; i++) {
 			Vec3 n = node(i);
 			boolean done = t >= DONE[i];

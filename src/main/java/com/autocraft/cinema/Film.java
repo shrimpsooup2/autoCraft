@@ -10,38 +10,58 @@ import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.GameType;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.CollisionContext;
 import org.jspecify.annotations.Nullable;
 
 /**
  * The director: `!ac film` plays the explainer as a film in this singleplayer world, with whatever shader pack is
- * on. It builds every shot's set near you (all within render distance, so cuts are instant), then plays the shots
- * back to back — puppets, camera moves, floating graphics, titles — with a dip to black between shots. Record the
- * screen while it plays; what you get is the finished cut.
+ * on. It builds every shot's set near you (all within render distance, so cuts are instant; a shot set somewhere
+ * far, like a real ancient city, is travelled to while the screen is black), then plays the shots back to back —
+ * puppets, camera moves, floating graphics, titles — with a dip to black between shots. The camera never goes
+ * through blocks: leaves, logs and plants in its way are cleared before a shot, and solid blocks push it in.
  */
 public final class Film {
 	public record CameraPose(double x, double y, double z, float yaw, float pitch, float fov) {}
 
 	private enum Phase { IDLE, LOADING, PLAYING }
 
-	static final double FADE = 0.8;
+	/** The dip to black at each cut, out and back in (short: the cuts fall on the beat). */
+	static final double FADE = 0.3;
 	private static final int LOAD_MIN_TICKS = 60;
 	private static final int LOAD_MAX_TICKS = 20 * 40;
+	/** A shot whose set is further than this from the hub is travelled to (the hub's chunks wouldn't reach it). */
+	private static final double FAR = 120;
+	/** How far in front of the camera solid blocks are looked for. */
+	private static final double NEAR = 6;
 
 	private static Phase phase = Phase.IDLE;
 	private static final List<Shot> shots = new ArrayList<>();
 	private static int index;
 	private static @Nullable Shot current;
-	private static int tick;
+	/** Client ticks of film shown (only while a shot plays: travelling doesn't count), and while loading. */
+	private static int ticks;
+	private static int loadTicks;
+	/** Where the current shot starts on the film's clock (seconds): the cuts stay on the music, never drift. */
+	private static double shotStart;
 	private static int chapter;
+	private static BlockPos hub = BlockPos.ZERO;
 	private static @Nullable Vec3 restorePos;
 	private static @Nullable GameType restoreMode;
 	private static @Nullable Boolean restorePauseOnLostFocus;
+	/** Camera collision: the fraction of the way out it's allowed, and when that was worked out (film time). */
+	private static double pull = 1;
+	private static double pullTime = -1;
+	private static @Nullable Vec3 lastCam;
 
 	private Film() {}
 
@@ -49,10 +69,15 @@ public final class Film {
 		return phase != Phase.IDLE;
 	}
 
+	/** A shot is on screen (not idle, not loading). */
+	static boolean playing() {
+		return phase == Phase.PLAYING;
+	}
+
 	/** All shots, in order. */
 	static List<Shot> all() {
-		return List.of(new OpenShot(), new PickShot(), new PlanShot(), new FindShot(), new SurviveShot(), new LootShot(), new TeamShot(),
-				new EndShot());
+		return List.of(new OpenShot(), new PickShot(), new PlanShot(), new FindShot(), new SurviveShot(), new NetherShot(), new LootShot(),
+				new TeamShot(), new EndShot());
 	}
 
 	// ---- command -------------------------------------------------------------------------------------------------
@@ -111,7 +136,7 @@ public final class Film {
 		restorePos = player.position();
 		restoreMode = mc.gameMode != null ? mc.gameMode.getPlayerMode() : GameType.CREATIVE;
 		String name = player.getGameProfile().name();
-		BlockPos hub = player.blockPosition();
+		hub = player.blockPosition();
 		Chat.info("Building " + chosen.size() + " set(s)…");
 		Stage.command("gamemode spectator " + name);
 		Stage.command("difficulty peaceful");
@@ -122,10 +147,18 @@ public final class Film {
 		Stage.command("weather clear");
 		restorePauseOnLostFocus = mc.options.pauseOnLostFocus;
 		mc.options.pauseOnLostFocus = false;   // clicking away mustn't pause the take
+		Stage.BUILT.clear();
 		try {
 			for (Shot s : chosen) {
 				BlockPos at = hub.offset(s.offset());
-				Stage.sync(level -> s.build(level, at));
+				Stage.sync(level -> {
+					Stage.recording = true;
+					try {
+						s.build(level, at);
+					} finally {
+						Stage.recording = false;
+					}
+				});
 			}
 		} catch (RuntimeException e) {
 			Chat.warn("Building the sets failed: " + e);
@@ -137,9 +170,19 @@ public final class Film {
 		shots.addAll(chosen);
 		index = 0;
 		chapter = 0;
-		tick = 0;
+		ticks = 0;
+		loadTicks = 0;
+		shotStart = 0;
 		phase = Phase.LOADING;
-		if (recordFps > 0) Recorder.arm(recordFps);
+		if (recordFps > 0) Recorder.arm(recordFps, musicStart(chosen));
+	}
+
+	/** Where in the song a recording of these shots starts, or -1 when they aren't one unbroken stretch of the film. */
+	private static double musicStart(List<Shot> chosen) {
+		for (int i = 1; i < chosen.size(); i++) {
+			if (chosen.get(i).slot != chosen.get(i - 1).slot + 1) return -1;
+		}
+		return Score.start(chosen.getFirst().slot);
 	}
 
 	private static List<Shot> pick(String[] args) {
@@ -190,23 +233,26 @@ public final class Film {
 			restore();
 			return;
 		}
-		tick++;
 		try {
 			if (phase == Phase.LOADING) {
-				if (tick >= LOAD_MAX_TICKS || tick >= LOAD_MIN_TICKS && mc.levelRenderer.hasRenderedAllSections()) startShot(mc);
+				loadTicks++;
+				if (loadTicks >= LOAD_MAX_TICKS || loadTicks >= LOAD_MIN_TICKS && mc.levelRenderer.hasRenderedAllSections()) beginShot(mc);
 				return;
 			}
+			ticks++;
 			Shot s = current;
 			if (s == null) return;
-			double t = tick / 20.0;
+			double t = ticks / 20.0 - shotStart;
 			s.step(t);
 			if (t >= s.duration) {
+				shotStart += s.duration;
 				s.end();
+				current = null;
 				index++;
 				if (index >= shots.size()) {
 					stop("That's a wrap.");
 				} else {
-					startShot(mc);
+					nextShot(mc);
 				}
 			}
 		} catch (RuntimeException e) {
@@ -215,26 +261,96 @@ public final class Film {
 		}
 	}
 
-	private static void startShot(Minecraft mc) {
-		Recorder.begin(mc);   // no-op unless recording; from the first shot on, the clock runs by frames
+	/** Where the camera's player waits during a shot: over the hub, or at the shot itself when it's far away. */
+	private static Vec3 home(Shot s) {
+		Vec3 o = Vec3.atCenterOf(s.origin);
+		boolean far = Math.hypot(o.x - hub.getX(), o.z - hub.getZ()) > FAR;
+		return far ? o.add(0, 2, 0) : new Vec3(hub.getX() + 0.5, hub.getY() + 24, hub.getZ() + 0.5);
+	}
+
+	/** Between shots: go straight on, or travel to the next set and wait (black) for it to be drawn. */
+	private static void nextShot(Minecraft mc) {
+		Vec3 home = home(shots.get(index));
+		if (mc.player != null && mc.player.position().distanceTo(home) > 32) {
+			Stage.command("tp " + mc.player.getGameProfile().name() + " " + home.x + " " + home.y + " " + home.z);
+			loadTicks = 0;
+			phase = Phase.LOADING;
+			return;
+		}
+		beginShot(mc);
+	}
+
+	private static void beginShot(Minecraft mc) {
 		Shot s = shots.get(index);
+		if (phase == Phase.LOADING && mc.player != null && mc.player.position().distanceTo(home(s)) > 32) {   // the first shot may be far too
+			nextShot(mc);
+			return;
+		}
+		Recorder.begin(mc);   // no-op unless recording; from the first shot on, the clock runs by frames
 		Stage.command("time set " + s.dayTime);
 		if (s.tag != null) chapter++;
 		current = s;
-		tick = 0;
+		loadTicks = 0;
+		pull = 1;
+		pullTime = -1;
+		lastCam = null;
 		phase = Phase.PLAYING;
 		s.begin(mc.level);
+		s.clearCameraPath();
 	}
 
 	private static double time(float partial) {
-		return (tick + partial) / 20.0;
+		return (ticks + partial) / 20.0 - shotStart;
 	}
 
 	public static @Nullable CameraPose camera(float partial) {
 		Shot s = current;
 		if (phase != Phase.PLAYING || s == null || s.cam.isEmpty()) return null;
-		Cam.Pose p = s.cam.at(Math.min(s.duration, time(partial)));
-		return new CameraPose(p.pos().x, p.pos().y, p.pos().z, p.yaw(), p.pitch(), p.fov());
+		double t = Math.min(s.duration, time(partial));
+		Cam.Pose p = s.cam.at(t);
+		Vec3 pos = clearView(p.pos(), p.look(), t);
+		Cam.Pose q = Cam.pose(pos, p.look(), p.fov());
+		return new CameraPose(pos.x, pos.y, pos.z, q.yaw(), q.pitch(), q.fov());
+	}
+
+	/**
+	 * Keep the camera out of solid blocks: if something solid stands within a few blocks in front of it, between it
+	 * and what it looks at, move it forward to just in front of that (at once), and ease back out once it's clear.
+	 * If the camera itself is inside a block, lift it out.
+	 */
+	private static Vec3 clearView(Vec3 cam, Vec3 look, double t) {
+		ClientLevel level = Minecraft.getInstance().level;
+		if (level == null) return cam;
+		double dt = pullTime < 0 ? 0 : Math.max(0, t - pullTime);
+		pullTime = t;
+		if (lastCam != null && lastCam.distanceTo(cam) > 4) pull = 1;   // a cut: start clear
+		lastCam = cam;
+		Vec3 dir = look.subtract(cam);
+		double len = dir.length();
+		double free = 1;
+		if (len > 0.5) {
+			Vec3 near = cam.add(dir.scale(Math.min(NEAR, len) / len));
+			if (!solidAt(level, near)) {
+				BlockHitResult hit = level.clip(new ClipContext(near, cam, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, CollisionContext.empty()));
+				if (hit.getType() == HitResult.Type.BLOCK) {
+					double span = near.distanceTo(cam);
+					free = Math.max(0, (hit.getLocation().distanceTo(near) - 0.35) / span);
+				}
+			}
+			if (free < pull) pull = free;
+			else pull = Math.min(free, pull + dt * 0.6);
+			cam = near.add(cam.subtract(near).scale(pull));
+		}
+		for (int i = 0; i < 12 && solidAt(level, cam); i++) cam = cam.add(0, 0.25, 0);
+		return cam;
+	}
+
+	private static boolean solidAt(ClientLevel level, Vec3 p) {
+		BlockPos b = BlockPos.containing(p);
+		var shape = level.getBlockState(b).getCollisionShape(level, b);
+		if (shape.isEmpty()) return false;
+		Vec3 local = p.subtract(b.getX(), b.getY(), b.getZ());
+		return shape.bounds().inflate(0.05).contains(local);
 	}
 
 	/** Level render: the shot's floating graphics. */
