@@ -60,6 +60,15 @@ Done in the last round (untested in game):
 - Status light: small bobbing/turning pixel cube with a bloom halo (`Fx.pixelCube`, `Shot.lights`).
 
 ## Done from the last list (this round, still untested in game)
+- **Crash at the opening logo: "Missing elements in vertex"** (the user's report). Hand-written vertices only set
+  the elements of the vanilla format (block: position, colour, UV0, light). A shader pack (Iris) widens the block
+  format with a normal and more, so the first block geometry the film draws, the logo flying in, left elements
+  unwritten. `BufferBuilder` only checks when the *next* vertex starts or the buffer is built, in vanilla code, so
+  it can't be caught where it's written. Every hand-written vertex now goes through the all-elements
+  `addVertex(x, y, z, colour, u, v, overlay, light, nx, ny, nz)` (`Fx.vertex`, and `GhostRenderer`, the mod's own
+  schematic overlay, which had the same bug); elements a format lacks are skipped. [Inferred from the message and
+  the vanilla code: not reproduced here.] Deferred draw callbacks also report errors through `Film.fail` now, the
+  logo's fly-in is one batch, and `latest.log` has a trail ("Film: starting …", "Film: <shot> at <t> s").
 - **The user's `film.litematic` never loaded**: it's plain (uncompressed) NBT, and the loader only read gzip, so the
   film fell back to the cottage. `SchematicLoader` now reads both. It is not the modern house: 51×42×57, 25,922
   blocks, 501 block states (spruce, bamboo, beehives, its own dirt and grass base). Checked offline with a Python
@@ -73,7 +82,8 @@ Done in the last round (untested in game):
 
 ## Next steps
 1. Have the user run `!ac film record` (or single shots: `!ac film record open`) and send the video or the chat
-   lines ("Film stopped (…):", "Recording stopped:"). Fix what breaks — first whatever crashed the opening.
+   lines ("Film stopped (…):", "Recording stopped:"). If it still crashes, the end of `logs/latest.log` (the
+   "Film:" trail and the stack trace) says where.
 2. Things to judge on the user's video, then tune:
    - LootShot in the real city: route, wool spots, darkness (light block levels).
    - TeamShot with the 25,922-block build: frame rate of the ghost (all remaining blocks are drawn every frame;

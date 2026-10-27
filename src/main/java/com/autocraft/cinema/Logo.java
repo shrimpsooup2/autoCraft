@@ -70,14 +70,15 @@ final class Logo {
 	void draw(Fx fx, double t, double t0) {
 		if (placed || t < t0) return;
 		Vec3 from = Vec3.atLowerCornerOf(toward.getUnitVec3i()).scale(9).add(0, -14, 0);
+		List<Fx.Flying> flying = new ArrayList<>(blocks.size());
 		for (int i = 0; i < blocks.size(); i++) {
 			double s = t0 + cols.get(i) * COLUMN_DELAY;
 			if (t < s) continue;
 			double u = Anim.clamp01((t - s) / FLIGHT);
 			double e = 1 - Math.pow(1 - u, 3);
-			Vec3 p = Vec3.atLowerCornerOf(blocks.get(i)).add(from.scale(1 - e));
-			fx.ghost(p, states.get(i), 255, 0.4 + 0.6 * e);
+			flying.add(new Fx.Flying(Vec3.atLowerCornerOf(blocks.get(i)).add(from.scale(1 - e)), Fx.model(states.get(i)), 0.4 + 0.6 * e));
 		}
+		fx.flying(flying, 255);
 	}
 
 	/** Make it real (once). */

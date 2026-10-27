@@ -277,6 +277,7 @@ public final class Film {
 			Shot s = current;
 			if (s == null) return;
 			double t = ticks / 20.0 - shotStart;
+			if (ticks % 20 == 0) Chat.LOG.info("Film: {} at {} s", s.name, String.format(Locale.ROOT, "%.1f", t));   // a trail in latest.log
 			s.step(t);
 			if (t >= s.duration) {
 				shotStart += s.duration;
@@ -320,6 +321,7 @@ public final class Film {
 			nextShot(mc);
 			return;
 		}
+		Chat.LOG.info("Film: starting {} (shot {} of {})", s.name, index + 1, shots.size());
 		Recorder.begin(mc);   // no-op unless recording; from the first shot on, the clock runs by frames
 		Stage.command("time set " + s.dayTime);
 		if (s.tag != null) chapter++;

@@ -18,6 +18,7 @@ import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModel;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModelPart;
 import net.minecraft.client.renderer.rendertype.RenderTypes;
+import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.client.resources.model.geometry.BakedQuad;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -259,6 +260,7 @@ public final class GhostRenderer {
 		/** Called while the frame renders: write the visible blocks' quads, camera-relative. */
 		void emit(Matrix4f pose, VertexConsumer buffer, int[] vis, int n, BlockPos off, Vec3 cam) {
 			Vector3f p = new Vector3f();
+			Vector3f normal = new Vector3f();
 			for (int k = 0; k < n; k++) {
 				int b = vis[k];
 				float bx = (float) (x[b] + off.getX() - cam.x);
@@ -267,11 +269,16 @@ public final class GhostRenderer {
 				for (int q = quadStart[b]; q < quadStart[b + 1]; q++) {
 					BakedQuad quad = quads[q];
 					int color = colors[q];
+					Direction facing = quad.direction();
+					pose.transformDirection(facing.getStepX(), facing.getStepY(), facing.getStepZ(), normal).normalize();
 					for (int v = 0; v < 4; v++) {
 						Vector3fc local = quad.position(v);
 						long uv = quad.packedUV(v);
 						pose.transformPosition(bx + local.x(), by + local.y(), bz + local.z(), p);
-						buffer.addVertex(p.x, p.y, p.z).setColor(color).setUv(UVPair.unpackU(uv), UVPair.unpackV(uv)).setLight(LightCoordsUtil.FULL_BRIGHT);
+						// every element a format might carry: shader packs add a normal and overlay to the block
+						// format, and a vertex missing one crashes the frame
+						buffer.addVertex(p.x, p.y, p.z, color, UVPair.unpackU(uv), UVPair.unpackV(uv), OverlayTexture.NO_OVERLAY,
+								LightCoordsUtil.FULL_BRIGHT, normal.x, normal.y, normal.z);
 					}
 				}
 			}

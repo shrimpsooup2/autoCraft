@@ -15,6 +15,7 @@ import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModel;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModelPart;
 import net.minecraft.client.renderer.item.ItemStackRenderState;
+import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.client.resources.model.geometry.BakedQuad;
@@ -83,17 +84,40 @@ final class Fx {
 	}
 
 	private void glow(Quads q) {
-		out.submitCustomGeometry(poses, RenderTypes.lightning(), (pose, buffer) -> q.emit(pose.pose(), buffer, new Vector3f()));
+		submit(RenderTypes.lightning(), q);
 	}
 
 	/** Blended, no depth write, no culling: glass, and the soft falloff of glows. */
 	private void glass(Quads q) {
-		out.submitCustomGeometry(poses, RenderTypes.debugQuads(), (pose, buffer) -> q.emit(pose.pose(), buffer, new Vector3f()));
+		submit(RenderTypes.debugQuads(), q);
+	}
+
+	/**
+	 * Geometry is written later, while the game draws the frame, outside the film's own error handling: anything that
+	 * goes wrong there stops the film (with a message) instead of taking the game down.
+	 */
+	private void submit(RenderType type, Quads q) {
+		out.submitCustomGeometry(poses, type, (pose, buffer) -> {
+			try {
+				q.emit(pose.pose(), buffer, new Vector3f());
+			} catch (RuntimeException e) {
+				Film.fail("drawing", e);
+			}
+		});
+	}
+
+	/**
+	 * One vertex with every element a format might carry. Shader packs (Iris) widen the vanilla formats with a normal,
+	 * overlay and more; a vertex missing one of them crashes the frame ("Missing elements in vertex"), and not where it
+	 * was written. Elements the format lacks are skipped.
+	 */
+	private static void vertex(VertexConsumer b, Vector3f p, int color, float u, float v, float nx, float ny, float nz) {
+		b.addVertex(p.x, p.y, p.z, color, u, v, OverlayTexture.NO_OVERLAY, LightCoordsUtil.FULL_BRIGHT, nx, ny, nz);
 	}
 
 	private void v(Matrix4f m, VertexConsumer b, Vector3f tmp, Vec3 p, int color) {
 		m.transformPosition((float) (p.x - cam.x), (float) (p.y - cam.y), (float) (p.z - cam.z), tmp);
-		b.addVertex(tmp.x, tmp.y, tmp.z).setColor(color);
+		vertex(b, tmp, color, 0, 0, 0, 1, 0);
 	}
 
 	private void quad(Matrix4f m, VertexConsumer b, Vector3f tmp, Vec3 a, Vec3 bb, Vec3 c, Vec3 d, int color) {
@@ -373,23 +397,29 @@ final class Fx {
 
 	private static final Map<BlockState, Model> MODELS = new HashMap<>();
 
+	/** A block flying in (see-through ghost or solid-looking, alpha 0..255): corner = its min corner, scaled about its centre. */
+	record Flying(Vec3 corner, Model model, double scale) {}
+
 	/** A block model drawn see-through (a schematic ghost, a flying block), alpha 0..255; corner = its min corner. */
 	void ghost(Vec3 corner, BlockState state, int alpha, double scale) {
-		Model model = model(state);
-		if (model.quads.length == 0 || alpha <= 0) return;
-		out.submitCustomGeometry(poses, RenderTypes.translucentMovingBlock(), (pose, buffer) -> {
-			Vector3f p = new Vector3f();
-			double c = (1 - scale) / 2;
-			emit(pose.pose(), buffer, p, model, 0, corner.x + c, corner.y + c, corner.z + c, scale, alpha);
+		flying(List.of(new Flying(corner, model(state), scale)), alpha);
+	}
+
+	/** Many flying blocks in one batch (the logo assembling: one draw, not a thousand). */
+	void flying(List<Flying> blocks, int alpha) {
+		if (blocks.isEmpty() || alpha <= 0) return;
+		submit(RenderTypes.translucentMovingBlock(), (m, buffer, p) -> {
+			for (Flying f : blocks) {
+				double c = (1 - f.scale) / 2;
+				emit(m, buffer, p, f.model, 0, f.corner.x + c, f.corner.y + c, f.corner.z + c, f.scale, alpha);
+			}
 		});
 	}
 
 	/** Many ghost blocks in one batch (blocks[from..to)), like Litematica's schematic overlay. */
 	void ghosts(List<GhostBlock> blocks, int from, int to, int alpha) {
 		if (from >= to || alpha <= 0) return;
-		out.submitCustomGeometry(poses, RenderTypes.translucentMovingBlock(), (pose, buffer) -> {
-			Matrix4f m = pose.pose();
-			Vector3f p = new Vector3f();
+		submit(RenderTypes.translucentMovingBlock(), (m, buffer, p) -> {
 			for (int i = from; i < to; i++) {
 				GhostBlock g = blocks.get(i);
 				emit(m, buffer, p, g.model, g.hidden, g.pos.getX(), g.pos.getY(), g.pos.getZ(), 1, alpha);
@@ -398,16 +428,19 @@ final class Fx {
 	}
 
 	private void emit(Matrix4f m, VertexConsumer buffer, Vector3f p, Model model, int hidden, double x, double y, double z, double scale, int alpha) {
+		Vector3f n = new Vector3f();
 		for (int q = 0; q < model.quads.length; q++) {
 			Direction face = model.faces[q];
 			if (face != null && (hidden & (1 << face.ordinal())) != 0) continue;
 			BakedQuad quad = model.quads[q];
 			int color = argb(alpha, model.tints[q]);
+			Direction facing = quad.direction();
+			m.transformDirection(facing.getStepX(), facing.getStepY(), facing.getStepZ(), n).normalize();
 			for (int k = 0; k < 4; k++) {
 				Vector3fc local = quad.position(k);
 				long uv = quad.packedUV(k);
 				m.transformPosition((float) (x + local.x() * scale - cam.x), (float) (y + local.y() * scale - cam.y), (float) (z + local.z() * scale - cam.z), p);
-				buffer.addVertex(p.x, p.y, p.z).setColor(color).setUv(UVPair.unpackU(uv), UVPair.unpackV(uv)).setLight(LightCoordsUtil.FULL_BRIGHT);
+				vertex(buffer, p, color, UVPair.unpackU(uv), UVPair.unpackV(uv), n.x, n.y, n.z);
 			}
 		}
 	}
