@@ -4,6 +4,7 @@ import com.autocraft.Bot;
 import com.autocraft.Chat;
 import com.autocraft.build.MaterialSettings;
 import com.autocraft.build.Placement;
+import com.autocraft.goal.Ending;
 import com.autocraft.path.Navigator;
 import com.autocraft.schematic.Schematic;
 import com.mojang.blaze3d.platform.InputConstants;
@@ -32,6 +33,7 @@ public final class Placements {
 	private static final int SHIFT_STEP = 8;
 
 	private static @Nullable Placement active;
+	private static @Nullable Ending ending;
 	private static KeyMapping forward;
 	private static KeyMapping back;
 	private static KeyMapping left;
@@ -70,12 +72,22 @@ public final class Placements {
 		return active;
 	}
 
+	/** Where the build being placed ends once built (the panel's placement settings); null = where it is. */
+	public static @Nullable Ending ending() {
+		return ending;
+	}
+
+	public static void setEnding(@Nullable Ending e) {
+		ending = e;
+	}
+
 	/** Start positioning {@code s}, centered on the block you look at (or just in front of you). */
 	public static Placement start(Schematic s) {
 		Minecraft mc = Minecraft.getInstance();
 		Placement placement = new Placement(s, BlockPos.ZERO, MaterialSettings.defaults());
 		placement.centerOn(target(mc));
 		active = placement;
+		ending = null;
 		if (!placement.substitution().isIdentity()) Chat.info("Materials: " + placement.substitution().reason() + " (change in K → Build → Materials).");
 		Chat.info("Placing " + s.name() + ": arrows/PgUp/PgDn or Alt+wheel move it, R rotates, M mirrors, G moves it to the crosshair, "
 				+ "Enter builds, Backspace cancels (or use the panel).");
@@ -92,6 +104,7 @@ public final class Placements {
 		if (p == null) return;
 		active = null;
 		Bot.get().startBuild(p.toOrder());
+		if (ending != null) Bot.get().setEnding(ending);
 	}
 
 	/** Move to the crosshair target: footprint centered on it, bottom layer on top of the looked-at face. */

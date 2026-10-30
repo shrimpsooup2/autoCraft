@@ -112,6 +112,16 @@ public final class InvUtil {
 		return n;
 	}
 
+	/** Picking {@code stack} up would take at least some of it: a free slot, or a matching stack with room. */
+	public static boolean hasRoomFor(Player p, ItemStack stack) {
+		Inventory inv = p.getInventory();
+		for (int i = 0; i < MAIN_SIZE; i++) {
+			ItemStack s = inv.getItem(i);
+			if (s.isEmpty() || ItemStack.isSameItemSameComponents(s, stack) && s.getCount() < s.getMaxStackSize()) return true;
+		}
+		return false;
+	}
+
 	/** No container screen is open, so the player's own inventory menu accepts clicks. */
 	public static boolean inventoryMenuActive(Player p) {
 		return p.containerMenu == p.inventoryMenu;

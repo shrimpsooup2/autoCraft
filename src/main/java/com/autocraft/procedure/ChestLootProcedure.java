@@ -6,6 +6,7 @@ import com.autocraft.Chat;
 import com.autocraft.build.BaseWithdraw;
 import com.autocraft.control.ContainerOpener;
 import com.autocraft.control.InvUtil;
+import com.autocraft.craft.RecipeBook;
 import com.autocraft.goal.Requirement.Dim;
 import com.autocraft.loot.LootBook;
 import com.autocraft.loot.LootSites;
@@ -13,7 +14,7 @@ import com.autocraft.loot.LootSites.Holds;
 import com.autocraft.loot.LootSites.Site;
 import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
-import com.autocraft.world.BiomeFinder;
+import com.autocraft.world.WorldScanner;
 import com.autocraft.world.WorldKey;
 import com.google.gson.Gson;
 import com.google.gson.JsonParseException;
@@ -33,7 +34,6 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.tags.ItemTags;
@@ -44,7 +44,6 @@ import net.minecraft.world.inventory.ChestMenu;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
-import net.minecraft.world.item.component.MapDecorations;
 import net.minecraft.world.level.block.BarrelBlock;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ChestBlock;
@@ -65,10 +64,21 @@ import org.jspecify.annotations.Nullable;
  * chest and the sensors that would hear it, and out of there on the third shriek or at the sight of the warden.
  */
 final class ChestLootProcedure implements Procedure {
+	/** Containers are looked for this many chunks around (the structure itself is looked for in view, see StructureSearch). */
 	private static final int SCAN_CHUNKS = 4;
 	private static final int SITE_RADIUS = 48;
-	private static final int TUNNEL_LEG = 32;
-	private static final int MAX_LEGS = 60;
+	/** A structure is only written off as looted from this close to it (its far chests are within scan range). */
+	private static final int LOOK_CLOSER = 16;
+	/** The structure's containers are looked for this often (the view-wide scan runs every tick while looting). */
+	private static final int CONTAINER_SCAN_TICKS = 10;
+	/** A chunk with this many of a site's tell blocks is part of the structure (see {@link Run#extent}). */
+	private static final int EXTENT_MIN_TELLS = 8;
+	/** How often the structure's extent is worked out again (more of it loads as we walk in). */
+	private static final int EXTENT_TICKS = 100;
+	/** Containers this close to a mob combat ran from as unbeatable are left alone ({@link Bot#dreaded}). */
+	private static final double GUARD_RADIUS = 16;
+	/** A site whose remaining containers are all guarded is left this long, then tried again. */
+	private static final long GUARDED_TICKS = 20 * 60 * 10;
 	private static final int MAX_WOOL_TRIES = 6;
 	private static final int BRUSH_TIMEOUT = 20 * 15;
 	private static final int OPEN_TIMEOUT = 60;
@@ -85,14 +95,31 @@ final class ChestLootProcedure implements Procedure {
 	/** Per world: containers already opened, structures already looted. */
 	private static final class Memory {
 		Set<Long> looted = new HashSet<>();
+		/** Where a structure was written off: everything within {@link #SITE_RADIUS} of it. */
 		Set<Long> sites = new HashSet<>();
+		/** The chunks of structures written off ({@link WorldScanner#chunkKey}): all of a bastion, not one wing of it. */
+		Set<Long> doneChunks = new HashSet<>();
 	}
 
 	private static @Nullable Map<String, Memory> worlds;
 
 	@Override
 	public boolean makes(Item item) {
-		return !sources(item).isEmpty();
+		return !madeByRecipe(item) && !sources(item).isEmpty();
+	}
+
+	/**
+	 * A recipe makes it from other things (a block of iron from ingots, scrap from debris): never planned from chests.
+	 * Spread over the recipe's output a bastion search looked cheaper than a trip home for raw iron, so the smithing
+	 * table's two ingots were to come from a block of iron in a bastion chest — a long shot for what a furnace makes
+	 * for sure. Recipes that need the item itself (template duplication) don't count.
+	 */
+	private static boolean madeByRecipe(Item item) {
+		RecipeBook book = RecipeBook.get();
+		for (RecipeBook.Recipe r : book.crafting(item)) {
+			if (r.key().values().stream().noneMatch(ing -> ing.options().contains(item))) return true;
+		}
+		return !book.smelting(item).isEmpty() || !book.cutting(item).isEmpty();
 	}
 
 	@Override
@@ -120,6 +147,18 @@ final class ChestLootProcedure implements Procedure {
 	@Override
 	public String label() {
 		return "Structure loot (chests, chest minecarts, suspicious sand/gravel)";
+	}
+
+	@Override
+	public @Nullable Dim dimension(Item item) {
+		List<Source> sources = sources(item);
+		return sources.isEmpty() ? null : sources.getFirst().site().dim();
+	}
+
+	@Override
+	public @Nullable Site dangerousSite(Item item) {
+		List<Source> sources = sources(item);
+		return sources.isEmpty() || !LootSites.guarded(sources.getFirst().site()) ? null : sources.getFirst().site();
 	}
 
 	/** Structures whose loot can hold {@code item}, cheapest first. */
@@ -159,10 +198,8 @@ final class ChestLootProcedure implements Procedure {
 		private final List<Source> sources;
 		private int index;
 		private @Nullable Dim wanted;
-		private @Nullable Direction heading;
-		private @Nullable Goal leg;
-		private int legs;
-		private @Nullable Explorer explorer;
+		/** Looking for the current source's structure (a new search per source). */
+		private @Nullable StructureSearch search;
 		private @Nullable Target target;
 		private @Nullable ContainerOpener opener;
 		private int openTicks;
@@ -173,6 +210,14 @@ final class ChestLootProcedure implements Procedure {
 		private @Nullable BlockPos entry;
 		private long calmUntil = -1;
 		private int wait;
+		/** The structure's chunks ({@link #extent}), worked out for the tell block {@link #extentFor} at {@link #extentAt}. */
+		private Set<Long> extent = Set.of();
+		private @Nullable BlockPos extentFor;
+		private long extentAt;
+		/** Sites left because every container still to open is guarded (their chunks), and until when. */
+		private final Map<Long, Long> guardedChunks = new HashMap<>();
+		/** The last {@link #nextContainer} left containers out for a guard near them. */
+		private boolean guardedLeft;
 
 		Run(Item item, int total, List<Source> sources) {
 			this.item = item;
@@ -220,120 +265,124 @@ final class ChestLootProcedure implements Procedure {
 				updateQuiet(bot);
 			}
 			if (Actions.pickUp(bot, x -> x.is(item), 8)) return Status.RUNNING;
+			if (target != null && opener == null && bot.dreaded(target.where(), GUARD_RADIUS)) {
+				target = null; // something we ran from as too strong stands by it: another one, or another site
+				bot.nav().stop();
+			}
 			if (target != null) return loot(bot, site);
-			BlockPos mapped = mapTarget(bot, site);
+			StructureSearch search = search(site);
+			BlockPos mapped = search.mapTarget(bot);
 			if (site.holds() == Holds.BURIED_AT_MAP_X) return treasure(bot, mapped);
-			BlockPos tell = findSite(bot, site);
-			if (tell == null) return explore(bot, site, mapped);
+			BlockPos tell = search.find(bot);
+			if (tell == null) return explore(bot, search, mapped);
 			target = nextContainer(bot, site, tell);
+			if (target == null && guardedLeft) {
+				// what's left of it is guarded by something we can't beat: another one, and back here later
+				long until = bot.level().getGameTime() + GUARDED_TICKS;
+				for (long c : extent(bot, site, tell)) guardedChunks.put(c, until);
+				guardedChunks.put(WorldScanner.chunkKey(tell.getX() >> 4, tell.getZ() >> 4), until);
+				search.forget(bot);
+				Chat.info("The rest of this " + site.name() + " is guarded by something too strong for us; looking for another.");
+				bot.setQuiet(false);
+				entry = null;
+				search.turn(bot);
+				return Status.RUNNING;
+			}
 			if (target == null) {
+				// seen from afar (a bastion's edge at the scan limit), its chests may be out of scan range yet: go and
+				// look before writing it off — two bastions were "done" without a step taken toward them
+				if (Navigator.feet(bot.player()).distSqr(tell) > (double) LOOK_CLOSER * LOOK_CLOSER) {
+					bot.setStatus("heading to the " + site.name() + " at " + tell.toShortString());
+					bot.nav().setGoal(new Goal.Near(tell, LOOK_CLOSER / 2));
+					if (bot.nav().tick() != Navigator.Status.FAILED) return Status.RUNNING;
+					bot.nav().stop();
+				}
 				memory().sites.add(tell.asLong());
+				memory().doneChunks.addAll(extent(bot, site, tell));
 				save();
+				search.forget(bot);
 				Chat.info("Done with this " + site.name() + "; looking for another.");
 				bot.setQuiet(false);
 				entry = null;
-				turn(bot);
+				search.turn(bot);
 			}
 			return Status.RUNNING;
 		}
 
 		// ---- finding the structure ---------------------------------------------------------------
 
-		private @Nullable BlockPos findSite(Bot bot, Site site) {
-			BlockPos feet = Navigator.feet(bot.player());
-			BlockPos best = null;
-			double bestDist = Double.MAX_VALUE;
-			for (BlockPos t : bot.scanner().findBlocks(site.tell(), SCAN_CHUNKS, 64)) {
-				if (finished(t)) continue;
-				double d = t.distSqr(feet);
-				if (d < bestDist) {
-					bestDist = d;
-					best = t;
-				}
-			}
-			if (best == null && !site.tellMobs().isEmpty()) {
-				for (Entity e : bot.scanner().entities(96, e -> site.tellMobs().contains(e.getType()))) {
-					if (!finished(e.blockPosition()) && e.blockPosition().distSqr(feet) < bestDist) {
-						bestDist = e.blockPosition().distSqr(feet);
-						best = e.blockPosition();
+		/** The search for this kind of site, passing over sites finished with or guarded for now. */
+		private StructureSearch search(Site site) {
+			if (search == null || search.site() != site) search = new StructureSearch(site, this::passedOver);
+			return search;
+		}
+
+		/**
+		 * The structure around a tell block: the chunks holding its tell blocks, flooded out from the tell's chunk
+		 * across neighbours that hold some too. A bastion is wider than {@link #SITE_RADIUS}: chests and done-marks
+		 * that only reached 48 blocks from one tell block left its far wings to be found as another bastion.
+		 */
+		private Set<Long> extent(Bot bot, Site site, BlockPos tell) {
+			long now = bot.level().getGameTime();
+			if (tell.equals(extentFor) && now - extentAt < EXTENT_TICKS) return extent;
+			int chunks = Math.max(SCAN_CHUNKS, bot.mc().options.getEffectiveRenderDistance());
+			Set<Long> holding = bot.scanner().chunksWith(site.tell(), chunks, EXTENT_MIN_TELLS);
+			Set<Long> out = new HashSet<>();
+			java.util.ArrayDeque<int[]> todo = new java.util.ArrayDeque<>();
+			out.add(WorldScanner.chunkKey(tell.getX() >> 4, tell.getZ() >> 4));
+			todo.add(new int[] {tell.getX() >> 4, tell.getZ() >> 4});
+			while (!todo.isEmpty()) {
+				int[] c = todo.poll();
+				for (int dx = -1; dx <= 1; dx++) {
+					for (int dz = -1; dz <= 1; dz++) {
+						long k = WorldScanner.chunkKey(c[0] + dx, c[1] + dz);
+						if (holding.contains(k) && out.add(k)) todo.add(new int[] {c[0] + dx, c[1] + dz});
 					}
 				}
 			}
-			return best;
+			extent = out;
+			extentFor = tell.immutable();
+			extentAt = now;
+			return out;
 		}
 
-		private boolean finished(BlockPos pos) {
-			for (long s : memory().sites) {
-				if (BlockPos.of(s).distSqr(pos) <= (double) SITE_RADIUS * SITE_RADIUS) return true;
+		/** In the structure around {@code tell}: within {@link #SITE_RADIUS} of it, or in (or next to) one of its chunks. */
+		private boolean inSite(Set<Long> chunks, BlockPos tell, BlockPos pos) {
+			if (pos.distSqr(tell) <= (double) SITE_RADIUS * SITE_RADIUS) return true;
+			int cx = pos.getX() >> 4, cz = pos.getZ() >> 4;
+			for (int dx = -1; dx <= 1; dx++) {
+				for (int dz = -1; dz <= 1; dz++) {
+					if (chunks.contains(WorldScanner.chunkKey(cx + dx, cz + dz))) return true;
+				}
 			}
 			return false;
 		}
 
-		/** Where an explorer map in the inventory says such a structure is (not one we've finished), or null. */
-		private @Nullable BlockPos mapTarget(Bot bot, Site site) {
-			if (site.maps().isEmpty()) return null;
-			LocalPlayer p = bot.player();
-			for (int i = 0; i < p.getInventory().getContainerSize(); i++) {
-				MapDecorations marks = p.getInventory().getItem(i).get(DataComponents.MAP_DECORATIONS);
-				if (marks == null) continue;
-				for (MapDecorations.Entry e : marks.decorations().values()) {
-					if (site.maps().stream().noneMatch(h -> h.value() == e.type().value())) continue;
-					BlockPos at = BlockPos.containing(e.x(), p.getY(), e.z());
-					if (!finished(at)) return at;
-				}
-			}
-			return null;
+		/** Finished with, or guarded for now ({@link #guardedChunks}): the search passes it over. */
+		private boolean passedOver(BlockPos pos) {
+			if (finished(pos.getX(), pos.getY(), pos.getZ())) return true;
+			Long until = guardedChunks.get(WorldScanner.chunkKey(pos.getX() >> 4, pos.getZ() >> 4));
+			return until != null && until > Bot.get().level().getGameTime();
 		}
 
-		private Status explore(Bot bot, Site site, @Nullable BlockPos mapped) {
-			if (legs > MAX_LEGS) {
-				index++;
-				legs = 0;
-				leg = null;
-				explorer = null;
-				if (index < sources.size()) Chat.info("No " + site.name() + " found; trying a " + sources.get(index).site().name() + " instead.");
-				return Status.RUNNING;
+		private boolean finished(int x, int y, int z) {
+			Memory m = memory();
+			if (m.doneChunks.contains(WorldScanner.chunkKey(x >> 4, z >> 4))) return true;
+			for (long s : m.sites) {
+				BlockPos at = BlockPos.of(s);
+				long dx = at.getX() - x, dy = at.getY() - y, dz = at.getZ() - z;
+				if (dx * dx + dy * dy + dz * dz <= (long) SITE_RADIUS * SITE_RADIUS) return true;
 			}
-			BlockPos feet = Navigator.feet(bot.player());
-			if (mapped != null && leg == null) {
-				bot.setStatus("following the map to a " + site.name());
-				if (site.y() == null && bot.startFlight(mapped)) return Status.RUNNING;
-				leg = site.y() == null ? new Goal.XZ(mapped.getX(), mapped.getZ()) : new Goal.XYZ(mapped.getX(), site.y(), mapped.getZ());
-			}
-			if (mapped == null && site.y() == null) {
-				if (explorer == null) explorer = new Explorer(site.biomes());
-				explorer.tick(bot, "a " + site.name());
-				legs = explorer.legs();
-				return Status.RUNNING;
-			}
-			if (heading == null) heading = Direction.fromYRot(bot.player().getYRot());
-			if (leg == null) {
-				int y = site.y();
-				if (Math.abs(feet.getY() - y) > 3) {
-					leg = new Goal.YLevel(y);
-				} else {
-					ClientLevel level = bot.level();
-					BlockPos biome = site.biomes().isEmpty() || BiomeFinder.in(level, feet, site.biomes()) ? null
-							: BiomeFinder.nearest(level, feet, site.biomes(), 8, false, c -> false);
-					leg = biome != null ? new Goal.XYZ(biome.getX(), y, biome.getZ())
-							: new Goal.XYZ(feet.getX() + heading.getStepX() * TUNNEL_LEG, y, feet.getZ() + heading.getStepZ() * TUNNEL_LEG);
-				}
-			}
-			bot.setStatus("searching for a " + site.name());
-			bot.nav().setGoal(leg);
-			Navigator.Status s = bot.nav().tick();
-			if (s == Navigator.Status.ARRIVED || s == Navigator.Status.FAILED) {
-				if (s == Navigator.Status.FAILED) turn(bot);
-				leg = null;
-				legs++;
-				bot.nav().stop();
-			}
+			return false;
+		}
+
+		/** Explore for the structure; its legs spent, try the next kind of structure that has the item. */
+		private Status explore(Bot bot, StructureSearch search, @Nullable BlockPos mapped) {
+			if (search.explore(bot, mapped)) return Status.RUNNING;
+			index++;
+			this.search = null;
+			if (index < sources.size()) Chat.info("No " + search.site().name() + " found; trying a " + sources.get(index).site().name() + " instead.");
 			return Status.RUNNING;
-		}
-
-		private void turn(Bot bot) {
-			heading = heading == null ? Direction.fromYRot(bot.player().getYRot()) : heading.getClockWise();
-			leg = null;
 		}
 
 		// ---- containers ----------------------------------------------------------------------------
@@ -347,9 +396,14 @@ final class ChestLootProcedure implements Procedure {
 						.min(Comparator.comparingDouble(t -> t.where().distSqr(feet))).orElse(null);
 			}
 			boolean brush = site.holds() == Holds.SUSPICIOUS_BLOCKS;
-			List<BlockPos> found = bot.scanner().findBlocks(s -> brush ? suspicious(s) : container(s), SCAN_CHUNKS, 128);
-			return found.stream().filter(pos -> pos.distSqr(tell) <= (double) SITE_RADIUS * SITE_RADIUS && !looted.contains(pos.asLong()) && !atBase(bot, pos))
-					.min(Comparator.comparingDouble(pos -> pos.distSqr(feet))).map(pos -> new Target(pos, null)).orElse(null);
+			Set<Long> chunks = extent(bot, site, tell);
+			int radius = Math.max(SCAN_CHUNKS, bot.mc().options.getEffectiveRenderDistance()); // the far wings' chests too
+			List<BlockPos> found = bot.scanner().findBlocksCached("containers " + site.name(), s -> brush ? suspicious(s) : container(s), radius, 256,
+					CONTAINER_SCAN_TICKS);
+			List<BlockPos> open = found.stream().filter(pos -> inSite(chunks, tell, pos) && !looted.contains(pos.asLong()) && !atBase(bot, pos)).toList();
+			List<BlockPos> unguarded = open.stream().filter(pos -> !bot.dreaded(pos, GUARD_RADIUS)).toList();
+			guardedLeft = unguarded.size() < open.size() && unguarded.isEmpty();
+			return unguarded.stream().min(Comparator.comparingDouble(pos -> pos.distSqr(feet))).map(pos -> new Target(pos, null)).orElse(null);
 		}
 
 		private static boolean container(BlockState s) {
@@ -527,6 +581,7 @@ final class ChestLootProcedure implements Procedure {
 			}
 			bot.setQuiet(!SculkGuard.wardenNear(bot)); // running beats sneaking once it's after us
 			BlockPos feet = Navigator.feet(bot.player());
+			Direction heading = search == null ? null : search.heading();
 			BlockPos away = entry != null ? entry : feet.relative(heading == null ? Direction.NORTH : heading.getOpposite(), 48);
 			if (feet.distSqr(away) > 9) {
 				bot.setStatus("leaving the ancient city quietly");

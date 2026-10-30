@@ -31,6 +31,8 @@ final class Pathfinder {
 	private static final double SWIM = 9;
 	private static final double SWIM_SPRINT = 5;
 	private static final double SUBMERGED_EXTRA = 4;
+	/** Submerged with no air above: each block of it eats breath the bot may not get back (flooded caves drowned it). */
+	private static final double UNDER_CEILING_EXTRA = 40;
 	private static final double JUMP_EXTRA = 2.5;
 	private static final double DESCEND_EXTRA = 2;
 	private static final double FALL_PER_BLOCK = 1;
@@ -64,6 +66,7 @@ final class Pathfinder {
 
 	private final PathContext ctx;
 	private final Goal goal;
+	private final AvoidedMoves avoided;
 	private final Long2ObjectOpenHashMap<Node> nodes = new Long2ObjectOpenHashMap<>();
 	private final PriorityQueue<Open> open = new PriorityQueue<>((a, b) -> Double.compare(a.f, b.f));
 	private final Node start;
@@ -71,9 +74,10 @@ final class Pathfinder {
 	private int expanded;
 	private @Nullable Result result;
 
-	Pathfinder(PathContext ctx, BlockPos from, Goal goal) {
+	Pathfinder(PathContext ctx, BlockPos from, Goal goal, AvoidedMoves avoided) {
 		this.ctx = ctx;
 		this.goal = goal;
+		this.avoided = avoided;
 		this.start = node(from.getX(), from.getY(), from.getZ());
 		start.g = 0;
 		best = start;
@@ -131,7 +135,7 @@ final class Pathfinder {
 	}
 
 	private void add(Node from, int x, int y, int z, double cost, Step.Type type, List<BlockPos> breaks, @Nullable BlockPos place) {
-		if (cost >= PathContext.INF) return;
+		if (cost >= PathContext.INF || avoided.contains(from.x, from.y, from.z, x, y, z)) return;
 		Node n = node(x, y, z);
 		if (n.closed) return;
 		double g = from.g + cost;
@@ -198,12 +202,13 @@ final class Pathfinder {
 	/**
 	 * Ticks per block into water at (x,y,z). Deep enough to swim and fed: sprint-swum along the surface (about 0.28
 	 * blocks a tick, like sprinting on land). Wading (ground underfoot, head out) or hungry: paddling. Under the
-	 * surface costs extra — it uses air, and the bot floats at the top anyway.
+	 * surface costs extra — it uses air, and the bot floats at the top anyway — and a lot extra under a ceiling.
 	 */
 	private double swimCost(int x, int y, int z) {
 		boolean deep = !ctx.standOn(x, y - 1, z);
 		double cost = deep && ctx.sprintSwim ? SWIM_SPRINT : SWIM;
-		return ctx.water(x, y + 1, z) ? cost + SUBMERGED_EXTRA : cost;
+		if (!ctx.water(x, y + 1, z)) return cost;
+		return cost + SUBMERGED_EXTRA + (ctx.underCeiling(x, y + 1, z) ? UNDER_CEILING_EXTRA : 0);
 	}
 
 	private void ascend(Node n, int dx, int dz, boolean inWater, boolean onSolid) {

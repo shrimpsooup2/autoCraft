@@ -3,9 +3,11 @@ package com.autocraft.world;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.PriorityQueue;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Predicate;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -33,6 +35,14 @@ public final class WorldScanner {
 
 	private record Cached(long tick, List<BlockPos> result) {}
 
+	/** A test on a matching block's position, without a BlockPos made for every block looked at. */
+	@FunctionalInterface
+	public interface Where {
+		Where ANYWHERE = (x, y, z) -> true;
+
+		boolean test(int x, int y, int z);
+	}
+
 	public WorldScanner(Minecraft mc) {
 		this.mc = mc;
 	}
@@ -45,6 +55,11 @@ public final class WorldScanner {
 		cache.clear();
 	}
 
+	/** Drop one cached result: what it was filtered by just changed. */
+	public void invalidate(Object key) {
+		cache.remove(key);
+	}
+
 	/** Remove a position from every cached result (it was mined or is unreachable). */
 	public void forget(BlockPos pos) {
 		for (Cached c : cache.values()) {
@@ -54,12 +69,21 @@ public final class WorldScanner {
 
 	/** {@link #findBlocks} but reuses a result younger than {@code maxAgeTicks} for the same key. */
 	public List<BlockPos> findBlocksCached(Object key, Predicate<BlockState> match, int chunkRadius, int maxResults, int maxAgeTicks) {
+		return findBlocksCached(key, match, Where.ANYWHERE, chunkRadius, maxResults, maxAgeTicks);
+	}
+
+	/** {@link #findBlocks(Predicate, Where, int, int)} but reuses a result younger than {@code maxAgeTicks} for the same key. */
+	public List<BlockPos> findBlocksCached(Object key, Predicate<BlockState> match, Where where, int chunkRadius, int maxResults, int maxAgeTicks) {
 		Cached c = cache.get(key);
 		if (c == null || tick - c.tick > maxAgeTicks) {
-			c = new Cached(tick, findBlocks(match, chunkRadius, maxResults));
+			c = new Cached(tick, findBlocks(match, where, chunkRadius, maxResults));
 			cache.put(key, c);
 		}
 		return c.result;
+	}
+
+	public List<BlockPos> findBlocks(Predicate<BlockState> match, int chunkRadius, int maxResults) {
+		return findBlocks(match, Where.ANYWHERE, chunkRadius, maxResults);
 	}
 
 	/**
@@ -70,7 +94,7 @@ public final class WorldScanner {
 	 * block just across a chunk border beats a farther one in the bot's own chunk (stopping after the first ring
 	 * that had enough matches used to send the bot to a tree 20 blocks off with one right next to it).
 	 */
-	public List<BlockPos> findBlocks(Predicate<BlockState> match, int chunkRadius, int maxResults) {
+	public List<BlockPos> findBlocks(Predicate<BlockState> match, Where where, int chunkRadius, int maxResults) {
 		BlockPos origin = mc.player.blockPosition();
 		Nearest nearest = new Nearest(maxResults);
 		int cx = origin.getX() >> 4, cz = origin.getZ() >> 4;
@@ -82,7 +106,7 @@ public final class WorldScanner {
 					long horizontal = horizontalDistSqr(origin, cx + dx, cz + dz);
 					if (horizontal >= nearest.bound()) continue;
 					ringInRange = true;
-					scanChunk(cx + dx, cz + dz, origin, horizontal, match, nearest);
+					scanChunk(cx + dx, cz + dz, origin, horizontal, match, where, nearest);
 				}
 			}
 			if (!ringInRange) break; // every chunk farther out is farther still
@@ -101,7 +125,7 @@ public final class WorldScanner {
 		return v < min ? min - v : v > min + 15 ? v - (min + 15) : 0;
 	}
 
-	private void scanChunk(int chunkX, int chunkZ, BlockPos o, long horizontal, Predicate<BlockState> match, Nearest out) {
+	private void scanChunk(int chunkX, int chunkZ, BlockPos o, long horizontal, Predicate<BlockState> match, Where where, Nearest out) {
 		ClientLevel level = mc.level;
 		LevelChunk chunk = level.getChunkSource().getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
 		if (chunk == null) return;
@@ -124,11 +148,52 @@ public final class WorldScanner {
 					for (int x = 0; x < 16; x++) {
 						long dx = baseX + x - o.getX();
 						long d = dx * dx + dy * dy + dz * dz;
-						if (d < out.bound() && match.test(section.getBlockState(x, y, z))) out.offer(baseX + x, baseY + y, baseZ + z, d);
+						if (d < out.bound() && match.test(section.getBlockState(x, y, z)) && where.test(baseX + x, baseY + y, baseZ + z)) {
+							out.offer(baseX + x, baseY + y, baseZ + z, d);
+						}
 					}
 				}
 			}
 		}
+	}
+
+	/** A chunk's key in {@link #chunksWith}'s result. */
+	public static long chunkKey(int chunkX, int chunkZ) {
+		return (long) chunkX & 0xFFFFFFFFL | ((long) chunkZ & 0xFFFFFFFFL) << 32;
+	}
+
+	/**
+	 * Loaded chunks within {@code chunkRadius} holding at least {@code minCount} matching blocks ({@link #chunkKey}s):
+	 * where a structure built of them lies, and how far it reaches.
+	 */
+	public Set<Long> chunksWith(Predicate<BlockState> match, int chunkRadius, int minCount) {
+		BlockPos origin = mc.player.blockPosition();
+		int cx = origin.getX() >> 4, cz = origin.getZ() >> 4;
+		Set<Long> out = new HashSet<>();
+		for (int dx = -chunkRadius; dx <= chunkRadius; dx++) {
+			for (int dz = -chunkRadius; dz <= chunkRadius; dz++) {
+				if (countUpTo(cx + dx, cz + dz, match, minCount) >= minCount) out.add(chunkKey(cx + dx, cz + dz));
+			}
+		}
+		return out;
+	}
+
+	/** Matching blocks in a loaded chunk, counted up to {@code limit}. */
+	private int countUpTo(int chunkX, int chunkZ, Predicate<BlockState> match, int limit) {
+		LevelChunk chunk = mc.level.getChunkSource().getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
+		if (chunk == null) return 0;
+		int n = 0;
+		for (LevelChunkSection section : chunk.getSections()) {
+			if (section == null || section.hasOnlyAir() || !section.maybeHas(match)) continue;
+			for (int y = 0; y < 16; y++) {
+				for (int z = 0; z < 16; z++) {
+					for (int x = 0; x < 16; x++) {
+						if (match.test(section.getBlockState(x, y, z)) && ++n >= limit) return n;
+					}
+				}
+			}
+		}
+		return n;
 	}
 
 	/** The k nearest positions offered so far (a max-heap on squared distance). */

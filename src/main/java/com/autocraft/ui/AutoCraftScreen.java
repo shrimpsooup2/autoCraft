@@ -5,10 +5,12 @@ import com.autocraft.Bot;
 import com.autocraft.Chat;
 import com.autocraft.DeathLog;
 import com.autocraft.Settings;
+import com.autocraft.SpawnPoint;
 import com.autocraft.build.BuildPlan;
 import com.autocraft.build.Placement;
 import com.autocraft.build.SiteFinder;
 import com.autocraft.build.StructureRegistry;
+import com.autocraft.goal.Ending;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
 import com.autocraft.schematic.Schematic;
@@ -41,7 +43,7 @@ import org.jspecify.annotations.Nullable;
  * collect, add groups and builds, edit, run ({@link TaskTreePanel}). Build: pick a schematic (built-in or from the
  * folder) and place it in the world as a ghost, Litematica-style — exact coordinates, nudges, rotation, mirror —
  * then build it. Team: host or join a team of bots. Bot: live status, pause/stop, base. Settings: saved options
- * (log off, overlay, smooth aim, players nearby, after death, base, resume).
+ * (log off, overlay, smooth aim, players nearby, after death, base, resume, respawn beds) and the spawn point.
  */
 public final class AutoCraftScreen extends Screen {
 	private enum Tab {
@@ -93,6 +95,7 @@ public final class AutoCraftScreen extends Screen {
 
 	// settings tab
 	private static final int[] PLAYER_RADII = {16, 32, 48, 64, 96, 128};
+	private static final int[] BED_DISTANCES = {128, 192, 256, 384, 512, 1024};
 	private final List<Runnable> settingLabels = new ArrayList<>();
 
 	// team tab
@@ -275,6 +278,7 @@ public final class AutoCraftScreen extends Screen {
 		}).tooltip(Tooltip.create(Component.literal("Centered on the block you're looking at"))).bounds(rightX + half + 4, rowY + 84, half, 18).build());
 		addRenderableWidget(Button.builder(Component.literal("Materials..."), b -> minecraft.gui.setScreen(new MaterialsScreen(this, p)))
 				.tooltip(Tooltip.create(Component.literal(p.substitution().reason()))).bounds(rightX, rowY + 106, colW, 18).build());
+		endingRow(rowY + 128, half);
 		int third = (colW - 8) / 3;
 		addRenderableWidget(Button.builder(Component.literal("Cancel"), b -> {
 			Placements.cancel();
@@ -288,6 +292,30 @@ public final class AutoCraftScreen extends Screen {
 			Placements.confirm();
 			onClose();
 		}).bounds(rightX + 2 * (third + 4), bottomY, third, 18).build());
+	}
+
+	/** Where the build being placed ends once built (none, or a base) and what it does there ({@link Placements#ending}). */
+	private void endingRow(int y, int half) {
+		Ending e = Placements.ending();
+		List<String> bases = Bases.all().stream().map(Bases.Base::name).toList();
+		Button end = addRenderableWidget(Button.builder(Component.literal(e == null ? "Ends: where it is" : "Ends at: " + e.base()), b -> {
+			Ending cur = Placements.ending();
+			int next = cur == null ? 0 : bases.indexOf(cur.base()) + 1;
+			Placements.setEnding(next >= bases.size() ? null : new Ending(bases.get(next), cur == null ? Ending.Deposit.NONE : cur.deposit()));
+			rebuildWidgets();
+		}).tooltip(Tooltip.create(Component.literal(bases.isEmpty() ? "No bases yet: add one on the Bot tab to end builds there"
+				: "Once built: stay, or go to a base — through a portal when it's in the other dimension (click to switch)")))
+				.bounds(rightX, y, half, 18).build());
+		end.active = !bases.isEmpty();
+		Button store = addRenderableWidget(Button.builder(Component.literal(e == null || e.deposit() == Ending.Deposit.NONE ? "Just go there"
+				: e.deposit() == Ending.Deposit.EMPTIEST ? "Store: emptiest" : "Store: similar"), b -> {
+			Ending cur = Placements.ending();
+			if (cur == null) return;
+			Placements.setEnding(new Ending(cur.base(), Ending.Deposit.values()[(cur.deposit().ordinal() + 1) % Ending.Deposit.values().length]));
+			rebuildWidgets();
+		}).tooltip(Tooltip.create(Component.literal("At the base: just go there; or store what it carries (not its gear, food or supplies) in the"
+				+ " emptiest chest, or each stack with the same or similar items (click to switch)"))).bounds(rightX + half + 4, y, half, 18).build());
+		store.active = e != null;
 	}
 
 	private EditBox coordRow(Placement p, int y, int axis) {
@@ -408,7 +436,7 @@ public final class AutoCraftScreen extends Screen {
 			g.text(font, "X", rightX + 1, rowY + 4, Widgets.GRAY);
 			g.text(font, "Y", rightX + 1, rowY + 24, Widgets.GRAY);
 			g.text(font, "Z", rightX + 1, rowY + 44, Widgets.GRAY);
-			g.text(font, font.plainSubstrByWidth("Shift: steps of 8. The ghost in the world updates live.", colW), rightX, rowY + 128, Widgets.GRAY);
+			g.text(font, font.plainSubstrByWidth("Shift: steps of 8. The ghost in the world updates live.", colW), rightX, rowY + 150, Widgets.GRAY);
 			return;
 		}
 		if (preview == null) {
@@ -597,6 +625,29 @@ public final class AutoCraftScreen extends Screen {
 			updateSettingsButtons();
 		}).tooltip(Tooltip.create(Component.literal("How close another player may come (click to change)"))).bounds(rightX, y + 22, colW, 18).build());
 		settingLabels.add(() -> radius.setMessage(Component.literal("Player radius: " + s.playerAlertRadius + " blocks")));
+		toggle(left + 8, y + 88, "Respawn beds", "Working far from the spawn point where dying looks likely (died on this job, Nether trip, guarded"
+				+ " structure, hunting hostile mobs, night with weak armor): put a bed down near the work and set the spawn point with it",
+				() -> s.respawnBeds, v -> s.respawnBeds = v);
+		Button bedDistance = addRenderableWidget(Button.builder(Component.empty(), b -> {
+			int next = BED_DISTANCES[0];
+			for (int d : BED_DISTANCES) {
+				if (d > s.respawnBedDistance) {
+					next = d;
+					break;
+				}
+			}
+			s.respawnBedDistance = next;
+			s.save();
+			updateSettingsButtons();
+		}).tooltip(Tooltip.create(Component.literal("Respawn beds: how far the spawn point must be before one is worth it (click to change)")))
+				.bounds(rightX, y + 88, colW, 18).build());
+		settingLabels.add(() -> bedDistance.setMessage(Component.literal("Bed when spawn is over " + s.respawnBedDistance + " blocks")));
+		SpawnPoint.Spot spawn = SpawnPoint.current();
+		addRenderableWidget(Button.builder(Component.literal("Set spawn point here"), b -> {
+			LocalPlayer p = minecraft.player;
+			if (p != null) SpawnPoint.set(p.blockPosition(), SpawnPoint.dimensionOf(p.level()), SpawnPoint.Kind.SET, "set by you");
+		}).tooltip(Tooltip.create(Component.literal("Where you respawn, if the bot didn't see it set (a bed slept in before, /spawnpoint). Now: "
+				+ (spawn == null ? "not known" : spawn.describe())))).bounds(left + 8, y + 110, colW, 18).build());
 		updateSettingsButtons();
 	}
 
@@ -642,6 +693,15 @@ public final class AutoCraftScreen extends Screen {
 			Widgets.progressRow(g, font, x, y, colW, null, "build " + bot.buildOrder().schematic().name(), bot.buildPlaced(),
 					Math.max(1, bot.buildTotal()), false);
 			y += 12;
+		}
+		if (bot.isRunning() && bot.destination() != null) {
+			g.text(font, font.plainSubstrByWidth("Going to " + bot.destination().describe(), colW), x, y + 2, Widgets.WHITE);
+			y += LINE + 2;
+		}
+		if (bot.isRunning() && bot.ending() != null) {
+			g.text(font, font.plainSubstrByWidth((bot.finishing() != null ? "Done; now to " : "Then to ") + bot.ending().describe(), colW), x, y + 2,
+					0xFF9CE29C);
+			y += LINE + 2;
 		}
 		Requirement need = bot.activeNeed();
 		if (need != null) {

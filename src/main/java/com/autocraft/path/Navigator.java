@@ -8,6 +8,7 @@ import java.util.function.Predicate;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.entity.vehicle.boat.AbstractBoat;
 import net.minecraft.world.item.ItemStack;
 import org.jspecify.annotations.Nullable;
 
@@ -44,6 +45,10 @@ public final class Navigator {
 	private Pathfinder.@Nullable Result preResult;
 	private boolean lastPartial;
 	private boolean quiet;
+	/** Moves the executor couldn't make: the next plans route around them (see {@link AvoidedMoves}). */
+	private final AvoidedMoves avoided = new AvoidedMoves();
+	/** Digging on the path being walked, against a cheap pickaxe: whether one is worth making for this trip. */
+	private @Nullable DigTime digTime;
 
 	public Navigator(Minecraft mc, Controls controls, Predicate<ItemStack> keep) {
 		this.mc = mc;
@@ -65,6 +70,7 @@ public final class Navigator {
 		executor = null;
 		preResult = null;
 		lastPartial = false;
+		digTime = null;
 		failures = 0;
 		cooldown = 0;
 		bestHeuristic = Double.MAX_VALUE;
@@ -72,6 +78,11 @@ public final class Navigator {
 
 	public @Nullable Goal goal() {
 		return goal;
+	}
+
+	/** Digging ahead on the current path (with what's carried, with a wooden/stone pickaxe); null before a plan. */
+	public @Nullable DigTime digTime() {
+		return digTime;
 	}
 
 	/** Quiet mode (ancient cities): plan without mining, placing or stepping on sculk sensors/shriekers. */
@@ -87,6 +98,12 @@ public final class Navigator {
 		if (goal == null) return Status.IDLE;
 		if (status == Status.ARRIVED || status == Status.FAILED) return status;
 		LocalPlayer p = mc.player;
+		// sitting in a boat no sail is steering (one given up, a restart mid-crossing): paths are walked, so get out —
+		// left in a beached boat the bot "explored" for twelve minutes without moving and tried to craft a second boat
+		if (p.getVehicle() instanceof AbstractBoat) {
+			controls.sneak();
+			return Status.MOVING;
+		}
 		BlockPos feet = feet(p);
 		if (goal.isEnd(feet.getX(), feet.getY(), feet.getZ()) && settled(p)) {
 			search = null;
@@ -96,7 +113,8 @@ public final class Navigator {
 		trackProgress(feet);
 
 		if (executor != null) {
-			PathExecutor.Result r = executor.tick(mc.level, p, controls);
+			PathExecutor ex = executor;
+			PathExecutor.Result r = ex.tick(mc.level, p, controls);
 			if (r == PathExecutor.Result.RUNNING) {
 				prePlan(p);
 				return Status.MOVING;
@@ -106,6 +124,8 @@ public final class Navigator {
 				failures++;
 				search = null;
 				preResult = null;
+				BlockPos badFrom = ex.failedFrom(), badTo = ex.failedTo();
+				if (badFrom != null && badTo != null) avoided.add(badFrom, badTo);
 			} else if (preResult != null && feet.equals(searchStart)) {
 				Pathfinder.Result next = preResult; // planned while walking: keep going without a pause
 				preResult = null;
@@ -122,7 +142,7 @@ public final class Navigator {
 		if (search == null) {
 			if (!settled(p)) return Status.MOVING; // let falls/jumps land before planning
 			searchScaffold = InvUtil.scaffold(p, keep);
-			search = new Pathfinder(new PathContext(mc.level, p, searchScaffold, quiet), feet, goal);
+			search = new Pathfinder(new PathContext(mc.level, p, searchScaffold, quiet), feet, goal, avoided);
 			searchStart = feet;
 			searchTicks = 0;
 		}
@@ -143,6 +163,7 @@ public final class Navigator {
 		}
 		if (result.exhausted()) failures++; // walking to the closest point we can reach; counts against retries
 		lastPartial = !result.complete();
+		digTime = DigTime.of(mc.level, mc.player, goal, result.steps(), searchStart, result.complete());
 		executor = new PathExecutor(result.steps(), searchStart, searchScaffold);
 		return Status.MOVING;
 	}
@@ -151,7 +172,7 @@ public final class Navigator {
 	private void prePlan(LocalPlayer p) {
 		if (lastPartial && search == null && preResult == null && executor.remaining() <= 3) {
 			searchStart = executor.end();
-			search = new Pathfinder(new PathContext(mc.level, p, searchScaffold, quiet), searchStart, goal);
+			search = new Pathfinder(new PathContext(mc.level, p, searchScaffold, quiet), searchStart, goal, avoided);
 			searchTicks = 0;
 		}
 		if (search == null) return;

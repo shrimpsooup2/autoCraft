@@ -77,6 +77,12 @@ final class AnimalProcedure implements Procedure {
 	}
 
 	@Override
+	public Item consumed(Item item) {
+		Kind k = kinds.get(item);
+		return k.tool == Items.BUCKET ? Items.BUCKET : null;
+	}
+
+	@Override
 	public Task start(Item item, int total) {
 		return new Run(item, total, kinds.get(item));
 	}
@@ -118,7 +124,7 @@ final class AnimalProcedure implements Procedure {
 				chase[0] = null;
 			}
 			if (target == null) {
-				if (explorer.legs() >= MAX_LEGS) return Status.FAILED;
+				if (explorer.exhausted(MAX_LEGS)) return Status.FAILED;
 				explorer.tick(bot, kind.what);
 				return Status.RUNNING;
 			}

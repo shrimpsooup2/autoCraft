@@ -389,6 +389,11 @@ public final class BuildBehavior implements Behavior {
 				workshop.start(c);
 				return true;
 			}
+			case Planner.Smith s -> {
+				bot.setNeed(Bot.NeedOwner.BUILD, null);
+				workshop.start(s);
+				return true;
+			}
 			case Planner.Special sp -> {
 				if (workshop.packUp(bot)) return true;
 				bot.setNeed(Bot.NeedOwner.BUILD, null);
@@ -436,7 +441,7 @@ public final class BuildBehavior implements Behavior {
 		}
 		reset();
 		bot.finishBuild();
-		if (bot.job() == null) bot.stop(Bot.BUILD_COMPLETE);
+		if (bot.job() == null) bot.goalMet(Bot.BUILD_COMPLETE); // the build was the task: end it (FinishBehavior)
 		return true;
 	}
 }

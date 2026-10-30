@@ -2,6 +2,7 @@ package com.autocraft.procedure;
 
 import com.autocraft.Bot;
 import com.autocraft.goal.Requirement.Dim;
+import com.autocraft.loot.LootSites;
 import java.util.Map;
 import net.minecraft.world.item.Item;
 import org.jspecify.annotations.Nullable;
@@ -22,12 +23,33 @@ public interface Procedure {
 	/** Planner effort per item, comparable with gathering (~8-20) and crafting (~1 per step). */
 	double cost(Item item);
 
+	/**
+	 * Of the {@link #needs}, what each item is made from and uses up (a log for a stripped log, a bottle for honey),
+	 * unlike tools and containers kept for the next one; null when nothing is.
+	 */
+	default @Nullable Item consumed(Item item) {
+		return null;
+	}
+
 	/** Begin producing until {@code total} of {@code item} are carried. */
 	Task start(Item item, int total);
 
 	/** How the item is got, for the item picker's tooltip. */
 	default String label() {
 		return "Special procedure (tools on blocks/animals, waiting, trial chambers)";
+	}
+
+	/** The dimension producing {@code item} takes place in (the Nether for a bastion chest); null = wherever we are. */
+	default @Nullable Dim dimension(Item item) {
+		return null;
+	}
+
+	/**
+	 * The guarded structure producing {@code item} means fighting in (spawners, illagers, the warden), or null for safe
+	 * work: where dying is likely, a respawn bed nearby is worth making.
+	 */
+	default LootSites.@Nullable Site dangerousSite(Item item) {
+		return null;
 	}
 
 	/** One running procedure. */

@@ -1,5 +1,6 @@
 package com.autocraft.procedure;
 
+import com.autocraft.loot.LootSites;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -18,7 +19,7 @@ public final class Procedures {
 	private static List<Procedure> all() {
 		if (all == null) {
 			all = List.of(new BeeNestProcedure(), new AnimalProcedure(), new BlockWorkProcedure(), new OxidizeProcedure(), new TrialChamberProcedure(),
-					new ChestLootProcedure());
+					new ScoopProcedure(), new ChestLootProcedure());
 		}
 		return all;
 	}
@@ -31,6 +32,12 @@ public final class Procedures {
 			if (p.makes(item) && (best == null || p.cost(item) < best.cost(item))) best = p;
 		}
 		return best;
+	}
+
+	/** The guarded structure the cheapest procedure for {@code item} works in, or null ({@link Procedure#dangerousSite}). */
+	public static LootSites.@Nullable Site dangerousSite(Item item) {
+		Procedure p = forItem(item);
+		return p == null ? null : p.dangerousSite(item);
 	}
 
 	public static void failed(Item item) {

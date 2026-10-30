@@ -16,9 +16,35 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.BedBlock;
+import net.minecraft.world.level.block.BellBlock;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.ButtonBlock;
+import net.minecraft.world.level.block.CakeBlock;
+import net.minecraft.world.level.block.CandleCakeBlock;
+import net.minecraft.world.level.block.ChiseledBookShelfBlock;
+import net.minecraft.world.level.block.ComposterBlock;
+import net.minecraft.world.level.block.CopperGolemStatueBlock;
+import net.minecraft.world.level.block.DaylightDetectorBlock;
+import net.minecraft.world.level.block.DecoratedPotBlock;
+import net.minecraft.world.level.block.DiodeBlock;
+import net.minecraft.world.level.block.DoorBlock;
+import net.minecraft.world.level.block.DragonEggBlock;
+import net.minecraft.world.level.block.FenceGateBlock;
+import net.minecraft.world.level.block.FlowerPotBlock;
+import net.minecraft.world.level.block.JukeboxBlock;
+import net.minecraft.world.level.block.LecternBlock;
+import net.minecraft.world.level.block.LeverBlock;
+import net.minecraft.world.level.block.NoteBlock;
+import net.minecraft.world.level.block.RespawnAnchorBlock;
+import net.minecraft.world.level.block.ShelfBlock;
+import net.minecraft.world.level.block.SignBlock;
+import net.minecraft.world.level.block.TrapDoorBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The bot's hands and feet. Movement keys are "desired state" for the current tick: {@link #beginTick()}
@@ -88,9 +114,13 @@ public final class Controls {
 		o.keyLeft.setDown(l);
 		o.keyRight.setDown(r);
 		o.keyJump.setDown(jump);
-		// quiet: footsteps, splashes and landings make no vibrations while sneaking; sneaking refuses to step off a
-		// ledge though, so let go for that one step (and press again in the air, before landing)
-		o.keyShift.setDown(sneak || quiet && !(p.onGround() && aboutToStepDown(p, f, b, l, r)));
+		// quiet: footsteps, splashes and landings make no vibrations while sneaking; on magma: no burns while sneaking.
+		// Sneaking refuses to step off a ledge though, so let go for that one step (and press again in the air)
+		BlockPos ahead = p.onGround() ? groundAhead(p, f, b, l, r) : null;
+		boolean stepDown = ahead != null && mc.level.getBlockState(ahead).getCollisionShape(mc.level, ahead).isEmpty();
+		// onto magma from beside it: sneaking only once on it let the step itself burn
+		boolean ontoMagma = ahead != null && mc.level.getBlockState(ahead).is(Blocks.MAGMA_BLOCK);
+		o.keyShift.setDown(sneak || (quiet || ontoMagma || magmaUnderfoot(p)) && !stepDown);
 		o.keySprint.setDown(sprint && !quiet);
 		o.keyUse.setDown(use);
 		o.keyAttack.setDown(false);
@@ -98,15 +128,29 @@ public final class Controls {
 		aimedLastTick = aim.settled(); // this tick's movement packet carries the settled view
 	}
 
-	/** Walking on with these keys would leave the ground (a drop of a block or more). */
-	private boolean aboutToStepDown(LocalPlayer p, boolean f, boolean b, boolean l, boolean r) {
+	/** The block under the point half a step ahead along these keys (where the next step lands), or null standing still. */
+	private @Nullable BlockPos groundAhead(LocalPlayer p, boolean f, boolean b, boolean l, boolean r) {
 		double fw = (f ? 1 : 0) - (b ? 1 : 0), lw = (l ? 1 : 0) - (r ? 1 : 0);
-		if (fw == 0 && lw == 0) return false;
+		if (fw == 0 && lw == 0) return null;
 		double yaw = Math.toRadians(p.getYRot());
 		double dx = lw * Math.cos(yaw) - fw * Math.sin(yaw), dz = fw * Math.cos(yaw) + lw * Math.sin(yaw);
 		double len = Math.sqrt(dx * dx + dz * dz);
-		BlockPos below = BlockPos.containing(p.getX() + dx / len * 0.55, p.getY() - 0.5, p.getZ() + dz / len * 0.55);
-		return mc.level.getBlockState(below).getCollisionShape(mc.level, below).isEmpty();
+		return BlockPos.containing(p.getX() + dx / len * 0.55, p.getY() - 0.5, p.getZ() + dz / len * 0.55);
+	}
+
+	/**
+	 * Standing on magma, or about to land on it: the burn comes on the landing tick, so pressing sneak only once on the
+	 * ground was a tick late — digging down through magma cost a burn for every block.
+	 */
+	private boolean magmaUnderfoot(LocalPlayer p) {
+		if (p.onGround()) return mc.level.getBlockState(p.getOnPos()).is(Blocks.MAGMA_BLOCK);
+		if (p.getDeltaMovement().y >= 0) return false;
+		BlockPos.MutableBlockPos at = BlockPos.containing(p.getX(), p.getY() - 0.01, p.getZ()).mutable();
+		for (int i = 0; i < 2; i++, at.move(0, -1, 0)) {
+			BlockState s = mc.level.getBlockState(at);
+			if (!s.getCollisionShape(mc.level, at).isEmpty()) return s.is(Blocks.MAGMA_BLOCK);
+		}
+		return false;
 	}
 
 	/** Let go of everything (bot stopped / paused). Safe to call repeatedly. */
@@ -242,10 +286,15 @@ public final class Controls {
 
 	/**
 	 * Place a block matching {@code item} into {@code target} by clicking a solid neighbor face.
-	 * Returns false if there is no item or no face to click.
+	 * Returns false if there is no item or no face to click. A face of a block that does something when clicked
+	 * (furnace, chest, door) only works while sneaking — otherwise the click opens it (the crafting table went into
+	 * the furnace for minutes) — so such faces are left alone unless the server already knows we're sneaking;
+	 * when they're all there is, sneaking starts and the next call can use them.
 	 */
 	public boolean place(BlockPos target, Predicate<ItemStack> item) {
 		if (!mc.level.getBlockState(target).canBeReplaced()) return false;
+		boolean sneaking = mc.player.isShiftKeyDown(); // what the last input packet told the server
+		boolean onlyUsable = false;
 		for (Direction dir : Direction.values()) {
 			BlockPos against = target.relative(dir);
 			BlockState s = mc.level.getBlockState(against);
@@ -253,6 +302,10 @@ public final class Controls {
 			Direction clickedFace = dir.getOpposite();
 			Vec3 hit = Vec3.atCenterOf(against).add(Vec3.atLowerCornerOf(clickedFace.getUnitVec3i()).scale(0.5));
 			if (mc.player.getEyePosition().distanceToSqr(hit) > sq(mc.player.blockInteractionRange())) continue;
+			if (!sneaking && opensOnClick(against, s)) {
+				onlyUsable = true;
+				continue;
+			}
 			if (!InvUtil.select(mc.player, item)) return false;
 			if (quiet && !mc.player.getMainHandItem().is(ItemTags.WOOL)) return false; // only wool goes down silently
 			lookAt(hit);
@@ -263,7 +316,20 @@ public final class Controls {
 			}
 			return r.consumesAction();
 		}
+		if (onlyUsable) sneak();
 		return false;
+	}
+
+	/** Right-clicking this block uses it (a menu, a door, a note) rather than placing against it. */
+	private boolean opensOnClick(BlockPos pos, BlockState s) {
+		Block b = s.getBlock();
+		return s.getMenuProvider(mc.level, pos) != null || b instanceof DoorBlock || b instanceof TrapDoorBlock
+				|| b instanceof FenceGateBlock || b instanceof ButtonBlock || b instanceof LeverBlock || b instanceof BedBlock
+				|| b instanceof NoteBlock || b instanceof DiodeBlock || b instanceof CakeBlock || b instanceof CandleCakeBlock
+				|| b instanceof JukeboxBlock || b instanceof BellBlock || b instanceof DaylightDetectorBlock
+				|| b instanceof RespawnAnchorBlock || b instanceof LecternBlock || b instanceof ChiseledBookShelfBlock
+				|| b instanceof DecoratedPotBlock || b instanceof SignBlock || b instanceof DragonEggBlock || b instanceof ComposterBlock
+				|| b instanceof FlowerPotBlock || b instanceof ShelfBlock || b instanceof CopperGolemStatueBlock;
 	}
 
 	private static double sq(double v) {

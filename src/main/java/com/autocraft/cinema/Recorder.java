@@ -276,7 +276,7 @@ public final class Recorder {
 	}
 
 	/** ffmpeg on the PATH, where winget puts it, or a few usual folders. */
-	private static @Nullable String findFfmpeg() {
+	public static @Nullable String findFfmpeg() {
 		List<String> candidates = new ArrayList<>(List.of("ffmpeg"));
 		String local = System.getenv("LOCALAPPDATA");
 		if (local != null) candidates.add(Path.of(local, "Microsoft", "WinGet", "Links", "ffmpeg.exe").toString());

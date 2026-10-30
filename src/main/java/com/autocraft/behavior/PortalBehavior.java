@@ -6,34 +6,37 @@ import com.autocraft.control.InvUtil;
 import com.autocraft.craft.Planner;
 import com.autocraft.craft.Stations;
 import com.autocraft.craft.Workshop;
-import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
 import com.autocraft.goal.Requirement.Dim;
 import com.autocraft.goal.Resources;
 import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
 import com.autocraft.travel.portal.CastPortalBuilder;
+import com.autocraft.travel.portal.KnownPortals;
 import com.autocraft.travel.portal.ObsidianCaster;
 import com.autocraft.travel.portal.PortalBuilder;
 import com.autocraft.travel.portal.PortalFrame;
 import com.autocraft.travel.portal.PortalOptions;
 import com.autocraft.world.BlockUtil;
 import java.util.Comparator;
-import java.util.EnumMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.tags.ItemTags;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 
 /**
  * Changes dimension when needed: gear materials only found on the other side, the job's next requirement
- * lives there, or the job is done and the base is on the other side. In the Overworld it compares rough time
+ * lives there, a go-to task's destination is there, or a task is done and the base it ends at is on the other
+ * side. In the Overworld it compares rough time
  * costs first ({@link PortalOptions}): walking to a remembered or visible portal, casting a bucket portal at a lava
  * pool (no diamond pickaxe), or getting 10 obsidian (mined, or cast from lava and mined) and building. Portals
  * used are remembered per dimension for the trip back.
@@ -42,13 +45,15 @@ public final class PortalBehavior implements Behavior {
 	private static final int PORTAL_SCAN_CHUNKS = 8;
 	private static final int OBSIDIAN = 10;
 	private static final int CORNER_BLOCKS = 3;
-	private static final int PORTAL_TIMEOUT = 20 * 15;
+	/** Inside this long without being taken (vanilla takes 4 s): still on the portal's cooldown, step out and in again. */
+	private static final int PORTAL_TIMEOUT = 20 * 6;
+	/** Clear of the portal this long before stepping back in: its cooldown (10 ticks) only runs down outside it. */
+	private static final int OUTSIDE_TICKS = 15;
 	private static final int MAX_SITE_FAILURES = 3;
 	private static final int BUCKETS = CastPortalBuilder.LAVA_BUCKETS + 1;
 	/** Build the bucket portal within this distance of the lava, so refills are short. */
 	private static final int NEAR_LAVA = 6;
 
-	private final Map<Dim, BlockPos> known = new EnumMap<>(Dim.class);
 	private final Workshop workshop = new Workshop();
 	private @Nullable Dim lastDim;
 	private @Nullable BlockPos entering;
@@ -58,6 +63,10 @@ public final class PortalBehavior implements Behavior {
 	/** How this trip gets through (decided once per trip by time cost). */
 	private PortalOptions.@Nullable Kind plan;
 	private int insideTicks;
+	/** Inside a portal on its cooldown (just came through it, or relogged in it): leave it before going back in. */
+	private boolean stepOut;
+	private int outsideTicks;
+	private @Nullable BlockPos exit;
 	private int castFailures;
 	private int siteFailures;
 	private int bucketPortalFailures;
@@ -86,11 +95,19 @@ public final class PortalBehavior implements Behavior {
 		if (lastDim != null && now != lastDim) arrived(bot, lastDim, now);
 		lastDim = now;
 
-		// material needs (iron for a new pickaxe, quartz for observers or comparators) decide first, then going back
-		// for our items after a death, a base to fetch from, then the job
+		// tools first (gear needs), then food for the trip (or home for it), then going back for our items after a
+		// death — before the job's own materials, which are often among those items (a diamond pickaxe, netherite scrap)
+		// — as long as there's a pickaxe to dig the way (respawned empty-handed it tried to dig down to the portal by
+		// hand); then those materials, a base to fetch from, then the job; a task whose goal is met heads for its base
 		Requirement materialNeed = bot.materialNeed();
-		Dim want = materialNeed != null ? materialNeed.dimension() : bot.recovery() != null ? bot.recovery().dim()
-				: bot.fetchOrder() != null ? bot.fetchOrder().dim() : bot.procedureDimension() != null ? bot.procedureDimension() : desiredDimension(bot);
+		Requirement gearNeed = bot.need(Bot.NeedOwner.GEAR);
+		Requirement foodNeed = bot.need(Bot.NeedOwner.FOOD);
+		boolean canDig = InvUtil.find(bot.player(), s -> s.is(ItemTags.PICKAXES)) >= 0;
+		Dim want = gearNeed != null ? gearNeed.dimension() : foodNeed != null ? foodNeed.dimension()
+				: bot.recovery() != null && (canDig || materialNeed == null) ? bot.recovery().dim()
+				: materialNeed != null ? materialNeed.dimension() : bot.finishing() != null ? bot.tripDimension()
+				: bot.fetchOrder() != null ? bot.fetchOrder().dim()
+				: bot.procedureDimension() != null ? bot.procedureDimension() : desiredDimension(bot);
 		if (want == null || want == now) {
 			if (materialNeed == null) bot.setNeed(Bot.NeedOwner.TRAVEL, null);
 			return false;
@@ -123,32 +140,36 @@ public final class PortalBehavior implements Behavior {
 		};
 	}
 
-	/** Where the job's next mined requirement is; with the job done, the base (to deposit). */
+	/** Where the job's next mined requirement is; else where the task is headed (a go-to destination). */
 	private static @Nullable Dim desiredDimension(Bot bot) {
 		Dim next = bot.nextDimension();
-		if (next != null) return next;
-		Job job = bot.job();
-		return job != null && job.isComplete(bot.player()) && bot.base() != null ? bot.baseDimension() : null;
+		return next != null ? next : bot.tripDimension();
 	}
 
 	private void arrived(Bot bot, Dim from, Dim to) {
-		if (entering != null) known.put(from, entering);
+		if (entering != null) KnownPortals.remember(from, entering);
 		List<BlockPos> here = bot.scanner().findBlocks(s -> s.is(Blocks.NETHER_PORTAL), 1, 1);
-		if (!here.isEmpty()) known.put(to, bottomOf(bot.mc().level, here.getFirst()));
+		BlockPos exit = here.isEmpty() ? null : bottomOf(bot.mc().level, here.getFirst());
+		if (exit != null) KnownPortals.remember(to, exit);
 		entering = null;
 		insideTicks = 0;
+		leavePortal();
 		builder = null;
 		bucketPortal = null;
 		plan = null;
 		bot.nav().stop();
 		bot.scanner().clear();
-		Chat.info("Arrived in the " + to.name().toLowerCase() + (here.isEmpty() ? "." : ", portal at " + known.get(to).toShortString() + "."));
+		Chat.info("Arrived in the " + to.name().toLowerCase() + (exit == null ? "." : ", portal at " + exit.toShortString() + "."));
 	}
 
+	/** The nearest portal we know of in {@code dim} (trusted while out of view), else one in sight. */
 	private @Nullable BlockPos findPortal(Bot bot, Dim dim) {
 		ClientLevel level = bot.mc().level;
-		BlockPos k = known.get(dim);
-		if (k != null && (!level.isLoaded(k) || level.getBlockState(k).is(Blocks.NETHER_PORTAL))) return k; // trust memory when out of view
+		BlockPos feet = Navigator.feet(bot.player());
+		for (BlockPos k = KnownPortals.nearest(dim, feet); k != null; k = KnownPortals.nearest(dim, feet)) {
+			if (!level.isLoaded(k) || level.getBlockState(k).is(Blocks.NETHER_PORTAL)) return k;
+			KnownPortals.forget(dim, k); // broken since
+		}
 		List<BlockPos> found = bot.scanner().findBlocksCached("portal@" + dim, s -> s.is(Blocks.NETHER_PORTAL), PORTAL_SCAN_CHUNKS, 1, 100);
 		return found.isEmpty() ? null : bottomOf(level, found.getFirst());
 	}
@@ -159,22 +180,37 @@ public final class PortalBehavior implements Behavior {
 		return pos.immutable();
 	}
 
-	/** Walk next to the portal, step in, stand still until the dimension changes. */
+	/**
+	 * Walk next to the portal, step in, stand still until the dimension changes. The game counts the whole portal
+	 * block, and its cooldown (set on arrival, and on every tick spent touching a portal) only runs down while the
+	 * body is clear of it: arrived (or relogged) in a portal, the bot first steps out, then back in. Waiting inside
+	 * on the cooldown, or "stepping out" with half its body still in the portal, it stood there until mobs and the
+	 * magma floor killed it.
+	 */
 	private boolean enter(Bot bot, BlockPos portal) {
 		LocalPlayer p = bot.player();
 		ClientLevel level = bot.mc().level;
 		BlockPos feet = Navigator.feet(p);
-		if (level.getBlockState(feet).is(Blocks.NETHER_PORTAL)) {
+		// a Nether death respawns in the Overworld: a respawn bed by this portal first (it runs before us, when it applies)
+		if (bot.dimension() == Dim.OVERWORLD) RespawnBedBehavior.noteNetherTrip(bot, portal);
+		if (touchingPortal(level, p)) {
 			entering = portal;
+			if (stepOut && stepOut(bot, level, feet)) return true;
 			bot.nav().stop();
 			bot.setStatus("waiting in the portal");
 			if (++insideTicks > PORTAL_TIMEOUT) {
 				insideTicks = 0;
-				bot.controls().back(); // step out and retry
+				leavePortal();
 			}
 			return true;
 		}
 		insideTicks = 0;
+		if (stepOut && ++outsideTicks < OUTSIDE_TICKS) {
+			bot.nav().stop();
+			bot.setStatus("stepping out of the portal");
+			return true;
+		}
+		stepOut = false;
 		Goal beside = new Goal.Beside(portal);
 		if (beside.isEnd(feet.getX(), feet.getY(), feet.getZ()) && Navigator.settled(p)) {
 			bot.nav().stop();
@@ -187,12 +223,60 @@ public final class PortalBehavior implements Behavior {
 		bot.nav().setGoal(beside);
 		if (bot.nav().tick() == Navigator.Status.FAILED) {
 			bot.nav().stop();
-			known.remove(bot.dimension());
+			KnownPortals.forget(bot.dimension(), portal);
 			Chat.warn("Can't reach the portal at " + portal.toShortString());
 			return false;
 		}
 		bot.setStatus("walking to the portal at " + portal.toShortString());
 		return true;
+	}
+
+	private void leavePortal() {
+		stepOut = true;
+		outsideTicks = 0;
+		exit = null;
+	}
+
+	/**
+	 * Walk (sneaking: lava lakes ring Nether portals) toward the middle of a cell beside the portal — the feet's own
+	 * cell when only the body still reaches into the portal — until clear of it; false when boxed in.
+	 */
+	private boolean stepOut(Bot bot, ClientLevel level, BlockPos feet) {
+		if (exit == null || feet.distManhattan(exit) > 1) exit = level.getBlockState(feet).is(Blocks.NETHER_PORTAL) ? exitFrom(level, feet) : feet;
+		if (exit == null) {
+			stepOut = false; // nowhere to step: wait inside after all
+			return false;
+		}
+		bot.nav().stop();
+		bot.setStatus("stepping out of the portal");
+		bot.controls().faceHorizontally(Vec3.atBottomCenterOf(exit));
+		bot.controls().forward();
+		bot.controls().sneak();
+		return true;
+	}
+
+	/** A cell beside {@code feet} to step out to: room to stand, not portal, a floor — a safe one before magma. */
+	private static @Nullable BlockPos exitFrom(ClientLevel level, BlockPos feet) {
+		BlockPos best = null;
+		for (Direction d : Direction.Plane.HORIZONTAL) {
+			BlockPos c = feet.relative(d);
+			BlockState at = level.getBlockState(c), floor = level.getBlockState(c.below());
+			if (at.is(Blocks.NETHER_PORTAL) || !BlockUtil.isPassable(level, c, at) || !BlockUtil.isPassable(level, c.above(), level.getBlockState(c.above()))) {
+				continue;
+			}
+			if (BlockUtil.canStandOn(level, c.below(), floor)) return c;
+			if (best == null && floor.is(Blocks.MAGMA_BLOCK)) best = c; // crossed sneaking, no burns
+		}
+		return best;
+	}
+
+	/** Any part of the body is in a portal block (the game counts the whole block). */
+	private static boolean touchingPortal(ClientLevel level, LocalPlayer p) {
+		AABB box = p.getBoundingBox().deflate(1.0E-5);
+		for (BlockPos pos : BlockPos.betweenClosed(BlockPos.containing(box.minX, box.minY, box.minZ), BlockPos.containing(box.maxX, box.maxY, box.maxZ))) {
+			if (level.getBlockState(pos).is(Blocks.NETHER_PORTAL)) return true;
+		}
+		return false;
 	}
 
 	/** Gather obsidian (or cast it), then build and light a portal here. */

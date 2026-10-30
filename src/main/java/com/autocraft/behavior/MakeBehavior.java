@@ -41,6 +41,10 @@ public final class MakeBehavior implements Behavior {
 	public boolean tick(Bot bot) {
 		Job job = bot.job();
 		if (job == null || bot.buildOrder() != null) return false;
+		// tools first, then food (it may mean a trip home from the Nether) and a respawn bed's wool: a running procedure —
+		// a bastion search, a trial chamber — waits for them. Gear waited only before a new plan: its stone pickaxe worn
+		// out, a trial chamber search tunnelled on through deepslate by hand while gear waited for the logs for sticks
+		if (bot.need(Bot.NeedOwner.GEAR) != null || bot.need(Bot.NeedOwner.FOOD) != null || bot.need(Bot.NeedOwner.BED) != null) return false;
 		LocalPlayer p = bot.player();
 		switch (workshop.tick(bot)) {
 			case RUNNING -> {
@@ -66,7 +70,6 @@ public final class MakeBehavior implements Behavior {
 			bot.setNeed(Bot.NeedOwner.MAKE, null);
 			return workshop.packUp(bot);
 		}
-		if (bot.need(Bot.NeedOwner.GEAR) != null) return false; // tools first
 		if (bot.need(Bot.NeedOwner.MAKE) != null && ++sincePlan < REPLAN_TICKS) return false;
 		sincePlan = 0;
 
@@ -87,6 +90,11 @@ public final class MakeBehavior implements Behavior {
 			case Planner.Cut c -> {
 				bot.setNeed(Bot.NeedOwner.MAKE, null);
 				workshop.start(c);
+				return true;
+			}
+			case Planner.Smith s -> {
+				bot.setNeed(Bot.NeedOwner.MAKE, null);
+				workshop.start(s);
 				return true;
 			}
 			case Planner.Special sp -> {

@@ -5,6 +5,7 @@ import com.autocraft.behavior.Harvest;
 import com.autocraft.control.InvUtil;
 import com.autocraft.goal.Requirement.Dim;
 import com.autocraft.path.Navigator;
+import com.autocraft.world.BiomeFinder;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -89,7 +90,7 @@ public final class Stations {
 			for (BlockPos pos : BlockPos.betweenClosed(base.offset(-BASE_STATION_RADIUS, -4, -BASE_STATION_RADIUS),
 					base.offset(BASE_STATION_RADIUS, 4, BASE_STATION_RADIUS))) {
 				Block b = bot.level().getBlockState(pos).getBlock();
-				if (b == Blocks.CRAFTING_TABLE || b == Blocks.FURNACE || b == Blocks.STONECUTTER) {
+				if (b == Blocks.CRAFTING_TABLE || b == Blocks.FURNACE || b == Blocks.STONECUTTER || b == Blocks.SMITHING_TABLE) {
 					baseStations.computeIfAbsent(b, k -> new ArrayList<>()).add(pos.immutable());
 				}
 			}
@@ -107,7 +108,8 @@ public final class Stations {
 	/** Planner with station availability decided by the same rule the crafter/smelter use. */
 	public static Planner planner(Bot bot, Predicate<ItemStack> protect) {
 		return new Planner(bot.player(), bot.dimension(), nearby(bot, Blocks.CRAFTING_TABLE) != null, nearby(bot, Blocks.FURNACE) != null,
-				nearby(bot, Blocks.STONECUTTER) != null, protect);
+				nearby(bot, Blocks.STONECUTTER) != null, nearby(bot, Blocks.SMITHING_TABLE) != null, protect,
+				BiomeFinder.around(bot.level(), bot.player().blockPosition(), bot.mc().options.getEffectiveRenderDistance()));
 	}
 
 	public static void notePlaced(Bot bot, BlockPos pos) {
@@ -131,7 +133,7 @@ public final class Stations {
 			if (d > bestDist) continue;
 			if (!bot.level().isLoaded(pos)) continue;
 			BlockState s = bot.level().getBlockState(pos);
-			if (!s.is(Blocks.CRAFTING_TABLE) && !s.is(Blocks.FURNACE) && !s.is(Blocks.STONECUTTER)) {
+			if (!s.is(Blocks.CRAFTING_TABLE) && !s.is(Blocks.FURNACE) && !s.is(Blocks.STONECUTTER) && !s.is(Blocks.SMITHING_TABLE)) {
 				it.remove(); // already picked up or broken
 				continue;
 			}
@@ -149,12 +151,14 @@ public final class Stations {
 	public static final class Cleanup {
 		private @Nullable Harvest pickup;
 		private @Nullable BlockPos target;
+		/** What's being picked up (the block is air once broken, while its drop is collected). */
+		private String what = "";
 		private int failures;
 
 		/** True while picking something up (call every tick until false). */
 		public boolean tick(Bot bot) {
 			if (pickup != null) {
-				bot.setStatus("picking up our " + bot.level().getBlockState(target).getBlock().getName().getString().toLowerCase());
+				bot.setStatus("picking up our " + what);
 				Harvest.Status s = pickup.tick(bot);
 				if (s == Harvest.Status.RUNNING) return true;
 				if (s == Harvest.Status.FAILED && ++failures < 3) {
@@ -168,7 +172,8 @@ public final class Stations {
 			}
 			target = nearestPlaced(bot);
 			if (target == null) return false;
-			pickup = new Harvest(target, s -> s.is(Items.CRAFTING_TABLE) || s.is(Items.FURNACE));
+			what = bot.level().getBlockState(target).getBlock().getName().getString().toLowerCase();
+			pickup = new Harvest(target, s -> s.is(Items.CRAFTING_TABLE) || s.is(Items.FURNACE) || s.is(Items.STONECUTTER) || s.is(Items.SMITHING_TABLE));
 			return true;
 		}
 

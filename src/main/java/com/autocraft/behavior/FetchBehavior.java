@@ -10,7 +10,7 @@ import org.jspecify.annotations.Nullable;
 /**
  * A task-tree "get from base" step: walk to the base and take the items out of its chests. Another dimension is
  * reached by the portal behavior first. Whatever the chests had, the step then counts as done (a short count is
- * reported; a later collect task gathers the rest).
+ * reported; a later collect task gathers the rest) and ends like any task ({@link FinishBehavior}).
  */
 public final class FetchBehavior implements Behavior {
 	private @Nullable BaseWithdraw withdraw;
@@ -28,7 +28,8 @@ public final class FetchBehavior implements Behavior {
 	@Override
 	public boolean tick(Bot bot) {
 		Bot.FetchOrder o = bot.fetchOrder();
-		if (o == null || o.dim() != bot.dimension()) return false;
+		if (o == null || o.dim() != bot.dimension() || bot.finishing() != null) return false;
+		if (bot.tripPickaxe() != null) return false; // gear makes a pickaxe first (Bot.considerTripPickaxe)
 		int have = InvUtil.count(bot.player(), s -> s.is(o.item()));
 		if (withdraw == null) {
 			if (have >= o.amount()) return done(bot, o, have);
@@ -43,7 +44,7 @@ public final class FetchBehavior implements Behavior {
 		if (have < o.amount()) {
 			Chat.warn("The base only had " + have + "/" + o.amount() + " " + o.item().getDefaultInstance().getHoverName().getString() + ".");
 		}
-		bot.stop(Bot.FETCH_COMPLETE);
+		bot.goalMet(Bot.FETCH_COMPLETE);
 		return true;
 	}
 }

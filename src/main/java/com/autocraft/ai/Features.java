@@ -8,11 +8,15 @@ import com.autocraft.goal.Requirement;
 import java.util.List;
 import java.util.Random;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.monster.Blaze;
 import net.minecraft.world.entity.monster.Creeper;
 import net.minecraft.world.entity.monster.Ghast;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.component.ItemAttributeModifiers;
 
 /**
  * Turns a combat situation into the ThreatNet input vector (all roughly 0..1), and provides the
@@ -52,10 +56,30 @@ public final class Features {
 	}
 
 	public static double bestWeaponDamage(LocalPlayer p) {
-		double best = 1;
+		return Threats.attackDamage(bestWeapon(p));
+	}
+
+	/**
+	 * Ticks between full-strength swings with that weapon (vanilla: 20 / attack speed). Fights used the delay of
+	 * whatever was in hand — cobblestone's 5 ticks instead of a sword's 12.5 — and a brute fight looked half as long.
+	 */
+	public static double bestWeaponDelay(LocalPlayer p) {
+		ItemAttributeModifiers mods = bestWeapon(p).getOrDefault(DataComponents.ATTRIBUTE_MODIFIERS, ItemAttributeModifiers.EMPTY);
+		double speed = mods.compute(Attributes.ATTACK_SPEED, p.getAttributeBaseValue(Attributes.ATTACK_SPEED), EquipmentSlot.MAINHAND);
+		return 20.0 / Math.max(0.1, speed);
+	}
+
+	/** The hardest-hitting stack carried (what {@code Melee.selectWeapon} takes into the hand); empty = a fist. */
+	private static ItemStack bestWeapon(LocalPlayer p) {
+		ItemStack best = ItemStack.EMPTY;
+		double bestDamage = 1;
 		for (int i = 0; i < InvUtil.MAIN_SIZE; i++) {
 			ItemStack s = p.getInventory().getItem(i);
-			if (!s.isEmpty()) best = Math.max(best, Threats.attackDamage(s));
+			double d = s.isEmpty() ? 0 : Threats.attackDamage(s);
+			if (d > bestDamage) {
+				bestDamage = d;
+				best = s;
+			}
 		}
 		return best;
 	}

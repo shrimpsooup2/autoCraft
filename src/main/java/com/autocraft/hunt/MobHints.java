@@ -22,7 +22,7 @@ public final class MobHints {
 	 * @param biomes          biomes to head for (empty = anywhere)
 	 * @param structureBlocks seeing one of these means the mob's structure is near; walk there
 	 * @param dark            spawns in the dark (night on the surface, caves any time)
-	 * @param unreachable     can't be hunted by the bot (End mobs, bosses)
+	 * @param unreachable     not hunted by the bot (End mobs, bosses, zombified piglins that answer as a pack)
 	 */
 	public record Hint(Dim dimension, Set<ResourceKey<Biome>> biomes, Set<Block> structureBlocks, boolean dark, boolean unreachable) {}
 
@@ -71,7 +71,8 @@ public final class MobHints {
 		put(EntityTypes.MAGMA_CUBE, Dim.NETHER, Set.of(Biomes.BASALT_DELTAS), Set.of(), false);
 		put(EntityTypes.HOGLIN, Dim.NETHER, Set.of(Biomes.CRIMSON_FOREST), Set.of(), false);
 		put(EntityTypes.PIGLIN, Dim.NETHER, Set.of(Biomes.CRIMSON_FOREST, Biomes.NETHER_WASTES), Set.of(), false);
-		put(EntityTypes.ZOMBIFIED_PIGLIN, Dim.NETHER, Set.of(Biomes.NETHER_WASTES), Set.of(), false);
+		// hitting one turns every zombified piglin around on the bot (it died to a pack hunting them for gold)
+		HINTS.put(EntityTypes.ZOMBIFIED_PIGLIN, new Hint(Dim.NETHER, Set.of(Biomes.NETHER_WASTES), Set.of(), false, true));
 		put(EntityTypes.STRIDER, Dim.NETHER, Set.of(), Set.of(), false);
 		put(EntityTypes.PIGLIN_BRUTE, Dim.NETHER, Set.of(), Set.of(Blocks.GILDED_BLACKSTONE, Blocks.POLISHED_BLACKSTONE_BRICKS), false);
 

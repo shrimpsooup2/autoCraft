@@ -10,6 +10,7 @@ import com.autocraft.goal.Requirement;
 import com.autocraft.hunt.MobHints;
 import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
+import com.autocraft.path.SurfaceClimb;
 import com.autocraft.travel.BoatTravel;
 import com.autocraft.travel.ElytraTravel;
 import com.autocraft.world.BiomeFinder;
@@ -34,15 +35,14 @@ import net.minecraft.world.entity.AgeableMob;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The actual job: pick up matching drops, mine the nearest good source block, otherwise explore
- * (ores: go to the best Y level and tunnel; surface resources: keep walking the current heading).
+ * The actual job: mine the nearest good source block, otherwise explore (ores: go to the best Y level and tunnel;
+ * surface resources: keep walking the current heading). The drops are picked up by {@link PickupBehavior}.
  */
 public final class CollectBehavior implements Behavior {
 	private static final int SCAN_CHUNKS = 5;
@@ -50,28 +50,39 @@ public final class CollectBehavior implements Behavior {
 	private static final int SCAN_MAX_AGE = 40;
 	/** A source in or under water counts as this much farther than a dry one. */
 	private static final double WET_PENALTY = 64;
-	private static final double DROP_RADIUS = 12;
 	private static final int BLACKLIST_TICKS = 20 * 60 * 5;
+	/** Running out of air this often on the way to a source block gives it up. */
+	private static final int AIR_SCARES = 2;
 	private static final int TUNNEL_LEG = 24;
 	private static final int WALK_LEG = 64;
 	private static final int BIOME_SEARCH_CHUNKS = 12;
 	private static final int FLY_LEG = 1000;
 	private static final double HUNT_RADIUS = 64;
 	private static final int PREY_TIMEOUT = 20 * 45;
+	/** Tell blocks of a hunted mob's structure looked at, nearest first, for one outside the unreachable parts. */
+	private static final int STRUCTURE_CANDIDATES = 64;
+	/** A path to a structure block failed: its tell blocks this close are skipped as well for a while. */
+	private static final int UNREACHABLE_RADIUS = 16;
 
 	private final Map<BlockPos, Long> blacklist = new HashMap<>();
-	private final Set<Integer> unreachableDrops = new HashSet<>();
+	/** Structure blocks a path failed to reach, until when (see {@link #UNREACHABLE_RADIUS}). */
+	private final Map<BlockPos, Long> unreachableStructure = new HashMap<>();
 	private long tick;
 	private @Nullable String lastTarget;
 	private @Nullable Harvest harvest;
 	private @Nullable BoatTravel boat;
 	private @Nullable Goal exploreGoal;
+	/** The current leg climbs out to the surface (see nextLeg). */
+	private boolean climbing;
+	/** Straight up the own column failed (water or bedrock overhead): reach the surface level anywhere. */
+	private boolean climbAnywhere;
 	private @Nullable Direction heading;
-	private @Nullable ItemEntity chasing;
 	private final LongOpenHashSet exhaustedBiomeChunks = new LongOpenHashSet();
 	private final Stations.Cleanup cleanup = new Stations.Cleanup();
 	private final Set<Integer> blacklistedMobs = new HashSet<>();
 	private final BlockPos[] preyChase = new BlockPos[1];
+	/** The bot's {@link Bot#airScares()} when the current harvest began. */
+	private int scaresAtHarvest;
 	private @Nullable LivingEntity prey;
 	private int preyTicks;
 	private final BaseFetch baseFetch = new BaseFetch();
@@ -84,12 +95,11 @@ public final class CollectBehavior implements Behavior {
 	@Override
 	public void reset() {
 		blacklist.clear();
-		unreachableDrops.clear();
+		unreachableStructure.clear();
 		lastTarget = null;
 		harvest = null;
 		boat = null;
 		exploreGoal = null;
-		chasing = null;
 		exhaustedBiomeChunks.clear();
 		blacklistedMobs.clear();
 		preyChase[0] = null;
@@ -131,6 +141,14 @@ public final class CollectBehavior implements Behavior {
 			boat = null;
 			exploreGoal = null;
 		}
+		if (harvest != null && bot.airScares() - scaresAtHarvest >= AIR_SCARES) {
+			// the way there runs under water: surfacing and diving back in made no headway for hours (a cobweb past a
+			// flooded cave) — another one, or another way
+			blacklist.put(harvest.target(), tick + BLACKLIST_TICKS);
+			bot.scanner().forget(harvest.target());
+			harvest = null;
+			bot.nav().stop();
+		}
 		if (harvest != null) {
 			Harvest.Status s = harvest.tick(bot);
 			if (s == Harvest.Status.RUNNING) {
@@ -141,13 +159,13 @@ public final class CollectBehavior implements Behavior {
 			bot.scanner().forget(harvest.target());
 			harvest = null;
 		}
-		if (chaseDrops(bot, target)) return true;
 
 		BlockPos source = pickSource(bot, target, harvestable);
 		if (source != null) {
 			exploreGoal = null;
 			bot.noteFound(target.name());
 			harvest = new Harvest(source, target.counts(), target.tool());
+			scaresAtHarvest = bot.airScares();
 			harvest.tick(bot);
 			bot.setStatus("mining " + target.name() + " at " + source.toShortString());
 			return true;
@@ -166,7 +184,6 @@ public final class CollectBehavior implements Behavior {
 		}
 		lastTarget = target.name();
 		exhaustedBiomeChunks.clear();
-		chasing = null;
 		exploreGoal = null;
 		if (harvest != null && harvest.isMining()) return; // a second from done: finish it rather than waste the work
 		harvest = null;
@@ -182,29 +199,12 @@ public final class CollectBehavior implements Behavior {
 		return out;
 	}
 
-	private boolean chaseDrops(Bot bot, Requirement target) {
-		if (chasing == null || !chasing.isAlive()) {
-			chasing = null;
-			List<ItemEntity> drops = bot.scanner().items(DROP_RADIUS, target.counts());
-			drops.removeIf(e -> unreachableDrops.contains(e.getId()));
-			if (drops.isEmpty()) return false;
-			chasing = drops.getFirst();
-		}
-		bot.nav().setGoal(new Goal.Near(chasing.blockPosition(), 0));
-		if (bot.nav().tick() == Navigator.Status.FAILED) {
-			unreachableDrops.add(chasing.getId());
-			chasing = null;
-			bot.nav().stop();
-			return false;
-		}
-		bot.setStatus("picking up " + target.name());
-		return true;
-	}
-
 	/**
-	 * Nearest safe source block, weighting vertical distance (digging is slower than walking). Blocks touching
-	 * water (lake beds, flooded caves) are skipped — mining there is 5x slower and drowns the bot — unless
-	 * searching dry ground has already failed.
+	 * Nearest safe source block in a straight line, blocks above counting half again (climbing takes a staircase or
+	 * a pillar; digging down is the quickest way to anything). Doubling every block of height used to send the bot
+	 * tunnelling to a diamond 30 blocks off with one 20 blocks under its feet. Blocks touching water (lake beds,
+	 * flooded caves) are skipped — mining there is 5x slower and drowns the bot — unless searching dry ground has
+	 * already failed.
 	 */
 	private @Nullable BlockPos pickSource(Bot bot, Requirement target, Set<Block> harvestable) {
 		ClientLevel level = bot.mc().level;
@@ -224,7 +224,8 @@ public final class CollectBehavior implements Behavior {
 			if (wet && !allowWet) continue;
 			if (!wet && state.is(BlockTags.PLANKS)) continue; // planks only from a wreck, never from someone's house
 			double dx = pos.getX() - feet.getX(), dy = pos.getY() - feet.getY(), dz = pos.getZ() - feet.getZ();
-			double score = Math.sqrt(dx * dx + dz * dz) + Math.abs(dy) * 2 + (wet ? WET_PENALTY : 0);
+			double up = dy > 0 ? dy * 1.5 : -dy;
+			double score = Math.sqrt(dx * dx + dz * dz + up * up) + (wet ? WET_PENALTY : 0);
 			if (score < bestScore) {
 				bestScore = score;
 				best = pos;
@@ -251,16 +252,17 @@ public final class CollectBehavior implements Behavior {
 		bot.nav().setGoal(exploreGoal);
 		Navigator.Status s = bot.nav().tick();
 		if (s == Navigator.Status.FAILED) {
+			if (climbing) climbAnywhere = true; // the straight climb (see nextLeg); any way up next
+			else bot.noteFruitlessLeg(target.name());
 			turn();
 			exploreGoal = null;
 			bot.nav().stop();
-			bot.noteFruitlessLeg(target.name());
 		} else if (s == Navigator.Status.ARRIVED) {
+			if (!climbing) bot.noteFruitlessLeg(target.name()); // up top is where the search starts
 			exploreGoal = null;
 			bot.nav().stop();
-			bot.noteFruitlessLeg(target.name());
 		}
-		bot.setStatus("exploring " + heading.getName() + " for " + target.name());
+		bot.setStatus(climbing ? "climbing to the surface for " + target.name() : "exploring " + heading.getName() + " for " + target.name());
 	}
 
 	/**
@@ -289,13 +291,12 @@ public final class CollectBehavior implements Behavior {
 	// ---- hunting --------------------------------------------------------------------------------
 
 	/**
-	 * Mob drops: pick up the drops, chase and kill the nearest huntable mob (adults, unnamed, not given up on),
-	 * walk to a tell-tale structure block (fortress bricks for blazes...), otherwise explore toward the hinted
-	 * biomes like for any resource.
+	 * Mob drops: chase and kill the nearest huntable mob (adults, unnamed, not given up on), walk to a tell-tale
+	 * structure block (fortress bricks for blazes...), otherwise explore toward the hinted biomes like for any
+	 * resource. The drops are picked up by {@link PickupBehavior}.
 	 */
 	private boolean hunt(Bot bot, Requirement target) {
 		bot.setHuntTargets(target.mobs());
-		if (chaseDrops(bot, target)) return true;
 		if (prey == null || !prey.isAlive() || prey.isRemoved() || ++preyTicks > PREY_TIMEOUT) {
 			if (prey != null && prey.isAlive() && preyTicks > PREY_TIMEOUT) blacklistedMobs.add(prey.getId());
 			prey = nearestPrey(bot, target);
@@ -317,8 +318,10 @@ public final class CollectBehavior implements Behavior {
 			bot.setStatus("heading to the structure at " + structure.toShortString() + " for " + target.name());
 			bot.nav().setGoal(new Goal.Near(structure, 4));
 			if (bot.nav().tick() == Navigator.Status.FAILED) {
+				// no way there from here (across lava, a sealed wall): retried every tick, heading there and exploring
+				// swapped every second and neither got anywhere. The rest of that part of it is no nearer either
+				unreachableStructure.put(structure, tick + BLACKLIST_TICKS);
 				bot.nav().stop();
-				explore(bot, target);
 			}
 			return true;
 		}
@@ -327,22 +330,46 @@ public final class CollectBehavior implements Behavior {
 	}
 
 	private @Nullable LivingEntity nearestPrey(Bot bot, Requirement target) {
+		// deep underground, animals up top are reached by climbing out first (explore does that), not by tunnelling
+		// under them as they wander off; one down here with us is fair game
+		BlockPos feet = Navigator.feet(bot.player());
+		boolean deep = belowSurface(bot, target, feet);
 		List<Entity> found = bot.scanner().entities(HUNT_RADIUS, e -> target.mobs().contains(e.getType()) && e instanceof LivingEntity le
-				&& le.isAlive() && !(le instanceof AgeableMob a && a.isBaby()) && !e.hasCustomName() && !blacklistedMobs.contains(e.getId()));
+				&& le.isAlive() && !(le instanceof AgeableMob a && a.isBaby()) && !e.hasCustomName() && !blacklistedMobs.contains(e.getId())
+				&& (!deep || Math.abs(e.getY() - feet.getY()) < 4));
 		return (LivingEntity) found.stream().min(Comparator.comparingDouble(e -> e.distanceToSqr(bot.player()))).orElse(null);
 	}
 
-	/** A block that gives away the hunted mob's structure (nether bricks for blazes), if one is in view. */
-	private static @Nullable BlockPos structureNearby(Bot bot, Requirement target) {
+	/**
+	 * The nearest block in view that gives away the hunted mob's structure (nether bricks for blazes), away from the
+	 * parts a path couldn't reach lately.
+	 */
+	private @Nullable BlockPos structureNearby(Bot bot, Requirement target) {
 		Set<Block> tell = new HashSet<>();
 		for (EntityType<?> t : target.mobs()) tell.addAll(MobHints.of(t).structureBlocks());
 		if (tell.isEmpty()) return null;
-		List<BlockPos> found = bot.scanner().findBlocks(s -> tell.contains(s.getBlock()), SCAN_CHUNKS, 1);
-		return found.isEmpty() ? null : found.getFirst();
+		unreachableStructure.values().removeIf(until -> until <= tick);
+		for (BlockPos pos : bot.scanner().findBlocks(s -> tell.contains(s.getBlock()), SCAN_CHUNKS, STRUCTURE_CANDIDATES)) {
+			if (unreachableStructure.keySet().stream().noneMatch(u -> u.distSqr(pos) < UNREACHABLE_RADIUS * UNREACHABLE_RADIUS)) return pos;
+		}
+		return null;
+	}
+
+	/** A surface target (trees, animals) with the bot well below the ground at its column. */
+	private static boolean belowSurface(Bot bot, Requirement target, BlockPos feet) {
+		return target.strategy() == Requirement.Strategy.SURFACE && target.dimension() == Requirement.Dim.OVERWORLD
+				&& SurfaceClimb.below(bot.mc().level, feet);
 	}
 
 	private Goal nextLeg(Bot bot, Requirement target, BlockPos feet) {
 		ClientLevel level = bot.mc().level;
+		// trees and animals are up top: see SurfaceClimb
+		if (belowSurface(bot, target, feet)) {
+			climbing = true;
+			return SurfaceClimb.goal(bot.player(), level, feet, climbAnywhere);
+		}
+		climbing = false;
+		climbAnywhere = false;
 		if (!target.biomes().isEmpty()) {
 			Goal toBiome = biomeLeg(bot, level, target, feet);
 			if (toBiome != null) return toBiome;

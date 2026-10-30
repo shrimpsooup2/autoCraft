@@ -4,21 +4,28 @@ import com.autocraft.Bases;
 import com.autocraft.Bot;
 import com.autocraft.Chat;
 import com.autocraft.Settings;
+import com.autocraft.SpawnPoint;
 import com.autocraft.behavior.FarmBehavior;
 import com.autocraft.build.BuildOrder;
 import com.autocraft.build.MaterialAdvisor;
 import com.autocraft.build.MaterialSettings;
 import com.autocraft.build.StructureRegistry;
+import com.autocraft.goal.Destination;
+import com.autocraft.goal.Ending;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
+import com.autocraft.goal.Requirement.Dim;
 import com.autocraft.goal.Resources;
-import com.autocraft.path.Goal;
+import com.autocraft.loot.LootSites;
 import com.autocraft.path.Navigator;
 import com.autocraft.schematic.Schematic;
 import com.autocraft.schematic.SchematicLibrary;
+import com.autocraft.tasks.TaskNode;
+import com.autocraft.tasks.TaskTree;
 import com.autocraft.team.Team;
 import com.autocraft.ui.Placements;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
@@ -89,10 +96,7 @@ public final class Commands {
 				Settings.get().save();
 				Chat.info("Log off when done: " + (on ? "on" : "off"));
 			}
-			case "goto" -> {
-				if (args.length < 4) throw new IllegalArgumentException("usage: !ac goto <x> <y> <z>");
-				bot.startGoto(new Goal.Block(position(player, args, 1)));
-			}
+			case "goto" -> goTo(bot, args);
 			case "why" -> {
 				Chat.info("Now: " + bot.activeBehavior() + (bot.isRunning() ? "" : " (not running)") + " — " + bot.status());
 				Requirement need = bot.activeNeed();
@@ -110,6 +114,7 @@ public final class Commands {
 			case "farm" -> farm(bot, args);
 			case "built", "farms" -> built();
 			case "team" -> team(args);
+			case "spawn" -> spawn(bot, args);
 			case "film" -> com.autocraft.cinema.Film.command(args);
 			default -> help();
 		}
@@ -142,25 +147,106 @@ public final class Commands {
 		}
 	}
 
-	private static void collect(Bot bot, String[] args) {
+	/** {@code !ac collect <resource> <amount> ... [then ...]}: run as task tree tasks ({@link TaskTree#runCommand}). */
+	private static void collect(Bot bot, String[] all) {
+		Tail t = tail(all);
+		String[] args = t.args();
 		if (args.length < 3 || args.length % 2 == 0) {
-			throw new IllegalArgumentException("usage: !ac collect <resource> <amount> [<resource> <amount> ...]");
+			throw new IllegalArgumentException("usage: !ac collect <resource> <amount> [<resource> <amount> ...] [then <base> [go|emptiest|similar]]");
 		}
-		List<Requirement> reqs = new ArrayList<>();
+		List<TaskNode> items = new ArrayList<>();
 		for (int i = 1; i < args.length; i += 2) {
 			int amount = Integer.parseInt(args[i + 1]);
 			if (amount <= 0) throw new IllegalArgumentException("amount must be positive: " + args[i + 1]);
-			Requirement r = Resources.forJob(args[i], amount);
-			if (r == null) throw new IllegalArgumentException("can't mine or craft '" + args[i] + "' (try !ac resources)");
-			reqs.add(r);
+			if (Resources.forJob(args[i], amount) == null) throw new IllegalArgumentException(Resources.cantGet(args[i]));
+			items.add(TaskNode.collect(args[i], amount));
 		}
-		bot.start(new Job(reqs));
+		TaskTree.runCommand(bot, items, t.ending());
 	}
 
-	/** {@code !ac build <name> <x> <y> <z> [rotation]} or {@code !ac build <name> here [rotation]}. */
-	private static void build(Bot bot, String[] args) {
+	/**
+	 * {@code !ac goto <x> [<y>] <z> [overworld|nether] | base <name> | structure <kind> [then ...]}: a go-to task, run from
+	 * the task tree. No y: any height on that column; no dimension: the one we're in. {@code !ac goto structure} lists
+	 * the kinds.
+	 */
+	private static void goTo(Bot bot, String[] all) {
+		Tail t = tail(all);
+		String[] args = t.args();
+		String usage = "usage: !ac goto <x> [<y>] <z> [overworld|nether] | goto base <name> | goto structure <kind>  [then <base> [go|emptiest|similar]]";
+		if (args.length < 2) throw new IllegalArgumentException(usage);
+		Destination to;
+		switch (args[1].toLowerCase()) {
+			case "base" -> {
+				if (args.length < 3) throw new IllegalArgumentException(usage);
+				Bases.Base b = base(String.join(" ", Arrays.copyOfRange(args, 2, args.length)));
+				to = Destination.base(b.name(), b.pos(), b.dim());
+			}
+			case "structure" -> {
+				String names = String.join(", ", LootSites.structures().stream().map(LootSites.Site::name).toList());
+				if (args.length < 3) {
+					Chat.info("Structures: " + names + " (nether fortress and bastion are in the Nether).");
+					return;
+				}
+				String name = String.join(" ", Arrays.copyOfRange(args, 2, args.length));
+				LootSites.Site site = LootSites.structure(name);
+				if (site == null) throw new IllegalArgumentException("no structure '" + name + "' (one of: " + names + ")");
+				to = Destination.structure(site.name(), site.dim());
+			}
+			default -> {
+				int end = args.length;
+				Dim dim = bot.dimension();
+				String last = args[end - 1].toLowerCase();
+				if (last.equals("overworld") || last.equals("nether")) {
+					dim = last.equals("nether") ? Dim.NETHER : Dim.OVERWORLD;
+					end--;
+				}
+				if (end != 3 && end != 4) throw new IllegalArgumentException(usage);
+				BlockPos feet = Navigator.feet(bot.player());
+				int x = coord(args[1], feet.getX());
+				Integer y = end == 4 ? coord(args[2], feet.getY()) : null;
+				int z = coord(args[end - 1], feet.getZ());
+				to = Destination.coords(x, y, z, dim);
+			}
+		}
+		TaskTree.runCommand(bot, List.of(TaskNode.goTo(to)), t.ending());
+	}
+
+	/** A command's words before {@code then}, and the ending after it ({@code then <base> [go|emptiest|similar]}), if any. */
+	private record Tail(String[] args, @Nullable Ending ending) {}
+
+	private static Tail tail(String[] args) {
+		int then = -1;
+		for (int i = 1; i < args.length; i++) {
+			if (args[i].equalsIgnoreCase("then")) {
+				then = i;
+				break;
+			}
+		}
+		if (then < 0) return new Tail(args, null);
+		List<String> words = new ArrayList<>(Arrays.asList(args).subList(then + 1, args.length));
+		if (words.isEmpty()) throw new IllegalArgumentException("then <base> [go|emptiest|similar]: which base?");
+		Ending.Deposit deposit = words.size() > 1 ? Ending.Deposit.ofWord(words.getLast()) : null;
+		if (deposit != null) words.removeLast();
+		Bases.Base b = base(String.join(" ", words));
+		return new Tail(Arrays.copyOf(args, then), new Ending(b.name(), deposit == null ? Ending.Deposit.NONE : deposit));
+	}
+
+	private static Bases.Base base(String name) {
+		Bases.Base b = Bases.named(name);
+		if (b == null) {
+			throw new IllegalArgumentException("no base named '" + name + "' (bases: "
+					+ String.join(", ", Bases.all().stream().map(Bases.Base::name).toList()) + "; !ac base <name> adds one)");
+		}
+		return b;
+	}
+
+	/** {@code !ac build <name> <x> <y> <z> [rotation] [then ...]} or {@code !ac build <name> here [rotation] [then ...]}. */
+	private static void build(Bot bot, String[] all) {
+		Tail t = tail(all);
+		String[] args = t.args();
 		if (args.length < 3) {
-			throw new IllegalArgumentException("usage: !ac build <schematic> <x> <y> <z> [0|90|180|270]  or  !ac build <schematic> here [rotation]");
+			throw new IllegalArgumentException("usage: !ac build <schematic> <x> <y> <z> [0|90|180|270]  or  !ac build <schematic> here [rotation]"
+					+ "  [then <base> [go|emptiest|similar]]");
 		}
 		Schematic s = SchematicLibrary.get(args[1]);
 		if (s == null) throw new IllegalArgumentException("no schematic '" + args[1] + "' (see !ac schematics)");
@@ -172,6 +258,7 @@ public final class Commands {
 				s.size().getZ(), s.nonAirCount(), origin.toShortString()));
 		bot.startBuild(new BuildOrder(s, origin, rotation, Mirror.NONE, MaterialAdvisor.resolve(MaterialSettings.defaults(), s),
 				BuildOrder.Purpose.USER));
+		if (t.ending() != null) bot.setEnding(t.ending());
 	}
 
 	/** {@code !ac place <name>}: show it as a ghost at the crosshair and position it with the placement keys. */
@@ -182,9 +269,11 @@ public final class Commands {
 		Placements.start(s);
 	}
 
-	/** {@code !ac farm <resource> [x y z | here] [rotation]}: build a farm for a resource (site picked if no position). */
-	private static void farm(Bot bot, String[] args) {
-		if (args.length < 2) throw new IllegalArgumentException("usage: !ac farm <resource> [<x> <y> <z> | here] [rotation]");
+	/** {@code !ac farm <resource> [x y z | here] [rotation] [then ...]}: build a farm for a resource (site picked if no position). */
+	private static void farm(Bot bot, String[] all) {
+		Tail t = tail(all);
+		String[] args = t.args();
+		if (args.length < 2) throw new IllegalArgumentException("usage: !ac farm <resource> [<x> <y> <z> | here] [rotation] [then <base> [go|emptiest|similar]]");
 		String resource = args[1].toLowerCase().replace("minecraft:", "");
 		BlockPos origin = null;
 		int next = 2;
@@ -201,6 +290,7 @@ public final class Commands {
 					+ resource + "-<name>.litematic)");
 		}
 		if (!FarmBehavior.buildFarm(bot, resource, origin, rotation)) throw new IllegalArgumentException("no suitable spot nearby; give a position");
+		if (t.ending() != null) bot.setEnding(t.ending());
 	}
 
 	private static void schematics() {
@@ -252,21 +342,62 @@ public final class Commands {
 		Job job = bot.job();
 		Chat.info((bot.isPaused() ? "[paused] " : "") + bot.activeBehavior() + ": " + bot.status());
 		if (job != null) Chat.info("Progress: " + job.progress(p));
+		if (bot.destination() != null) Chat.info("Going to " + bot.destination().describe());
 		BuildOrder build = bot.buildOrder();
 		if (build != null) {
 			Chat.info("Building " + build.schematic().name() + " at " + build.origin().toShortString() + ": " + bot.buildPlaced() + "/"
 					+ bot.buildTotal() + " blocks");
 		}
 		Requirement need = bot.activeNeed();
+		if (bot.ending() != null) Chat.info((bot.finishing() != null ? "Done; now: " : "Then: ") + bot.ending().describe());
 		if (need != null) Chat.info("Prerequisite: " + need);
 		Chat.info(String.format("HP %.0f/20, food %d, pos %s", p.getHealth(), p.getFoodData().getFoodLevel(), p.blockPosition().toShortString()));
 	}
 
+	/**
+	 * {@code !ac spawn}: where the bot thinks the respawn point is and the beds it put down; {@code here} or {@code x y z}
+	 * sets it (this dimension); {@code beds on|off [blocks]}: the respawn bed setting and its distance.
+	 */
+	private static void spawn(Bot bot, String[] args) {
+		LocalPlayer p = bot.player();
+		String dim = SpawnPoint.dimensionOf(p.level());
+		Settings settings = Settings.get();
+		switch (args.length > 1 ? args[1].toLowerCase() : "") {
+			case "" -> {
+				SpawnPoint.Spot s = SpawnPoint.current();
+				Chat.info(s == null ? "Spawn point: not known yet (the world spawn shows in the Overworld; !ac spawn here sets it)."
+						: "Spawn point: " + s.describe() + (Double.isInfinite(s.distance(p.blockPosition(), dim)) ? "."
+								: ", " + (int) s.distance(p.blockPosition(), dim) + " blocks from here."));
+				List<String> beds = SpawnPoint.beds().stream().map(b -> b.pos().toShortString()).toList();
+				Chat.info("Respawn beds: " + (settings.respawnBeds ? "on (spawn point over " + settings.respawnBedDistance + " blocks away)" : "off")
+						+ "; beds we put down in this world: " + (beds.isEmpty() ? "none" : String.join(" · ", beds)) + ".");
+			}
+			case "here" -> SpawnPoint.set(Navigator.feet(p), dim, SpawnPoint.Kind.SET, "set by you");
+			case "beds" -> {
+				boolean on = args.length < 3 || !args[2].equalsIgnoreCase("off");
+				if (args.length > 3) {
+					int blocks = Integer.parseInt(args[3]);
+					if (blocks < 32) throw new IllegalArgumentException("the distance must be at least 32 blocks");
+					settings.respawnBedDistance = blocks;
+				}
+				settings.respawnBeds = on;
+				settings.save();
+				Chat.info("Respawn beds: " + (on ? "on, when the spawn point is over " + settings.respawnBedDistance + " blocks away." : "off."));
+			}
+			default -> {
+				if (args.length < 4) throw new IllegalArgumentException("usage: !ac spawn [here | <x> <y> <z> | beds on|off [blocks]]");
+				SpawnPoint.set(position(p, args, 1), dim, SpawnPoint.Kind.SET, "set by you");
+			}
+		}
+	}
+
 	private static void help() {
-		Chat.info("Press K for the control panel. Commands: !ac collect <item> <amount> ... (mined, crafted, hunted or special) | place"
-				+ " <schematic> (ghost preview, then position it) | build <schematic> <x y z|here> [rot] | farm <resource> [x y z|here] | team"
-				+ " host|join|leave | schematics | built | stop | pause | resume | status | base [name] | base remove <name> | bases"
-				+ " | base stocked on|off | logoff on|off | goto x y z"
+		Chat.info("Press K for the control panel. Commands: !ac collect <item> <amount> ... (mined, crafted, hunted or special) | goto x [y] z"
+				+ " [overworld|nether] | goto base <name> | goto structure <kind> | place <schematic> (ghost preview, then position it) | build"
+				+ " <schematic> <x y z|here> [rot] | farm <resource> [x y z|here] — collect, goto, build and farm take \"then <base>"
+				+ " [go|emptiest|similar]\" to end at a base (and store there) | team host|join|leave | schematics | built | stop | pause | resume"
+				+ " | status | base [name] | base remove <name> | bases | base stocked on|off | logoff on|off"
+				+ " | spawn [here | x y z] | spawn beds on|off [blocks]"
 				+ " | resources | film play|list|stop (plays the explainer video in this world)");
 	}
 }

@@ -25,6 +25,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.BarrelBlock;
 import net.minecraft.world.level.block.ChestBlock;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.ChestType;
 import net.minecraft.world.phys.BlockHitResult;
@@ -112,13 +113,30 @@ public final class ChestMemory {
 		BlockPos pos = opening != null && System.currentTimeMillis() - openingAt < OPENING_MS ? opening
 				: mc.hitResult instanceof BlockHitResult hit ? hit.getBlockPos() : null;
 		opening = null;
-		if (pos == null) return null;
-		BlockState s = mc.level.getBlockState(pos);
-		if (s.getBlock() instanceof BarrelBlock) return pos;
+		return pos == null ? null : key(mc.level, pos);
+	}
+
+	/** The position a container is remembered under — one per double chest — or null when {@code pos} isn't a chest or barrel. */
+	public static @Nullable BlockPos key(Level level, BlockPos pos) {
+		BlockState s = level.getBlockState(pos);
+		if (s.getBlock() instanceof BarrelBlock) return pos.immutable();
 		if (!(s.getBlock() instanceof ChestBlock)) return null;
-		if (s.getValue(ChestBlock.TYPE) == ChestType.SINGLE) return pos;
+		if (s.getValue(ChestBlock.TYPE) == ChestType.SINGLE) return pos.immutable();
 		BlockPos other = pos.relative(ChestBlock.getConnectedDirection(s));
-		return pos.asLong() < other.asLong() ? pos : other; // one key per double chest
+		return pos.asLong() < other.asLong() ? pos.immutable() : other; // one key per double chest
+	}
+
+	/** What the container at {@code pos} (either half of a double chest) held when last seen, or null if never looked into. */
+	public static @Nullable Map<Item, Integer> contents(Level level, BlockPos pos) {
+		BlockPos key = key(level, pos);
+		Chest c = key == null ? null : world().get(key.asLong());
+		if (c == null || c.dim != Dim.of(level)) return null;
+		Map<Item, Integer> out = new HashMap<>();
+		c.items.forEach((id, n) -> {
+			Item item = BuiltInRegistries.ITEM.getValue(Identifier.parse(id));
+			if (item != Items.AIR) out.merge(item, n, Integer::sum);
+		});
+		return out;
 	}
 
 	private static void record(Minecraft mc, BlockPos pos, ChestMenu menu) {

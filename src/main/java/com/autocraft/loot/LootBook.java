@@ -57,6 +57,8 @@ public final class LootBook {
 	private final Map<Item, List<BlockDrop>> fromBlocks = new HashMap<>();
 	private final Map<Item, List<MobDrop>> fromMobs = new HashMap<>();
 	private final Map<Item, List<ChestDrop>> fromChests = new HashMap<>();
+	/** Items some block drops only to a Silk Touch tool. */
+	private final java.util.Set<Item> silkOnly = new java.util.HashSet<>();
 
 	public static LootBook get() {
 		if (instance == null) instance = load();
@@ -66,6 +68,11 @@ public final class LootBook {
 	/** Blocks whose loot includes {@code item}, with the tool each needs. */
 	public List<BlockDrop> blockSources(Item item) {
 		return fromBlocks.getOrDefault(item, List.of());
+	}
+
+	/** Only a Silk Touch tool gets it from a block (turtle eggs, ice): the bot doesn't enchant. */
+	public boolean silkTouchOnly(Item item) {
+		return silkOnly.contains(item) && blockSources(item).isEmpty() && mobSources(item).isEmpty();
 	}
 
 	/** Mobs whose loot includes {@code item} when killed by a player. */
@@ -180,12 +187,13 @@ public final class LootBook {
 
 	private void readBlock(String id, JsonObject json) {
 		Block block = BuiltInRegistries.BLOCK.getOptional(Identifier.withDefaultNamespace(id)).orElse(Blocks.AIR);
-		if (block == Blocks.AIR) return;
+		if (block == Blocks.AIR || !json.has("pools")) return; // powder snow, fire, portals: no drops at all
 		for (JsonElement pool : json.getAsJsonArray("pools")) {
 			Cond poolCond = conditions(pool.getAsJsonObject());
 			if (poolCond.impossible) continue;
 			for (JsonElement entry : pool.getAsJsonObject().getAsJsonArray("entries")) {
 				walk(entry.getAsJsonObject(), poolCond, (item, c) -> {
+					if (c.tool == ToolUse.SILK) silkOnly.add(item);
 					if (c.special || c.tool == ToolUse.SILK) return;
 					addBlock(item, new BlockDrop(block, c.tool, c.chance));
 				});
@@ -320,6 +328,11 @@ public final class LootBook {
 				}
 				if (shears) c.tool = ToolUse.SHEARS;
 				else if (silk) c.tool = ToolUse.SILK;
+			}
+			case "minecraft:all_of" -> {
+				// every term holds: their chances multiply (zombified piglin gold ingots: killed by a player and 2.5%;
+				// read as a sure drop, the planner sent the bot hunting piglins for ingots)
+				for (JsonElement t : o.getAsJsonArray("terms")) apply(c, t);
 			}
 			case "minecraft:inverted" -> {
 				Cond sub = new Cond();

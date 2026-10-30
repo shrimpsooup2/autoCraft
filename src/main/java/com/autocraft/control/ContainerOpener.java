@@ -24,7 +24,9 @@ public final class ContainerOpener {
 
 	public Status tick(Bot bot) {
 		LocalPlayer p = bot.player();
-		if (menu.isInstance(p.containerMenu)) return Status.OPEN;
+		// the player's own inventory menu is always "open": asked for any container (AbstractContainerMenu), it matched
+		// at once, before the chest's menu came — and the base deposit shut every chest as "not a storage menu"
+		if (!InvUtil.inventoryMenuActive(p) && menu.isInstance(p.containerMenu)) return Status.OPEN;
 		if (!InvUtil.inventoryMenuActive(p)) p.closeContainer(); // some other screen is in the way
 		if (ticks % RETRY_EVERY == 0) {
 			ChestMemory.opening(pos);

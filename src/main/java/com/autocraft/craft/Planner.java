@@ -29,7 +29,9 @@ import net.minecraft.tags.ItemTags;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.resources.ResourceKey;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -42,7 +44,7 @@ import org.jspecify.annotations.Nullable;
  * inventory is the only state.
  */
 public final class Planner {
-	public sealed interface Step permits Craft, Smelt, Cut, Gather, Special, Unavailable, Done {}
+	public sealed interface Step permits Craft, Smelt, Cut, Smith, Gather, Special, Unavailable, Done {}
 
 	public record Craft(Recipe recipe) implements Step {}
 
@@ -50,6 +52,9 @@ public final class Planner {
 
 	/** Cut {@code cuts} of {@code input} into {@code output} on a stonecutter. */
 	public record Cut(Item input, Item output, int cuts) implements Step {}
+
+	/** Upgrade on a smithing table (diamond gear + netherite ingot + template → netherite gear). */
+	public record Smith(RecipeBook.Smithing recipe) implements Step {}
 
 	public record Gather(Requirement requirement) implements Step {}
 
@@ -73,30 +78,49 @@ public final class Planner {
 	private static final double CUT_COST = 0.5;
 	/** A stonecutter made just for this is shared by roughly this many items (it's kept for later too). */
 	private static final double CUTTER_AMORTIZE = 16;
+	/** Likewise a crafting table. */
+	private static final double TABLE_AMORTIZE = 16;
+	/** Three items into a smithing table. */
+	private static final double SMITH_COST = 1;
 
 	/** Cheapest way to make or get more of an item. */
-	private record Route(@Nullable Requirement gather, @Nullable Recipe recipe, RecipeBook.@Nullable Cut cut, @Nullable Procedure procedure,
-			double cost) {}
+	private record Route(@Nullable Requirement gather, @Nullable Recipe recipe, RecipeBook.@Nullable Cut cut, RecipeBook.@Nullable Smithing smith,
+			@Nullable Procedure procedure, double cost) {}
+
+	/** A memoized cost and every item it was worked out through, carried ones included (see {@link #cost}). */
+	private record Memo(double cost, Set<Item> through) {}
 
 	private final LocalPlayer p;
 	private final Requirement.Dim dimension;
 	private final boolean tableNearby;
 	private final boolean furnaceNearby;
 	private final boolean cutterNearby;
+	private final boolean smithingNearby;
 	private final Predicate<ItemStack> protect;
+	/** Biomes in the loaded area (null: unknown): gathering what grows only elsewhere is a trip (see Gatherable.cost). */
+	private final @Nullable Set<ResourceKey<Biome>> biomesAround;
 	private final RecipeBook book = RecipeBook.get();
-	private final Map<String, Double> costMemo = new HashMap<>();
+	private final Map<String, Memo> costMemo = new HashMap<>();
+	/** The items each cost in progress has been worked out through so far, innermost on top. */
+	private final java.util.ArrayDeque<Set<Item>> consulting = new java.util.ArrayDeque<>();
 	private boolean borrowJobLoot;
+	/** Dev only: receives every obtain/chooseTool decision when set. */
+	public static java.util.function.@Nullable Consumer<String> trace;
 
-	/** @param protect job loot: not used as an ingredient (unless {@link #borrowingJobLoot}), never smelted beyond what's needed */
+	/**
+	 * @param protect job loot: not used as an ingredient (unless {@link #borrowingJobLoot}), never smelted beyond what's needed
+	 * @param biomesAround biomes in the loaded area, or null when unknown
+	 */
 	public Planner(LocalPlayer p, Requirement.Dim dimension, boolean tableNearby, boolean furnaceNearby, boolean cutterNearby,
-			Predicate<ItemStack> protect) {
+			boolean smithingNearby, Predicate<ItemStack> protect, @Nullable Set<ResourceKey<Biome>> biomesAround) {
 		this.p = p;
 		this.dimension = dimension;
 		this.tableNearby = tableNearby;
 		this.furnaceNearby = furnaceNearby;
 		this.cutterNearby = cutterNearby;
+		this.smithingNearby = smithingNearby;
 		this.protect = protect;
+		this.biomesAround = biomesAround;
 	}
 
 	/**
@@ -136,6 +160,26 @@ public final class Planner {
 		return best == null ? new Unavailable("boat") : next(best, 1);
 	}
 
+	/**
+	 * Next step toward the cheapest bed: three wool of one color and three planks, so usually white from shorn or hunted
+	 * sheep, or whatever color three of are carried.
+	 */
+	public Step bed() {
+		if (hasAny(s -> s.is(ItemTags.BEDS))) return DONE;
+		Item best = null;
+		double bestCost = INF;
+		for (Holder<Item> h : BuiltInRegistries.ITEM.getTagOrEmpty(ItemTags.BEDS)) {
+			// the wool for this one is on hand: craft it (not a step toward another color's ingredients)
+			if (next(h.value(), 1) instanceof Craft craft && craft.recipe().output() == h.value()) return craft;
+			double c = cost(h.value(), false, 0, new HashSet<>());
+			if (c < bestCost) {
+				bestCost = c;
+				best = h.value();
+			}
+		}
+		return best == null ? new Unavailable("bed") : next(best, 1);
+	}
+
 	// ---- tools for gathering --------------------------------------------------------------------
 
 	/** A carried tool (or a bare hand) gets drops from at least one of the requirement's blocks. */
@@ -146,7 +190,11 @@ public final class Planner {
 		return false;
 	}
 
-	/** Pickaxe tiers that get drops from the requirement's blocks, cheapest to make right now first; empty: no tool needed. */
+	/**
+	 * Pickaxe tiers that get drops from the requirement's blocks, cheapest to make right now first; empty: no tool
+	 * needed. A tier made from what the requirement collects (a diamond pickaxe for diamonds, none carried) costs
+	 * what it really does — nothing it can be made from yet — and goes last.
+	 */
 	public List<Item> pickaxeTiers(Requirement r) {
 		for (Block b : r.sources()) {
 			if (!b.defaultBlockState().requiresCorrectToolForDrops()) return List.of();
@@ -156,8 +204,26 @@ public final class Planner {
 			ItemStack stack = new ItemStack(pick);
 			if (r.sources().stream().anyMatch(b -> stack.isCorrectToolForDrops(b.defaultBlockState()))) out.add(pick);
 		}
-		out.sort(Comparator.comparingDouble(pick -> cost(pick, false, 0, new HashSet<>()))); // stable: lower tier first on ties
+		Set<Item> mined = minedBy(r);
+		Map<Item, Double> costs = new HashMap<>();
+		for (Item pick : out) costs.put(pick, toolCost(pick, mined));
+		out.sort(Comparator.comparingDouble(costs::get)); // stable: lower tier first on ties
 		return out;
+	}
+
+	/** What gathering {@code r} yields that isn't carried yet: a pickaxe can't be made from those to get them. */
+	private Set<Item> minedBy(Requirement r) {
+		Set<Item> out = new HashSet<>();
+		for (Item i : BuiltInRegistries.ITEM) {
+			if (i != Items.AIR && carried(i) == 0 && r.counts().test(i.getDefaultInstance())) out.add(i);
+		}
+		return out;
+	}
+
+	/** Cost of making {@code pick} without any of {@code mined} (bypasses the memo: that was costed with them). */
+	private double toolCost(Item pick, Set<Item> mined) {
+		if (carried(pick) > 0) return 0;
+		return mined.isEmpty() ? cost(pick, false, 0, new HashSet<>()) : makeCost(pick, false, 0, new HashSet<>(mined));
 	}
 
 	/**
@@ -183,9 +249,14 @@ public final class Planner {
 		Unavailable none = new Unavailable("a pickaxe for " + r.name());
 		if (depth > PICKAXES.size() || !Collections.disjoint(pending, r.sources())) return new ToolChoice(null, none);
 		pending.addAll(r.sources());
+		Set<Item> mined = minedBy(r);
 		try {
 			for (Item tool : tiers) {
+				// its cheapest making (the way next() goes) needs what it's meant to mine: diamonds for a diamond pickaxe
+				double without = toolCost(tool, mined);
+				if (without >= INF || without > cost(tool, false, 0, new HashSet<>()) + 1e-6) continue;
 				Step s = next(tool, 1);
+				if (trace != null) trace.accept("tool[" + depth + "] for " + r.name() + " " + r.sources() + ": " + name(tool) + " -> " + s + " pending=" + pending);
 				if (s instanceof Unavailable || s instanceof Done) continue;
 				if (!(s instanceof Gather g)) return new ToolChoice(tool, s); // craft/smelt/cut toward it: actionable now
 				if (!Collections.disjoint(pending, g.requirement().sources())) continue; // needs what it's meant to mine
@@ -253,6 +324,12 @@ public final class Planner {
 				int cuts = (missing + route.cut.count() - 1) / route.cut.count();
 				parts.add(explainIngredient(route.cut.input(), cuts, depth, path, shown));
 				if (!cutterNearby && carried(Items.STONECUTTER) == 0) parts.add(explain(Items.STONECUTTER, 1, false, depth + 1, path, shown));
+			} else if (route.smith != null) {
+				how = "smithing table";
+				parts.add(explainIngredient(route.smith.template(), missing, depth, path, shown));
+				parts.add(explainIngredient(route.smith.base(), missing, depth, path, shown));
+				parts.add(explainIngredient(route.smith.addition(), missing, depth, path, shown));
+				if (!smithingNearby && carried(Items.SMITHING_TABLE) == 0) parts.add(explain(Items.SMITHING_TABLE, 1, false, depth + 1, path, shown));
 			} else if (route.recipe.isSmelting()) {
 				how = "smelt";
 				parts.add(explainIngredient(route.recipe.smeltInput(), missing, depth, path, shown));
@@ -336,6 +413,12 @@ public final class Planner {
 	}
 
 	private Step obtain(Item want, int count, boolean flexible, int depth, Set<Item> visiting) {
+		Step s = obtain0(want, count, flexible, depth, visiting);
+		if (trace != null) trace.accept("  ".repeat(depth) + "obtain " + name(want) + " x" + count + (flexible ? "*" : "") + " -> " + s);
+		return s;
+	}
+
+	private Step obtain0(Item want, int count, boolean flexible, int depth, Set<Item> visiting) {
 		int have = carried(want);
 		if (have >= count) return DONE;
 		if (depth > MAX_DEPTH || !visiting.add(want)) return new Unavailable(name(want));
@@ -357,6 +440,7 @@ public final class Planner {
 				return new Special(route.procedure, want, count);
 			}
 			if (route.cut != null) return cut(route.cut, missing, depth, visiting);
+			if (route.smith != null) return smith(route.smith, missing, depth, visiting);
 			if (route.recipe.isSmelting()) return smelt(route.recipe, missing, depth, visiting);
 			return craft(route.recipe, missing, depth, visiting);
 		} finally {
@@ -367,11 +451,15 @@ public final class Planner {
 	private Step craft(Recipe r, int missingOutput, int depth, Set<Item> visiting) {
 		int batches = (missingOutput + r.count() - 1) / r.count();
 		Set<Ingredient> seen = new HashSet<>();
+		Step later = null;
 		for (Ingredient ing : r.key().values()) {
 			if (!seen.add(ing)) continue;
 			Step s = ingredient(ing, r.amountOf(ing) * batches, depth, visiting);
-			if (!(s instanceof Done)) return s;
+			if (s instanceof Done) continue;
+			if (!elsewhere(s)) return s;
+			if (later == null) later = s;
 		}
+		if (later != null) return later;
 		if (!r.fits2x2() && !tableNearby && carried(Items.CRAFTING_TABLE) == 0) {
 			Step t = obtain(Items.CRAFTING_TABLE, 1, false, depth + 1, visiting);
 			if (!(t instanceof Done)) return t;
@@ -390,14 +478,48 @@ public final class Planner {
 		return new Cut(pickCarried(c.input()), c.output(), cuts);
 	}
 
+	/**
+	 * One upgrade per item: the base (diamond gear, mined at home; its pickaxe is what mines ancient debris
+	 * anyway), the addition, the template and a smithing table — whichever can be had on this side of the portal
+	 * first, so the bot crosses once.
+	 */
+	private Step smith(RecipeBook.Smithing r, int missingOutput, int depth, Set<Item> visiting) {
+		Step later = null;
+		for (Ingredient ing : List.of(r.base(), r.addition(), r.template())) {
+			Step s = ingredient(ing, missingOutput, depth, visiting);
+			if (s instanceof Done) continue;
+			if (!elsewhere(s)) return s;
+			if (later == null) later = s;
+		}
+		if (!smithingNearby && carried(Items.SMITHING_TABLE) == 0) {
+			Step t = obtain(Items.SMITHING_TABLE, 1, false, depth + 1, visiting);
+			if (!(t instanceof Done) && (later == null || !elsewhere(t))) return t;
+		}
+		return later != null ? later : new Smith(r);
+	}
+
+	/** A step that can't be taken in this dimension: gathering, or a procedure (a bastion chest), on the other side. */
+	private boolean elsewhere(Step s) {
+		return switch (s) {
+			case Gather g -> g.requirement().dimension() != dimension;
+			case Special sp -> {
+				Requirement.Dim d = sp.procedure().dimension(sp.item());
+				yield d != null && d != dimension;
+			}
+			default -> false;
+		};
+	}
+
 	private Step smelt(Recipe r, int missingOutput, int depth, Set<Item> visiting) {
 		Ingredient input = r.smeltInput();
 		Step s = ingredient(input, missingOutput, depth, visiting);
 		if (!(s instanceof Done)) return s;
 		Item inputItem = pickCarried(input);
-		// smelt every spare piece in one furnace session, but never more job loot than needed
+		// smelt every spare piece of ore in one furnace session, but never more job loot than needed, and of cheap
+		// blocks only what's needed (64 cobblestone went in for the 7 stone 4 stairs and a stonecutter take)
 		int carriedInput = InvUtil.count(p, input::test);
-		int amount = protect.test(new ItemStack(inputItem)) ? missingOutput : Math.min(carriedInput, 64);
+		ItemStack inputStack = new ItemStack(inputItem);
+		int amount = protect.test(inputStack) || InvUtil.isThrowaway(inputStack) ? missingOutput : Math.min(carriedInput, 64);
 		int furnaces = carried(Items.FURNACE) + (furnaceNearby ? 1 : 0);
 		if (furnaces == 0) {
 			Step f = obtain(Items.FURNACE, 1, false, depth + 1, visiting);
@@ -471,50 +593,90 @@ public final class Planner {
 	private @Nullable Route bestRoute(Item item, boolean flexible, int depth, Set<Item> visiting) {
 		Route best = null;
 		Requirement gather = Gatherable.requirementFor(item, carried(item) + 1, dimension, flexible);
-		if (gather != null) best = new Route(gather, null, null, null, Gatherable.cost(gather, dimension));
+		if (gather != null) best = new Route(gather, null, null, null, null, Gatherable.cost(gather, dimension, biomesAround));
 		for (Recipe r : book.crafting(item)) {
-			double c = CRAFT_COST + recipeInputs(r, depth, visiting);
-			if (best == null || c < best.cost) best = new Route(null, r, null, null, c);
+			// a 3x3 recipe needs a table: a share of one when none is at hand, and never one made from the item itself
+			// (an axe for stripped logs for the planks of the table it's crafted on)
+			double table = r.fits2x2() || tableNearby || carried(Items.CRAFTING_TABLE) > 0 ? 0
+					: cost(Items.CRAFTING_TABLE, false, depth + 1, visiting);
+			double c = table >= INF ? INF : CRAFT_COST + table / TABLE_AMORTIZE + recipeInputs(r, depth, visiting);
+			if (best == null || c < best.cost) best = new Route(null, r, null, null, null, c);
 		}
 		for (Recipe r : book.smelting(item)) {
 			double c = SMELT_COST + optionCost(r.smeltInput(), depth, visiting);
-			if (best == null || c < best.cost) best = new Route(null, r, null, null, c);
+			if (best == null || c < best.cost) best = new Route(null, r, null, null, null, c);
 		}
 		List<RecipeBook.Cut> cuts = book.cutting(item);
 		if (!cuts.isEmpty()) {
 			// stonecutter vs crafting table: better yields (stairs 1:1, not 6:4), but the cutter itself costs iron
-			double station = cutterNearby || carried(Items.STONECUTTER) > 0 ? 0 : cost(Items.STONECUTTER, false, depth + 1, visiting) / CUTTER_AMORTIZE;
+			double cutter = cutterNearby || carried(Items.STONECUTTER) > 0 ? 0 : cost(Items.STONECUTTER, false, depth + 1, visiting);
+			double station = cutter >= INF ? INF : cutter / CUTTER_AMORTIZE;
 			for (RecipeBook.Cut cut : cuts) {
 				double c = CUT_COST + station + optionCost(cut.input(), depth, visiting) / cut.count();
-				if (best == null || c < best.cost) best = new Route(null, null, cut, null, c);
+				if (best == null || c < best.cost) best = new Route(null, null, cut, null, null, c);
 			}
+		}
+		for (RecipeBook.Smithing s : book.smithing(item)) {
+			double station = smithingNearby || carried(Items.SMITHING_TABLE) > 0 ? 0 : cost(Items.SMITHING_TABLE, false, depth + 1, visiting);
+			double c = SMITH_COST + station + optionCost(s.template(), depth, visiting) + optionCost(s.base(), depth, visiting)
+					+ optionCost(s.addition(), depth, visiting);
+			if (best == null || c < best.cost) best = new Route(null, null, null, s, null, c);
 		}
 		Procedure proc = Procedures.forItem(item);
 		if (proc != null) {
 			double c = proc.cost(item);
+			Item used = proc.consumed(item);
 			for (Item need : proc.needs(item, 1).keySet()) {
-				c += cost(need, false, depth + 1, visiting) * 0.25; // tools and containers are reused across items
+				// tools and containers are reused across items; what it's made from is used up (at a quarter, a stripped
+				// log looked cheaper than the log, and planks for a crafting table waited on an axe that needed one)
+				c += cost(need, false, depth + 1, visiting) * (need == used ? 1 : 0.25);
 				if (c >= INF) break;
 			}
-			if (best == null || c < best.cost) best = new Route(null, null, null, proc, c);
+			if (best == null || c < best.cost) best = new Route(null, null, null, null, proc, c);
 		}
 		return best == null || best.cost >= INF ? null : best;
 	}
 
+	/**
+	 * An item being made can't go into itself: carried cobblestone made "smelt it to stone, cut that back" look free,
+	 * and the plan for a stone pickaxe then dead-ended in "can't get cobblestone". The memo keeps what each cost was
+	 * worked out through (carried items included), and a memoized cost that went through something being made right
+	 * now is worked out afresh: one carried cobblestone made stone cost a smelt, after which "cut stone back into
+	 * cobblestone" beat mining it — a loop, and the bot stood still for half an hour.
+	 */
 	private double cost(Item item, boolean flexible, int depth, Set<Item> visiting) {
+		if (visiting.contains(item)) return INF;
+		consulted(item);
 		if (carried(item) > 0) return 0;
 		String key = BuiltInRegistries.ITEM.getKey(item) + (flexible ? "*" : "");
-		Double memo = costMemo.get(key);
-		if (memo != null) return memo;
+		Memo memo = costMemo.get(key);
+		if (memo != null && Collections.disjoint(memo.through(), visiting)) {
+			consulted(memo.through());
+			return memo.cost();
+		}
 		if (depth > MAX_DEPTH || !visiting.add(item)) return INF;
+		Set<Item> through = new HashSet<>();
+		consulting.push(through);
 		try {
 			Route r = bestRoute(item, flexible, depth, visiting);
 			double c = r == null ? INF : r.cost;
-			if (c < INF) costMemo.put(key, c); // INF can be an artefact of the current recursion path
+			if (c < INF && memo == null) costMemo.put(key, new Memo(c, through)); // INF can be an artefact of the current recursion path
 			return c;
 		} finally {
+			consulting.pop();
+			consulted(through);
 			visiting.remove(item);
 		}
+	}
+
+	private void consulted(Item item) {
+		Set<Item> top = consulting.peek();
+		if (top != null) top.add(item);
+	}
+
+	private void consulted(Set<Item> items) {
+		Set<Item> top = consulting.peek();
+		if (top != null) top.addAll(items);
 	}
 
 	private double recipeInputs(Recipe r, int depth, Set<Item> visiting) {
@@ -522,7 +684,8 @@ public final class Planner {
 		Set<Ingredient> seen = new HashSet<>();
 		for (Ingredient ing : r.key().values()) {
 			if (!seen.add(ing)) continue;
-			double unit = optionCost(ing, depth, visiting);
+			// a recipe that multiplies its own input (smithing template duplication): free only when one is carried
+			double unit = ing.options().contains(r.output()) ? (carried(r.output()) > 0 ? 0 : INF) : optionCost(ing, depth, visiting);
 			if (unit >= INF) return INF;
 			total += unit * r.amountOf(ing) / r.count();
 		}

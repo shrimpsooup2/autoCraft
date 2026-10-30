@@ -40,25 +40,36 @@ dissolves into redstone circuitry: its right-hand teeth turn into traces ending 
   the ghost's spot and rotation; otherwise a spot is found when it runs), context notes; *Plan* (collect tasks)
   or *Expand* (builds: their materials as collect subtasks); *Up*/*Down* reorder, *Delete* removes. On
   collect tasks *Source* switches between gathering and **getting it from a base** (a named base, or empty = the
-  nearest base whose chests have it), e.g. Expand a build, then mark the materials you keep at base. *+ Group* /
-  *+ Build* add under the selection, *Clear done* tidies. *Run all* works through the tree (subtasks before their
-  parent, one job, fetch or build at a time), *Run selected* only that task and its subtasks; stopping the bot
-  pauses the run. Saved per world in `config/autocraft/tasktree.json`.
+  nearest base whose chests have it), e.g. Expand a build, then mark the materials you keep at base. Every task
+  (groups too) has an **ending**: *Ends: where it is* / *Ends at: <base>* (click through the bases) and, at that
+  base, *Just go there* / *Store: emptiest* / *Store: similar* (see "Ending at a base"). *+ Group* / *+ Build* /
+  *+ Go to* add under the selection, *Clear done* tidies. A **go-to task** heads for *Coords* (X, Y — empty =
+  any height on that column — Z; *In: current dim / overworld / nether*; *Use my position*), a *Base* (click
+  through the bases) or a *Structure* (click through the kinds: the nearest one in sight, else searched for); its
+  row shows a compass, and while it runs the details read what the bot is doing. *Run all* works through the tree
+  (subtasks before their parent, one job, fetch, build or go-to at a time), *Run selected* only that task and its
+  subtasks; stopping the bot pauses the run. Jobs started with `!ac collect` and go-tos started with `!ac goto` run
+  as tasks here too, and a job or go-to resumed after joining shows as the running task (its unfinished task, or a
+  new one), so the plan and progress of every job are on this tab. Saved per world in
+  `config/autocraft/tasktree.json`.
 - **Build**: schematic list (built-ins + `config/autocraft/schematics/`, *Open folder*, *Reload*), size and
   material preview; *Place in world* (ghost at the crosshair) or *Find a spot* (bot-picked ground, then
   adjust). While placing, the tab becomes placement settings: X/Y/Z with −/+ (shift: 8), rotation, mirror,
-  *Move to me*, *To crosshair*, *Materials...*, *Cancel*, *In world*, *Build*.
+  *Move to me*, *To crosshair*, *Materials...*, the ending (*Ends at* / store choice, as on tasks), *Cancel*,
+  *In world*, *Build*.
 - **Materials** (from the Build tab): wood type (auto = what grows here, or a chosen wood), a stand-in for
   structural wood (auto = only where no trees grow, e.g. sandstone in deserts), filler blocks for cells nobody
   sees, and explicit block replacements (pick a schematic block, then any block). The ghost updates live;
   *Save as default* stores the choices in `config/autocraft/materials.json`.
 - **Team**: host a team (shows the address and a 5-character code) or join one; lists members and their roles.
-- **Bot**: live state, job progress bars, build progress, current prerequisite, health/food/position, last death;
-  *Pause/Resume*, *Stop*, *Add base here* / *Remove nearest*, the list of bases and of built structures.
+- **Bot**: live state, job progress bars, build progress, go-to destination, the base the task ends at, current
+  prerequisite, health/food/position, last death; *Pause/Resume*, *Stop*, *Add base here* / *Remove nearest*, the
+  list of bases and of built structures.
 - **Settings** (saved to `config/autocraft/settings.json`): log off when done, status overlay, smooth aim, after
   death recover items and continue, log off when another player comes near (and how near), materials at base,
-  resume after relog.
-- A small status overlay (top left) shows activity and progress bars while the bot runs.
+  resume after relog, respawn beds (and the distance that counts as far); *Set spawn point here*.
+- A small status overlay (top left) shows activity and progress bars while the bot runs, the go-to destination
+  (with the distance left) and the base the task ends at.
 - The bot keeps working while the panel is open (it isn't a pause screen).
 
 ## Placing schematics (Litematica-style)
@@ -80,11 +91,13 @@ hidden, blocks in the way get red outlines, water/lava and chest-like blocks get
 ## Commands (typed in chat, never sent to the server)
 | Command | Effect |
 |---|---|
-| `!ac collect <item> <amount> [<item> <amount> ...]` | start a job (`diamond 10 iron 32 torch 64 piston 8`); crafted items are planned through the recipe book |
+| `!ac collect <item> <amount> [<item> <amount> ...] [then <base> [go\|emptiest\|similar]]` | add the items to the task tree and run them: one collect task, or several in a group collected one after another (`diamond 10 iron 32 torch 64 piston 8`); an unfinished task for the same item and amount is reused. Whatever the bot was doing stops. Crafted items are planned through the recipe book. `then …`: end at that base (see "Ending at a base") |
+| `!ac goto <x> [<y>] <z> [overworld\|nether] [then …]` | go-to task to coordinates (`~` = relative; no y = any height on that column; no dimension = this one), run from the task tree |
+| `!ac goto base <name> [then …]` / `!ac goto structure <kind> [then …]` | go-to task to a base, or to the nearest structure of a kind (`village`, `fortress`, `ancient_city`...; `!ac goto structure` lists them) |
 | `!ac place <schematic>` | show it as a ghost at the crosshair and position it with the keys above |
-| `!ac build <schematic> <x> <y> <z> [0\|90\|180\|270]` | build right away with its corner at x y z (`~` = relative), optionally rotated |
-| `!ac build <schematic> here [rotation]` | same, corner at your feet |
-| `!ac farm <resource> [<x> <y> <z> \| here] [rotation]` | build a farm for a resource (site chosen automatically without a position) |
+| `!ac build <schematic> <x> <y> <z> [0\|90\|180\|270] [then …]` | build right away with its corner at x y z (`~` = relative), optionally rotated |
+| `!ac build <schematic> here [rotation] [then …]` | same, corner at your feet |
+| `!ac farm <resource> [<x> <y> <z> \| here] [rotation] [then …]` | build a farm for a resource (site chosen automatically without a position) |
 | `!ac schematics` | list built-in and user schematics, show the schematic folder |
 | `!ac built` | list everything the bot has built (farms are reused by jobs) |
 | `!ac stop` / `!ac pause` / `!ac resume` | control the job |
@@ -95,7 +108,9 @@ hidden, blocks in the way get red outlines, water/lava and chest-like blocks get
 | `!ac base stocked on\|off` | the base chests hold materials: check them before gathering, even unseen ones |
 | `!ac team host` / `!ac team join <host[:port]> <code>` / `!ac team leave` | team mode (see below) |
 | `!ac logoff on\|off` | disconnect when the job is done (default on) |
-| `!ac goto <x> <y> <z>` | debug: pathfind to a block |
+| `!ac spawn` | where the bot thinks the respawn point is (and how far), the respawn bed setting, the beds it put down in this world |
+| `!ac spawn here` / `!ac spawn <x> <y> <z>` | set the respawn point (this dimension) when the bot couldn't see it set: a bed slept in before, `/spawnpoint` |
+| `!ac spawn beds on\|off [blocks]` | respawn beds (default off), optionally with the distance that counts as far (default 256) |
 | `!ac resources` | list named resources (any natural block's item id, craftable/smeltable item, mob drop or procedure item also works) |
 | `!ac film play [all \| 1-8 \| name…]` / `!ac film record [60fps] [shots…]` / `!ac film list` / `!ac film stop` | build the sets here and play the explainer video in this singleplayer world, live or saved to `autocraft-film/` as an MP4 at an exact frame rate (throwaway world; see `docs/video/storyboard.md`) |
 
@@ -112,40 +127,41 @@ flowchart TD
   T[client tick] --> R0[LavaReflex: swim out toward solid ground, fire resistance]
   R0 --> RD[DrowningReflex: surface for air]
   RD --> R1[FallReflex: lava landing: steer, water/block into the lava; high fall: water clutch]
-  R1 --> R2[DefenseReflex: shield arrows, deflect/dodge ghast fireballs, back off lit creepers]
+  R1 --> R2[DefenseReflex: shield toward shooters about to fire (bow drawn, crossbow loaded) and their arrows, chasing a hittable one while it reloads, leaving a melee mob at hand to combat; deflect/dodge ghast fireballs, back off lit creepers]
   R2 --> R3[EatReflex]
   R3 --> R4[EffectReflex: milk / honey]
-  R4 --> C[Combat: quick kills only, jump crits; hunted mobs fought on purpose; flee at low health, then keep away and heal before work resumes]
+  R4 --> C[Combat: fight / pillar / flee by a damage race + ThreatNet; trained fight moves in open close fights; hunted mobs fought on purpose; lie low and heal before work resumes]
   C --> RC[Recover: after a death, back to the spot for the dropped items]
   RC --> M[Mending: swap damaged mending gear into the offhand while XP is around]
-  M --> GO[Goto: debug walk]
-  GO --> F[Finish: goal met -> pick up stations, store + log off]
+  M --> F[Finish: the task's goal met -> pick up stations; ending at a base: go there (portal first), store by the chosen rule; stop + log off]
   F --> G[Gear: armor, shield, tools scaled to the work (needed tools may use job loot: 3 mined cobblestone = stone pickaxe), shears/sword when needed, rockets, nether kit]
   G --> FO[Food: hunt animals when hungry and food is low]
-  FO --> ST[Storage: junk drop, bundles, shulkers, base chests]
+  FO --> RB[Bed: far from the spawn point with a death likely -> bed down near the work, spawn point set]
+  RB --> ST[Storage: junk thrown out of reach (surplus blocks first), bundles, shulkers, base chests]
   ST --> B[Build: schematic orders, materials (window gathered before placing), big-build stash, team roles]
   B --> FA[Farm: harvest registered farms (mob farms for hunted drops), auto-build one when searching fails]
   FA --> MK[Make: craft/smelt/cut/run procedures for requested items, ask for raw materials and hunts]
   MK --> P[Portal: weigh known portal / bucket portal / mined obsidian by time, change dimension]
   P --> CO[Collect: base chests when quicker, else scan -> path -> mine/hunt -> pick up, explore by biome / structure / boat / elytra]
+  CO --> GO[Goto: go-to task: coordinates / base / nearest structure (in sight, else explored for) -> arrived]
 ```
 
 | Package | Responsibility |
 |---|---|
-| `com.autocraft` | entrypoint, `Bot` (job, build order, needs, behavior loop, flights, death and respawn, player alert), `Settings`, `TaskSave` (resume after relog), `DeathLog`, chat logging |
+| `com.autocraft` | entrypoint, `Bot` (job, build order, go-to destination, the base a task ends at, needs, behavior loop, flights, death and respawn, player alert), `Settings`, `TaskSave` (resume after relog), `DeathLog`, `SpawnPoint` (respawn point and our beds, per world), chat logging |
 | `command` | `!ac` chat command parser |
-| `goal` | `Job` (+ skipped and deferred requirements), `Requirement` (mined or hunted: items, sources, mobs, tool, strategy, Y level, dimension, biomes; or a made product), `Resources` registry |
+| `goal` | `Job` (+ skipped and deferred requirements), `Requirement` (mined or hunted: items, sources, mobs, tool, strategy, Y level, dimension, biomes; or a made product), `Resources` registry, `Destination` (where a go-to task heads), `Ending` (the base a task ends at, and how it stores there) |
 | `tasks` | `TaskTree` + `TaskNode`: the user's task tree and its runner |
 | `world` | `WorldScanner` (exact nearest-k block scan: rings outward, chunks/sections that can't beat the k-th nearest skipped; entities), `BlockUtil`, `BiomeFinder`, `ChestMemory` (what chests hold, per world), `WorldKey` |
 | `control` | `Controls` (keys, mine/attack/place/use), `Aim` (Bezier view turns, movement remapped while turning), `InvUtil`, `ContainerOpener`, `Placement` |
-| `path` | incremental A* `Pathfinder` (walk, diagonal, jump-up, staircase, safe fall, dig-down, pillar, bridge, mine-through, swim), goals, executor, `Navigator` |
-| `behavior` | the priority behaviors above + `Harvest`, `BaseDeposit`, `BaseFetch` |
-| `combat` | `Threats` (who's dangerous), `Melee` (weapon choice, approach, crits, strike timing) |
-| `ai` | `ThreatNet` MLP + online training, persisted to `config/autocraft/threatnet.json` |
+| `path` | incremental A* `Pathfinder` (walk, diagonal, jump-up, staircase, safe fall, dig-down, pillar, bridge, mine-through, swim), goals, executor, `Navigator`, `AvoidedMoves` (moves the executor failed are routed around for 2 minutes), `DigTime` (digging on the planned path, with the tools carried and with a cheap pickaxe) |
+| `behavior` | the priority behaviors above + `Harvest`, `BaseDeposit` (storing at a base: nearest, emptiest or similar-items chest), `BaseFetch`, `BedSite` (where a respawn bed fits) |
+| `combat` | `Threats` (who's dangerous, a mob's real hit: base + weapon by difficulty, shield-breaking axes), `Melee` (weapon choice, approach, crits, strike timing), `Guard` (shield) |
+| `ai` | `ThreatNet` MLP + online training, persisted to `config/autocraft/threatnet.json`; `CombatPolicy` (fight moves trained in `tools/combatsim`) + `CombatObs` (its input, built like the simulator's) |
 | `craft` | `RecipeBook` (all vanilla crafting/smelting/stonecutting recipes from the game data), cost-based `Planner` (craft / smelt / cut / mine / hunt / procedure), `Gatherable`, `Stations` (shared table/furnace/stonecutter rules, base stations, pickup), `Workshop` (crafter + multi-furnace smelter + `Cutter` + procedures) |
 | `loot` | `LootBook`: block, mob, chest and archaeology loot tables from the game data (chances, shears/silk-touch conditions); `LootSites`: where each structure is and how to recognise it |
 | `hunt` | `MobHints`: where each mob lives (dimension, biomes, tell-tale structure blocks) |
-| `procedure` | non-recipe items: `BeeNestProcedure` (honey bottles, honeycomb), `AnimalProcedure` (milk, wool, scutes, eggs), `BlockWorkProcedure` (stripped logs, carved pumpkins, mud, concrete), `OxidizeProcedure` (copper garden), `TrialChamberProcedure` (trial keys, ominous bottles, ominous keys, heavy core), `ChestLootProcedure` + `SculkGuard` (structure loot, quiet ancient cities) |
+| `procedure` | non-recipe items: `BeeNestProcedure` (honey bottles, honeycomb), `AnimalProcedure` (milk, wool, scutes, eggs), `BlockWorkProcedure` (stripped logs, carved pumpkins, mud, concrete), `OxidizeProcedure` (copper garden), `TrialChamberProcedure` (trial keys, ominous bottles, ominous keys, heavy core), `ChestLootProcedure` + `SculkGuard` (structure loot, quiet ancient cities); `StructureSearch` (finding a structure: in sight, explorer maps, exploring — shared with go-to tasks) |
 | `schematic` | `.litematic` / `.schem` / `.nbt` loading, built-in designs, `SchematicLibrary` (built-ins + user folder) |
 | `build` | `BuildPlan` (mirror, rotation, substitution, ordering, bill of materials), `Substitution` + `MaterialSettings` + `MaterialAdvisor` (wood swaps, stand-ins, filler, replacements), `Placement` (a schematic being positioned), `PlacementSolver` (orientation), `Builder`, `SiteFinder`, `FluidFill`, `BaseWithdraw`, `DepotDeposit`, `StructureRegistry` (built + protected areas) |
 | `team` | `Team` (roles, splitting work, schematic sharing), `TeamLink` (newline-delimited JSON over TCP), `TeamRole` |
@@ -159,6 +175,52 @@ mob danger, creeper nearby, ranged count, flying shooters, night/nether. 12 tanh
 output = “fighting is a good idea”. Bootstrapped on synthetic samples from a hand-written teacher so it
 is sane on first run, then nudged online after every fight (won without losing >50% health → 1,
 else → 0; ~10 consistent outcomes flip a decision) and saved.
+
+### Combat
+- **Fight, pillar or flee** is a damage race plus the ThreatNet's say: ticks to kill everything in reach with the
+  best weapon (its own swing delay, not whatever is in hand) against the damage taken meanwhile — each melee mob's
+  hit as the server deals it (base attack + weapon, by difficulty; the client never gets mob attack damage), cut by
+  armor the vanilla way (big hits mostly go through), dodged by spacing (less against faster mobs) or blocked by
+  the shield (not against axes: a piglin brute's disables it). The target counts however far it is (fighting it
+  means walking up to it: left out past 8 blocks, a brute made the fight winnable at 8.1 and lost at 7.9, and the bot
+  turned back and forth). Low health is two of the hardest hit in reach from death, not a fixed 8 (a brute's axe
+  takes 9 through iron). Low health with one or two melee mobs at its side and a shield: fight behind the shield;
+  a crowd: run. A change of plan must be wanted 15 ticks in a row (every tick of wanting something else counts).
+- **Too strong to fight**: a mob it runs from that would beat it even at full health is remembered for ten minutes
+  (`Bot.dreaded`): structure loot skips containers within 16 blocks of it and leaves a structure whose remaining
+  ones are all guarded for later (a brute guarding a bastion chest won six trips back to it in ten minutes).
+- **Pillar** refuge against melee mobs that can't climb: two blocks up, never beside ground a mob could step onto,
+  not started with a melee mob within 4 blocks; up there it waits for them, eating when nothing can reach it — for
+  20 seconds with none in reach, then it comes down and gets away (a brute keeps to its post: the bot once waited
+  twenty minutes on a pillar eleven blocks from one).
+- **Shield**: raised toward a shooter about to fire (drawn bow, loaded crossbow, charging ghast, lit blaze) and
+  kept up a second after. One it can hit is chased while it reloads (a crossbow piglin backs off from anything
+  within 5 blocks; behind a raised shield the bot never caught up) and struck, the shield going back up when it
+  aims again. With a melee mob at its side the shield is combat's: it covers one side only.
+- **Fight moves**: where a fight looks like the simulator's arena (target within 10 blocks, level, in sight, only
+  mobs the simulator models — no piglin brutes or wither skeletons — and no drop into lava or of more than 8 blocks
+  within 2 blocks: a hoglin threw the bot off a ledge into the lava sea mid-jump) the trained policy picks movement,
+  sprint, jump, swing and shield every tick; elsewhere the hand-written rules (approach, strike when charged, shield
+  between swings, step back inside 2.5 blocks). Each change of plan is written to the debug log with what it rested
+  on (`combat <tick>: FIGHT/FLEE/PILLAR …`).
+
+### Combat simulator (`tools/combatsim`)
+- `combatsim.py` runs tens of thousands of fights at once on the GPU (PyTorch; each tick captured as a CUDA graph,
+  ~14k fights/s on a GTX 1080 Ti): movement, attack reach and timing, hurt timers, knockback, shields, arrows,
+  creeper fuses and spider leaps, numbers from the wiki and the game code. Zombies, skeletons, creepers, spiders;
+  the hard half of training adds hoglins, piglins and crossbow piglins in crowds, with low health and worse gear.
+  Every mob is seen as its class (melee, archer, creeper, spider) plus its health — exactly as `CombatObs` sees it
+  in game, so a hoglin is a melee mob at twice a zombie's health. An archer's "drawing" is the shot that's coming:
+  a bow being drawn, a crossbow loaded (not one being reloaded, which is the opening).
+- Training: behaviour cloning of the hand-written rules first (from random weights it learned to hide from
+  skeletons and never killed one), then evolution strategies — 512 perturbations × 64 shared fights a generation —
+  on a score of survival, kills, damage dealt, health kept and speed.
+- `train --init bc --mix 0.5` writes `assets/autocraft/combat_policy.json` whenever a new best beats the rules on
+  the validation fights; a dev client picks it up within 30 s. Last export (generation 4190, half hard fights):
+  won 92%, died 8%, against the rules' 71% and 29%.
+- `viewer.html` (open it in a browser) replays fixed fights for the rules and recent generations side by side,
+  refreshing as training records more; `combatsim.py viz` rebuilds it from saved snapshots. Python environment:
+  `tools/combatsim/.venv` (torch with CUDA).
 
 ### Schematics
 - Put `.litematic` (Litematica), `.schem` (Sponge/WorldEdit) or `.nbt` (structure block) files in
@@ -202,10 +264,18 @@ else → 0; ~10 consistent outcomes flip a decision) and saved.
     `config/autocraft/copper_garden.json`. Copper oxidizes only in loaded chunks (about an hour per stage), so
     the rest of the job goes first and the bot then waits by the garden; overshot blocks are scraped back;
   - waxed copper comes from the normal honeycomb recipe;
-  - trial chambers: tunnel at Y −30 to find one, beat trial spawners (their mobs become hunt targets), collect
-    the keys, open vaults (ominous bottles come from normal vaults); for ominous keys and the heavy core,
-    drink an ominous bottle, walk in for Trial Omen, beat ominous spawners and open ominous vaults. Opened
-    vaults are remembered in `config/autocraft/trial_chambers.json`; a spent chamber means searching for the next.
+  - trial chambers: tunnel at Y −30 to find one, beat trial spawners from where they can see the bot (vanilla's
+    check: a clear line from the eyes to the spawner; their mobs become hunt targets), collect the keys, open
+    vaults (ominous bottles come from normal vaults). A vault lights up only for a player at its side who hasn't
+    opened it, so it's judged there, not from across the chamber (read from afar, every vault looked opened and
+    the bot left after one spawner, never getting a bottle). For ominous keys and the heavy core: drink an ominous
+    bottle, get in sight of a normal spawner (that turns Bad Omen into Trial Omen), then beat the spawners — a
+    normal one turns ominous the moment it sees the bot under Trial Omen, even cooling down, so the ones already
+    beaten for keys are fresh trials — and open ominous vaults. Opened vaults are remembered in
+    `config/autocraft/trial_vaults.json` (the older `trial_chambers.json` counted vaults never opened, and is
+    dropped); a spawner or vault out of reach is skipped, not the chamber; a chamber with nothing left is left for
+    the spawners' 30-minute cooldown (every part of it, its far end included), or until a bottle or an omen makes
+    its ominous side worth it.
 - A procedure that fails twice for an item is dropped for the rest of the job (the planner falls back or skips).
 
 ### Team mode
@@ -218,9 +288,15 @@ else → 0; ~10 consistent outcomes flip a decision) and saved.
 Items that only come from where they generate are job targets too (the item picker says "Structure loot"): the
 loot tables in the game jar give each structure's chance per chest, and the planner picks the structure with the
 lowest effort ÷ chance. The bot searches for it (tunnelling at the structure's depth or walking toward its biomes;
-an explorer map in the inventory pointing at one is followed first), opens its containers one by one and takes the
-item. Opened containers and finished structures are remembered per world (`config/autocraft/structure_loot.json`);
-chests at your bases are never touched. Structures in the Nether trigger a portal trip (with the Nether kit).
+an explorer map in the inventory pointing at one is followed first). Its tell-tale blocks are looked for across
+everything loaded, the whole render distance — one in view is walked to, not tunnelled past (a 4-chunk look missed
+a bastion 100 blocks off); finished ones are left out in the scan itself (filtered afterwards, an unfinished wing's
+one tell block came and went and the bot swung between heading there and exploring away every second). A
+structure is the chunks holding its tell blocks flooded out from the one found (a bastion is wider than 48 blocks):
+its containers are looked for over all of them, and finishing it marks all of them done. It opens the containers
+one by one and takes the item. Opened containers and finished structures are remembered per world
+(`config/autocraft/structure_loot.json`); chests at your bases are never touched. Structures in the Nether trigger
+a portal trip (with the Nether kit).
 
 | Structure | Holds | Unique there (examples) |
 |---|---|---|
@@ -282,22 +358,116 @@ has settled and reached the server; untargeted item use (buckets, food) finishes
 ### Deaths, other players, relogs
 - Every death is logged (`config/autocraft/deaths.json`, last one shown on the Bot tab). With *After death:
   recover* on, the bot respawns, goes back (through a portal if needed) and picks up what's lying there, then
-  carries on; burnt items (lava, fire) are written off. Off: the job stops.
+  carries on; burnt items (lava, fire) are written off, and so is a death that left nothing worth the walk: worth it
+  are job loot, diamond gear and up, enchanted or rare things, or iron worth 8 ingots or more in armor, tools,
+  buckets and iron (full iron armor and tools were once written off, and an hour went into remaking them). Off: the
+  job stops. The five minutes dropped items last count only while their chunk is loaded — every tick, whatever the
+  bot is busy with (counted only while walking back, a death spiral of fights and new deaths had the bot still
+  heading for items ten minutes gone), and saved with the task. Below 14 health the trip waits to heal first: what
+  killed it is usually still there.
+- Trips that dig (back to the items, a go-to task, fetching from a base, the trip to the base a task ends at): the
+  digging on the planned path is timed with the tools carried and with a wooden or stone pickaxe made from what's
+  carried; when the saving beats the making by 10 seconds, the pickaxe is made first. A trip that finds no way at
+  all with what's carried (by hand, stone prices every route through it out of the search) makes the pickaxe and
+  plans again before giving up.
 - *Log off near players*: another player (not a teammate) within the radius ends the session.
-- The task in progress (job with deposited counts and skipped items, build order, recovery) is saved per world
-  in `config/autocraft/tasks.json` every few seconds and resumed a few seconds after joining again.
+- The task in progress (job with deposited counts and skipped items, build order, go-to destination, the base it
+  ends at and its store choice, whether it's already on the way there, recovery) is saved per world in
+  `config/autocraft/tasks.json` every few seconds and resumed a few seconds after joining again (older files load
+  as before: the new fields are just missing).
 - Bases: as many as you like per world (`config/autocraft/bases.json`), e.g. home, a nether base, a mining
-  outpost. Deposits, base furnaces/tables and returning after a job use the nearest base in the current
-  dimension (home when there's none).
+  outpost. Inventory-full trips and base furnaces/tables use the nearest base in the current dimension (home
+  when there's none); where a task ends is its own choice (below).
 - Chest memory: every chest or barrel screen that opens — the bot's or yours — is read and remembered per world
   (`config/autocraft/chests.json`). Prerequisites a base's chests hold are fetched from the quickest such base
   when the round trip beats gathering, builds take from the base nearest the site that has the item; *Materials
   at base* (or `!ac base stocked on`) checks base chests not looked into yet.
 - "Per world" means the singleplayer save folder or the server address, plus the world's hashed seed (which the
   server sends every client): two singleplayer worlds both called "New World", or two worlds behind one address,
-  never share bases, task tree, structures, chests, deaths, copper garden, used vaults or resume state. A task-tree
-  run belongs to the world it was started in and waits while you're elsewhere. (Files from before this keying
-  start over.)
+  never share bases, task tree, structures, chests, deaths, copper garden, used vaults, spawn point and respawn beds or
+  resume state. A task-tree run belongs to the world it was started in and waits while you're elsewhere. (Files from
+  before this keying start over.)
+
+### Go-to tasks
+A task kind of its own (*+ Go to* on the Tasks tab, `!ac goto`), run like any job: shown as the running task,
+on the overlay and the Bot tab, saved and resumed, stoppable, and the whole survival stack (eating, combat, gear,
+food, storage, death recovery) keeps going — the walking behavior is last in the chain. Targets:
+- **Coordinates**: x z with an optional y (none: any height on that column it can stand at), in the dimension it
+  is in when the task starts, or the Overworld/Nether picked.
+- **A base**: its position and dimension when the task starts.
+- **A structure**: any kind in `LootSites` but buried treasure (village, desert pyramid, jungle temple, pillager
+  outpost, mansion, abandoned camp, shipwreck, ruined portal, desert well, trail/ocean ruins, dungeon,
+  mineshaft, stronghold, trial chamber, ancient city; nether fortress and bastion in the Nether). The nearest one
+  whose tell blocks are anywhere in loaded chunks (or a tell mob in sight, or an explorer map's marker) is walked
+  to; none seen, it explores the way structure loot does (`StructureSearch`: surface legs toward the structure's
+  biomes, or tunnelling at its depth) for up to 60 legs, then says "Can't find a …" and the task stops.
+Another dimension is reached through a portal (`PortalBehavior`, as for base trips and death recovery); far
+targets are flown to with an elytra when that pays. Arriving says "Arrived at …" and the end-of-job flow follows.
+
+### Ending at a base
+Every task — collect, fetch, build, farm, go-to, and groups (once their subtasks are done) — can end at a base:
+*Ends at* on the task (or `then <base> [go|emptiest|similar]` on the command; default: none, the task ends where it
+is). One end-of-job flow (`FinishBehavior`) serves all of them: once the task's goal is met, the stations put
+down are picked up; with an ending the bot goes to that base (through a portal when it's in the other dimension)
+and then, by the second choice:
+- **just go there**;
+- **emptiest chest**: the base container with the most free slots, filled before the next;
+- **similar items**: per stack, the base chest already holding the most of that item, else the one holding the
+  most of its kind, else the emptiest; a full chest passes the stack to the next choice, so different materials
+  end up in different chests. Kinds, checked in this order: *wood* (logs, wood, stems, planks, saplings,
+  leaves, sticks), *ore* (ores, raw metals, ingots, nuggets, gems, coal, redstone, lapis, quartz, debris and
+  scrap, metal/gem blocks), *drop* (wool, bones, string, rotten flesh, gunpowder, pearls, blaze rods, slime,
+  leather, feathers...), *farm* (food, seeds, crops, eggs), *stone* (cobblestone, stone, deepslate, andesite,
+  diorite, granite, tuff, basalt, blackstone, netherrack, end stone, sandstone, obsidian and their bricks/slabs),
+  *earth* (dirt, grass, mud, clay, sand, gravel, flint, soul sand/soil, snow, ice); anything else only matches
+  itself.
+Base containers are the chests and barrels within 8 blocks of the base; what they hold comes from chest memory,
+and any not looked into yet are opened first so the choice knows them all. Stored: what the task was for, filled
+shulker boxes and bundles, and everything else carried except the bot's kit — gear (anything with durability:
+worn armor stays on, tools, weapons, shield), food, empty containers (buckets, boats, bundles, shulkers), working
+supplies (sticks, coal, stations, torches, pearls, arrows, rockets, milk, totems) and the 128 building blocks it
+pillars with. Then it stops and logs off as set. (Before, a finished job always hauled its loot to the nearest
+base; now that's this choice.)
+
+### Respawn beds (setting, off by default)
+Far from the spawn point a death costs a long walk back to the dropped things (or the items, when they despawn
+first). With *Respawn beds* on (`!ac spawn beds on`, Settings tab) the bot puts a bed down near its work and clicks
+it — in Java Edition that sets the respawn point before the daytime and monster checks, so it works at noon and with
+mobs around; at night with none around it falls asleep and gets straight up again (sleeping isn't the point).
+- **Spawn point tracking** (`SpawnPoint`, per world in `config/autocraft/spawn_points.json`: the point with its
+  dimension and kind — bed, world spawn, set by you — plus the beds the bot put down). The client is never told
+  its respawn point, so: *Set spawn point here* / `!ac spawn here|x y z`; the game's "Respawn point set"
+  (`block.minecraft.set_spawn`) records the bed the bot just clicked, or the bed/anchor under your crosshair; after
+  every death the place the player came back (once settled, 1 s after the respawn) is checked against it —
+  within 16 blocks confirms it, elsewhere replaces it ("You have no home bed..." means the bed is gone or blocked:
+  world spawn, and the bed is dropped from ours). Nothing recorded: the world spawn the client was sent.
+- **When**: only in the Overworld (beds explode in the Nether and End), only with the spawn point more than the
+  set distance away (default 256 blocks, horizontally, or in another dimension), and only when one of these says
+  a death is likely:
+  - it already died during this job (or build);
+  - a Nether trip is about to start: the portal behavior is walking to a portal within 24 blocks — a Nether death
+    respawns in the Overworld, so the bed goes down by that portal before the bot goes through;
+  - the job's next item comes from a guarded structure (trial chamber, ancient city, stronghold, woodland mansion,
+    pillager outpost, dungeon) and its tell blocks are within 2 chunks or its guards within 48 blocks;
+  - the work hunts hostile mobs (creepers for gunpowder, trial spawner mobs);
+  - night, at least 2 hostile mobs within 24 blocks and armor below 10 points (less than iron chestplate + leggings).
+  With the spawn point already near the work nothing happens; at most one new bed every 10 minutes (exploring work
+  would otherwise leave a trail of them).
+- **How**: one of our beds within 64 blocks of the work is clicked again; else a carried bed goes down; else the
+  planner gets one (`Planner.bed()`: the cheapest color — three wool of one color and three planks, so usually
+  shorn or hunted white sheep), its raw materials posted as the `BED` need (after gear and food) that the collector
+  gathers; the maker waits for it like for food. Before work at a guarded structure a bed is got ahead of time,
+  while still up where the sheep are. The bed goes on flat, solid, dry ground within 8 blocks of the work (both
+  halves free with room above — vanilla won't use an "obstructed" bed — no water or lava touching, no hostile mob
+  within 6 blocks, outside our builds), placed from behind its foot so it lies the way chosen. Then it's clicked
+  (not sneaking) and the game's answer awaited: "Respawn point set" (or, if it already was this bed, the daytime /
+  monsters refusal that follows the setting); "too far away" walks closer, "obstructed"/"occupied" or no answer
+  after 3 clicks gives the bed up (an old one of ours: a new bed instead). A chat line says where the spawn point
+  moved; the status line shows each step ("respawn bed: putting it down at ...").
+- **Failure**: getting a bed may take 5 minutes, placing tries 4 sites; then a warning ("Respawn bed: ...; trying
+  again in 5 minutes"), 15 minutes when nothing can make a bed. Quiet mode (an ancient city hears every block
+  placed) never puts one down. With the setting off nothing of this runs; spawn tracking still keeps the point
+  (changes only go to the log).
 
 ### Water and wood
 - Swimming: on a straight stretch of deep water with food to spare the bot sprint-swims, skimming the surface
@@ -320,7 +490,7 @@ has settled and reached the server; untargeted item use (buckets, food) finishes
 | 3 | **Collection** — registry, scanner, mine + pick up, explore (ore Y level + tunnel; surface walk), log off | code complete |
 | 4 | **Survival** — lava escape, fall/lava clutch, eating, hunting, milk, shield/back-off, ThreatNet combat | code complete |
 | 5 | **Tools & crafting** — pickaxe tiers, data-driven recipe planner, 2x2 + table crafting, smelting, armor/shield, bucket | code complete |
-| 6 | **Storage** — junk dropping (never job loot), bundles, shulker boxes, base chests with deposited counts | code complete |
+| 6 | **Storage** — junk thrown out of reach (never job loot; surplus stone before anything unknown), bundles, shulker boxes, base chests with deposited counts | code complete |
 | 7 | **Nether** — kit (gold boots, flint and steel, iron pickaxe, bucket, blocks, extra food); obsidian mined or cast; portals built/reused and remembered; trips home for materials or base storage; nether mob rules | code complete |
 | 8 | **Travel** — boats over water/ice; elytra flights with rocket crafting and durability checks | code complete |
 | 9 | **Biomes & mending** — biome-directed exploration; mending gear repaired in the offhand | code complete |
@@ -330,25 +500,48 @@ has settled and reached the server; untargeted item use (buckets, food) finishes
 | 13 | **Materials & team** — substitution (wood swaps, stand-ins, filler, replacements); team mode over TCP with build roles and split jobs | code complete |
 | 14 | **Fixes** — shared station rules, multi-furnace smelting, station pickup, faster pathing, quick-kill combat with crits, drowning reflex, tool tiers scaled to work | code complete |
 | 15 | **Mob drops & procedures** — loot tables, hunting, honey/wool/milk/eggs, block work, copper garden, trial chambers | code complete |
-| 16 | **Additions** — smooth aim, mob farm, stonecutter, portal time costs + bucket portal, death recovery, player alert, big-build stash and tool investment, chest memory and base fetches, resume after relog, task tree | code complete |
-| 17 | **Hardening** — in-game testing; fixed so far: stalls (gear planning was blocked by any mob within 8 blocks, worn cheap tools refused, job loot never used for tools, an iron pickaxe chosen to mine the iron for itself when a little raw iron was carried, the collector waiting for a pickaxe the gear planner never planned: it now asks for one for exactly what it's stuck on and gets an answer the next tick), far targets past chunk borders, sunken logs chosen over dry ones, hurt flee/work ping-pong, eating blocked by mobs behind walls, searching for crafted blocks (iron block for an iron pickaxe), saves leaking between same-named worlds, slow/re-planning swimming (now sprint-swims skimming the surface); boats over water, shipwreck wood; `!ac why` decision trace | in progress |
+| 16 | **Additions** — smooth aim, mob farm, stonecutter, portal time costs + bucket portal, death recovery, player alert, big-build stash and tool investment, chest memory and base fetches, resume after relog, task tree, respawn beds + spawn point tracking, go-to tasks (coordinates, bases, nearest structure), ending any task at a base (just go / emptiest chest / similar items) as one end-of-job flow | code complete |
+| 17 | **Hardening** — in-game testing; fixed so far: stalls (gear planning was blocked by any mob within 8 blocks, worn cheap tools refused, job loot never used for tools, an iron pickaxe chosen to mine the iron for itself when a little raw iron was carried, the collector waiting for a pickaxe the gear planner never planned: it now asks for one for exactly what it's stuck on and gets an answer the next tick), far targets past chunk borders, sunken logs chosen over dry ones, hurt flee/work ping-pong, eating blocked by mobs behind walls, searching for crafted blocks (iron block for an iron pickaxe), saves leaking between same-named worlds, slow/re-planning swimming (now sprint-swims skimming the surface); boats over water, shipwreck wood; `!ac why` decision trace; climbing straight up into a lake bed (the straight climb now needs a dry column), eating while the shield was raised, moves the executor kept failing re-planned again (now avoided for 2 minutes), fire vetoing the step that put it out, sneaking onto magma a tick late (landing on it and stepping onto it), drops stalled 0.3 off the column's middle (still resting on the next block), a failed pillar falling back to the very fight it had judged unwinnable, mob hits misjudged (the weapon in hand, axes through shields, armor against big hits, the swing delay of whatever was in hand); job items a procedure also makes are planned (mud from dirt and a water bottle instead of a trip to find a mangrove swamp), gathering what only grows in biomes none of which is around costs a trip, crafts walking at an unreachable table (ours goes down instead) and the crafting backoff undone the next line, left sitting in a boat (paths get out first; the ridden boat counts as carried), bottles "filled" at water behind rock (only water in view now); netherite pickaxe end to end (bastion template, smithing table, smithing); copper only structures hold (exposed, weathered, oxidized) priced as structure loot and the copper garden's spot relaxed, a spent trial chamber re-entered every tick while its spawners cooled down, a trial spawner waited at through a wall (its line of sight was cast from the wrong end), junk dropped at its feet and picked straight back up two seconds later (thrown out of reach now, surplus stone before unknown items like breeze rods), a crossbow being reloaded read as about to fire (the shield stayed up and the trained fight held back just when it should close in), the shield held toward one shooter while a melee mob hit its open side; bastions: a brute guarding a chest fought or fled six times over (now remembered and avoided), fight and flight swapping every second at the edge of the damage race, the trained moves used on brutes and beside the lava sea, the search swinging between a bastion and exploring, "done with this bastion" eleven times a second (a cached scan), twenty minutes on a pillar waiting for a brute that keeps to its post; heavy cores and sniffer eggs searched for as world blocks (they're loot only), a stop typed in the seconds after joining undone by the saved task resuming, every base chest skipped as "not a storage menu" (the player's own inventory counted as an opened container), item-picker clicks swapped (26.3's SDL mouse buttons: left 1, right 3), a running procedure tunnelling on by hand while gear waited for the wood for a pickaxe, full iron gear left behind after a death; blazes: two at arm's length burned the bot to death behind its shield (a shooter in sword reach is now fought, not blocked), a crash when the only blaze in reach drifted off mid-swing, heading for an unreachable bit of fortress and exploring swapping every second, netherrack thrown out a part stack at a time while six full stacks stayed (a kind in several stacks now loses a full one); trial chambers: every vault judged opened from across the chamber (they light up only for a player at their side) so the bot left after one spawner and never got an ominous bottle, the chamber's other spawners abandoned when one was out of reach, rewards walked away from before the vault had ejected them, the ominous path skipping spawners beaten before (they turn ominous anyway); guarded work (trial chambers, bastions) kits up with iron armor and an iron sword first and tops health up in every lull; searches from underground (powder snow) explored the caves for an hour instead of climbing out; dropped items' despawn clock restarted by every death and paused during fights | in progress |
+| 18 | **No-x-ray mode** (setting) — the bot only knows blocks it has actually seen: ores, structures and chests are found by strip-mining at the right Y level, following caves and exploring, never by scanning through stone (for servers with anti-xray, and play that looks fair) | planned |
+| 19 | **Combat simulator** — GPU fight simulator, behaviour cloning + evolution strategies, trained fight moves in game with live reload, replay viewer; combat decisions on real mob damage | code complete, in use |
 
 "Code complete" = compiles against the real 26.3 client jar; not yet run in-game (see Build).
 
 ## Build & test
 - `./gradlew build` → `build/libs/autocraft-<version>.jar` (drop into `.minecraft/mods` with Fabric API).
-- `./gradlew runClient` starts a dev client; press K, or try `!ac goto`, `!ac build starter_base here`,
-  `!ac collect log 16`, `!ac collect iron 8`, `!ac collect torch 32`, `!ac collect ender_pearl 4`,
-  `!ac collect honeycomb 6`, `!ac farm cobblestone`.
+- `./gradlew runClient` starts a dev client; press K, or try `!ac goto ~100 ~-50`, `!ac goto structure village`,
+  `!ac goto base home`, `!ac build starter_base here`, `!ac collect log 16 then home similar`,
+  `!ac collect iron 8`, `!ac collect torch 32`, `!ac collect ender_pearl 4`,
+  `!ac collect honeycomb 6`, `!ac farm cobblestone then home emptiest`; respawn beds: `!ac spawn beds on 64`, `!ac spawn`, then
+  `/time set night` with zombies around in leather, or a job 100 blocks out after a death.
+- `./gradlew runHarness` / `runHarness2` start dev clients in `run/` / `run2/` driven by lines appended to their
+  `harness-in.txt` (`DevHarness`: server commands, `!ac` commands, state dumps every 5 s; `widgets` / `click
+  <label>` list and press the open screen's buttons; `respawn`; `record <name>` / `record stop` saves what the game
+  shows as an MP4 in `recordings/` with ffmpeg, `camera back` for a third-person view; `biomemap [radius] [step]`
+  logs the surface biomes around the player from the world generator, as a character map).
 - Loom must download Minecraft's libraries from `libraries.minecraft.net`; build on a network that allows it.
 
 ## Known limits
 - Servers with anti-xray or strict anti-cheat will fight the bot (scanning sees hidden ores; reach and timing are
-  vanilla but not humanized beyond the aim curves).
-- End travel, enchanting, villager trading and smithing recipes are out of scope.
+  vanilla but not humanized beyond the aim curves) — until the no-x-ray mode (phase 18) exists.
+- End travel, enchanting and villager trading are out of scope.
 - Chest-only loot from End cities isn't reachable (no End travel). The mob farm gives no player-kill-only drops
   (spider eyes) and spawns slowly when caves nearby compete for mob spawns.
 - Lava escape needs solid ground within ~4 blocks (or the last safe spot) or a fire resistance potion; a fall
   into a wide lava lake with no water bucket, no blocks and no solid edge in reach can still be fatal.
 - Builder limits: block entity contents (chest items, sign text) aren't recreated; waterlogging isn't
   placed.
+- Without a pickaxe deep underground the collector goes for the nearest wood it sees (a mineshaft's supports) even
+  when reaching it means punching through deepslate (15 s a block) rather than walking back up its own tunnel to the
+  trees; it gets there, slowly.
+- Piglin brutes are avoided, not beaten, in iron gear; a bastion whose remaining chests a brute guards is left for
+  another one (tried again after ten minutes).
+- After a death the respawn point is recorded as the world spawn only when the respawn lands within 16 blocks of the
+  world spawn the client knows; farther (a big spawn radius) it's labelled a bed.
+- Trial chambers are still often deadly: skeleton and husk waves took the mace bot from full health and full iron to
+  dead within a minute or two of starting a trial; it then recovers and tries again. The Bad Omen → Trial Omen →
+  ominous spawner path is written to vanilla's rules but not seen in game yet (no ominous bottle has dropped from
+  the vaults opened so far). Choosing between two vaults at an equal distance, it can switch target a few times
+  before settling.
+- Searches that start underground (powder snow, bee nests, animals, surface structures) climb to the surface first
+  now; not yet seen in game on the powder snow job that first showed the problem.

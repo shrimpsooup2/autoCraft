@@ -2,13 +2,14 @@ package com.autocraft.craft;
 
 import com.autocraft.Bot;
 import com.autocraft.goal.Requirement;
+import com.autocraft.loot.LootSites;
 import com.autocraft.procedure.Procedure;
 import com.autocraft.procedure.Procedures;
 import net.minecraft.world.item.Item;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Runs crafting, smelting and special-procedure steps from the {@link Planner} and cleans up afterwards: crafting
+ * Runs crafting, smelting, stonecutting, smithing and special-procedure steps from the {@link Planner} and cleans up afterwards: crafting
  * tables and furnaces the bot placed nearby are picked back up when {@link #packUp} is called. Shared by the gear
  * planner, the maker and the builder.
  */
@@ -27,21 +28,23 @@ public final class Workshop {
 	private @Nullable Crafter crafter;
 	private @Nullable Smelter smelter;
 	private @Nullable Cutter cutter;
+	private @Nullable Smither smither;
 	private Procedure.@Nullable Task special;
 	private @Nullable Item specialItem;
 	private final Stations.Cleanup cleanup = new Stations.Cleanup();
 	private boolean cleaning;
 
 	public boolean busy() {
-		return crafter != null || smelter != null || cutter != null || special != null || cleaning;
+		return crafter != null || smelter != null || cutter != null || smither != null || special != null || cleaning;
 	}
 
-	/** Begin a Craft, Smelt, Cut or Special step; other steps are ignored. */
+	/** Begin a Craft, Smelt, Cut, Smith or Special step; other steps are ignored. */
 	public void start(Planner.Step step) {
 		switch (step) {
 			case Planner.Craft c -> crafter = new Crafter(c.recipe());
 			case Planner.Smelt s -> smelter = new Smelter(s.input(), s.count());
 			case Planner.Cut c -> cutter = new Cutter(c.input(), c.output(), c.cuts());
+			case Planner.Smith s -> smither = new Smither(s.recipe());
 			case Planner.Special sp -> {
 				special = sp.procedure().start(sp.item(), sp.total());
 				specialItem = sp.item();
@@ -76,10 +79,19 @@ public final class Workshop {
 			cutter = null;
 			return s == Cutter.Status.DONE ? Status.DONE : Status.FAILED;
 		}
+		if (smither != null) {
+			Smither.Status s = smither.tick(bot);
+			if (s == Smither.Status.RUNNING) return Status.RUNNING;
+			smither = null;
+			return s == Smither.Status.DONE ? Status.DONE : Status.FAILED;
+		}
 		if (special != null) {
 			Procedure.Task.Status s = special.tick(bot);
 			Requirement.Dim wants = special.wantsDimension();
 			bot.setProcedureDimension(s == Procedure.Task.Status.RUNNING && wants != null && wants != bot.dimension() ? wants : null);
+			// only guarded work writes this: a water bucket filled on the way mustn't clear a trial chamber's
+			LootSites.Site guarded = Procedures.dangerousSite(specialItem);
+			if (guarded != null) bot.setGuardedWork(s == Procedure.Task.Status.RUNNING ? guarded : null);
 			if (s == Procedure.Task.Status.RUNNING) return bot.procedureDimension() != null ? Status.TRAVEL : Status.RUNNING;
 			special = null;
 			if (s == Procedure.Task.Status.FAILED) Procedures.failed(specialItem);
@@ -109,6 +121,7 @@ public final class Workshop {
 		crafter = null;
 		smelter = null;
 		cutter = null;
+		smither = null;
 		special = null;
 		specialItem = null;
 		cleaning = false;

@@ -2,12 +2,15 @@ package com.autocraft;
 
 import com.autocraft.build.BuildOrder;
 import com.autocraft.build.Substitution;
+import com.autocraft.goal.Destination;
+import com.autocraft.goal.Ending;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
 import com.autocraft.goal.Requirement.Dim;
 import com.autocraft.goal.Resources;
 import com.autocraft.schematic.Schematic;
 import com.autocraft.schematic.SchematicLibrary;
+import com.autocraft.tasks.TaskTree;
 import com.autocraft.world.WorldKey;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -28,10 +31,12 @@ import net.minecraft.world.level.block.Rotation;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The task in progress — job (with deposited counts and skipped items), build order, death recovery — per world,
- * saved to {@code config/autocraft/tasks.json} so it picks up again after a relog or a crash. Build progress needs
- * no saving (the builder reads the world) and bases have their own file ({@link Bases}). Saved when work starts
- * or stops and every few seconds while running; restored a few seconds after joining.
+ * The task in progress — job (with deposited counts and skipped items), build order, go-to destination, the base it
+ * ends at (and how it stores there), whether its goal was already met (on the way to that base), death recovery —
+ * per world, saved to {@code config/autocraft/tasks.json} so it picks up again after a relog or a crash. Build
+ * progress needs no saving (the builder reads the world) and bases have their own file ({@link Bases}). Saved when
+ * work starts or stops and every few seconds while running; restored a few seconds after joining. Fields added later
+ * are missing (null) in older files, which load as before.
  */
 public final class TaskSave {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -51,8 +56,9 @@ public final class TaskSave {
 		}
 	}
 
+	/** {@code recoveryAge}: ticks the items at {@code recovery} have been loaded ({@link Bot#recoveryAge}). */
 	private record State(List<Line> job, Map<String, Integer> stored, List<String> skipped, @Nullable SavedBuild build, @Nullable Spot recovery,
-			boolean running) {}
+			int recoveryAge, boolean running, @Nullable Destination destination, @Nullable Ending ending, @Nullable String finishing) {}
 
 	private static @Nullable Map<String, State> all;
 	private static long restoreAt = -1;
@@ -74,7 +80,9 @@ public final class TaskSave {
 		SavedBuild build = b == null ? null : new SavedBuild(b.schematic().name(), b.origin().getX(), b.origin().getY(), b.origin().getZ(),
 				b.rotation(), b.mirror(), b.substitution().encode(), b.purpose());
 		Bot.Recovery r = bot.recovery();
-		State state = new State(lines, stored, skipped, build, r == null ? null : Spot.of(r.pos(), r.dim()), running && (job != null || build != null));
+		boolean working = job != null || build != null || bot.destination() != null || bot.finishing() != null;
+		State state = new State(lines, stored, skipped, build, r == null ? null : Spot.of(r.pos(), r.dim()), bot.recoveryAge(), running && working,
+				bot.destination(), bot.ending(), bot.finishing());
 		states().put(WorldKey.current(), state);
 		write();
 	}
@@ -87,6 +95,19 @@ public final class TaskSave {
 	/** Just joined: the saved task hasn't been restored yet. */
 	public static boolean restorePending() {
 		return restoreAt >= 0;
+	}
+
+	/** Drop the pending restore and save this world's task as stopped; true when there was one to drop. */
+	public static boolean cancelRestore() {
+		if (restoreAt < 0) return false;
+		restoreAt = -1;
+		State s = states().get(WorldKey.current());
+		if (s != null && s.running) {
+			states().put(WorldKey.current(), new State(s.job, s.stored, s.skipped, s.build, s.recovery, s.recoveryAge, false, s.destination, s.ending,
+					s.finishing));
+			write();
+		}
+		return true;
 	}
 
 	/** Every client tick: restore the saved task when it's time. */
@@ -102,10 +123,15 @@ public final class TaskSave {
 			Requirement r = Resources.forJob(l.name, l.amount);
 			if (r != null) reqs.add(r);
 		}
+		if (s.destination != null) {
+			bot.startGoto(s.destination);
+			TaskTree.adopt(s.destination, s.ending); // shows in the task tree as its running task
+		}
 		if (!reqs.isEmpty()) {
 			Job job = new Job(reqs);
 			job.restore(s.stored, s.skipped);
 			bot.start(job);
+			TaskTree.adopt(job, s.ending); // shows in the task tree as its running task
 		}
 		if (s.build != null) {
 			Schematic schematic = SchematicLibrary.get(s.build.schematic);
@@ -116,7 +142,9 @@ public final class TaskSave {
 						Substitution.decode(s.build.substitution), s.build.purpose));
 			}
 		}
-		if (s.recovery != null) bot.setRecovery(new Bot.Recovery(s.recovery.pos(), s.recovery.dim));
+		if (s.finishing != null) bot.goalMet(s.finishing); // on the way to the base it ends at
+		if (s.ending != null) bot.setEnding(s.ending);
+		if (s.recovery != null) bot.setRecovery(new Bot.Recovery(s.recovery.pos(), s.recovery.dim), s.recoveryAge);
 		Chat.info("Resumed where we left off (turn this off under Settings).");
 	}
 

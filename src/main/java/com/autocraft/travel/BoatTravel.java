@@ -52,8 +52,9 @@ public final class BoatTravel {
 		this.target = target.immutable();
 	}
 
+	/** Carrying a boat, or sitting in one (which a sail takes over: the place step adopts it). */
 	public static boolean hasBoat(Player p) {
-		return InvUtil.find(p, BoatTravel::isBoat) >= 0;
+		return p.getVehicle() instanceof AbstractBoat || InvUtil.find(p, BoatTravel::isBoat) >= 0;
 	}
 
 	private static boolean isBoat(ItemStack s) {

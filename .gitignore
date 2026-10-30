@@ -31,6 +31,7 @@
 # fabric
 
 /run/
+/run2/
 
 # java
 
@@ -43,3 +44,8 @@ replay_*.log
 
 /docs/video/renders/
 __pycache__/
+
+# combat simulator: its CUDA torch venv and training checkpoints/logs (tools/combatsim/combatsim.py)
+
+/tools/combatsim/.venv/
+/tools/combatsim/out/

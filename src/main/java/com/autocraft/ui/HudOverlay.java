@@ -3,6 +3,8 @@ package com.autocraft.ui;
 import com.autocraft.Bot;
 import com.autocraft.Settings;
 import com.autocraft.build.BuildOrder;
+import com.autocraft.goal.Destination;
+import com.autocraft.goal.Ending;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
 import net.minecraft.client.DeltaTracker;
@@ -10,8 +12,9 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.BlockPos;
 
-/** Small top-left panel while the bot works: activity, job progress bars, build progress. */
+/** Small top-left panel while the bot works: activity, job progress bars, build progress, where it's going and where it ends. */
 public final class HudOverlay {
 	private static final int MAX_ROWS = 5;
 	private static final int WIDTH = 170;
@@ -29,7 +32,10 @@ public final class HudOverlay {
 		Font font = mc.font;
 		Job job = bot.job();
 		BuildOrder build = bot.buildOrder();
-		int rows = 1 + (job == null ? 0 : Math.min(MAX_ROWS, job.requirements().size())) + (build == null ? 0 : 1);
+		Destination to = bot.destination();
+		Ending end = bot.ending();
+		int rows = 1 + (job == null ? 0 : Math.min(MAX_ROWS, job.requirements().size())) + (build == null ? 0 : 1) + (to == null ? 0 : 1)
+				+ (end == null ? 0 : 1);
 		int x = 4;
 		int y = 4;
 		g.fill(x - 2, y - 2, x + WIDTH + 2, y + rows * 12 + 1, 0x90000000);
@@ -47,6 +53,16 @@ public final class HudOverlay {
 		}
 		if (build != null) {
 			Widgets.progressRow(g, font, x, y, WIDTH, null, "build " + build.schematic().name(), bot.buildPlaced(), Math.max(1, bot.buildTotal()), false);
+			y += 12;
+		}
+		if (to != null) {
+			String left = to.kind() == Destination.Kind.STRUCTURE ? "" : " · " + (int) Math.sqrt(p.blockPosition().distSqr(new BlockPos(to.x(),
+					to.y() != null ? to.y() : p.getBlockY(), to.z()))) + " m" + (to.dim() != bot.dimension() ? " (other dimension)" : "");
+			g.text(font, font.plainSubstrByWidth("→ " + to.describe() + (bot.finishing() != null ? " (arrived)" : left), WIDTH), x, y, 0xFFD0D0D0);
+			y += 12;
+		}
+		if (end != null) {
+			g.text(font, font.plainSubstrByWidth("then " + end.describe(), WIDTH), x, y, 0xFF9CE29C);
 		}
 	}
 }

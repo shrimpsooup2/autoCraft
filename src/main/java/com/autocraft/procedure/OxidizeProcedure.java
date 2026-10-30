@@ -80,6 +80,11 @@ final class OxidizeProcedure implements Procedure {
 	}
 
 	@Override
+	public Item consumed(Item item) {
+		return COPPER;
+	}
+
+	@Override
 	public Task start(Item item, int total) {
 		return new Run(item, total);
 	}
@@ -170,21 +175,23 @@ final class OxidizeProcedure implements Procedure {
 			return STAGES.indexOf(s.getBlock());
 		}
 
-		/** Open ground next to the base (or next to us), one block apart from existing plots. */
+		/**
+		 * A free spot next to the base (or next to us), never touching another plot (checkerboard). Copper weathers
+		 * from random ticks, not air: demanding open sky and four free sides found no spot in a tunnel, and the
+		 * procedure failed on the spot right after the copper block was crafted.
+		 */
 		private @Nullable BlockPos plantSpot(Bot bot) {
+			BlockPos feet = Navigator.feet(bot.player());
 			BlockPos center = bot.base() != null && bot.baseDimension() == bot.dimension()
-					&& bot.base().distSqr(bot.player().blockPosition()) < 64 * 64 ? bot.base().offset(6, 0, 6) : Navigator.feet(bot.player());
+					&& bot.base().distSqr(bot.player().blockPosition()) < 64 * 64 ? bot.base().offset(6, 0, 6) : feet;
 			for (int r = 0; r <= 6; r++) {
 				for (BlockPos pos : BlockPos.betweenClosed(center.offset(-r, -2, -r), center.offset(r, 2, r))) {
 					if (Math.max(Math.abs(pos.getX() - center.getX()), Math.abs(pos.getZ() - center.getZ())) != r) continue;
-					if ((pos.getX() + pos.getZ()) % 2 != 0) continue; // checkerboard: every block exposed to air
+					if ((pos.getX() + pos.getZ()) % 2 != 0) continue; // checkerboard: plots never side by side
+					if (pos.equals(feet) || pos.equals(feet.above())) continue; // where we stand: placing fails
 					BlockState at = bot.level().getBlockState(pos);
 					if (!at.canBeReplaced() || !at.getFluidState().isEmpty()) continue;
-					if (!BlockUtil.canStandOn(bot.level(), pos.below(), bot.level().getBlockState(pos.below()))) continue;
-					if (!bot.level().getBlockState(pos.above()).isAir()) continue;
-					boolean free = true;
-					for (Direction d : Direction.Plane.HORIZONTAL) free &= bot.level().getBlockState(pos.relative(d)).canBeReplaced();
-					if (free) return pos.immutable();
+					if (BlockUtil.canStandOn(bot.level(), pos.below(), bot.level().getBlockState(pos.below()))) return pos.immutable();
 				}
 			}
 			return null;

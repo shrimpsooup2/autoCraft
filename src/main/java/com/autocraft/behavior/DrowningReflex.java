@@ -8,24 +8,31 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.level.block.state.BlockState;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Running out of air: swim straight up when open water leads to the surface, otherwise head for the nearest
- * air pocket, otherwise dig through what's above the head (ice, a cave ceiling). Leaves the moment air is
- * back to a safe level.
+ * Running out of air: swim straight up when open water leads to the surface; under a ceiling (a flooded cave or
+ * tunnel) act early: swim into an air pocket right beside the head, else head for the nearest one for a few seconds,
+ * else break the block over the head — water doesn't flow up into it — and come up into that gap. Leaves the
+ * moment air is back to a safe level.
  */
 public final class DrowningReflex implements Behavior {
 	/** Act once air drops below this (full air is 300). */
 	private static final int ACT_BELOW = 150;
+	/** Under a ceiling there's no swimming up: act this early. */
+	private static final int ACT_BELOW_CEILING = 240;
 	/** Keep surfacing until air is back to this. */
 	private static final int SAFE_AIR = 280;
 	private static final int MAX_SWIM_UP = 14;
 	private static final int POCKET_SEARCH = 5;
+	/** How long walking/swimming to a farther air pocket may take before digging up instead. */
+	private static final int POCKET_TICKS = 60;
 
 	private boolean active;
 	private @Nullable BlockPos pocket;
+	private int activeTicks;
 
 	@Override
 	public String name() {
@@ -36,22 +43,24 @@ public final class DrowningReflex implements Behavior {
 	public void reset() {
 		active = false;
 		pocket = null;
+		activeTicks = 0;
 	}
 
 	@Override
 	public boolean tick(Bot bot) {
 		LocalPlayer p = bot.player();
 		if (p.hasEffect(MobEffects.WATER_BREATHING) || p.hasEffect(MobEffects.CONDUIT_POWER)) return false;
-		if (!active && (!p.isUnderWater() || p.getAirSupply() >= ACT_BELOW)) return false;
+		ClientLevel level = bot.mc().level;
+		BlockPos head = BlockPos.containing(p.getEyePosition());
+		if (!active && (!p.isUnderWater() || p.getAirSupply() >= (openWaterUp(level, head) ? ACT_BELOW : ACT_BELOW_CEILING))) return false;
 		if (!p.isUnderWater() && p.getAirSupply() >= SAFE_AIR || !p.isInWater() && !p.isUnderWater()) {
-			active = false;
-			pocket = null;
+			reset();
 			bot.nav().stop();
 			return false;
 		}
+		if (!active) bot.noteAirScare(); // the collector gives up on a source whose way keeps doing this
 		active = true;
-		ClientLevel level = bot.mc().level;
-		BlockPos head = BlockPos.containing(p.getEyePosition());
+		activeTicks++;
 		bot.setStatus("out of air, surfacing");
 
 		if (openWaterUp(level, head)) {
@@ -62,18 +71,30 @@ public final class DrowningReflex implements Behavior {
 			return true;
 		}
 		if (pocket == null || !level.getBlockState(pocket).isAir()) pocket = nearestAir(level, head);
-		if (pocket != null) {
+		if (pocket != null && activeTicks <= POCKET_TICKS && head.distManhattan(pocket) <= 2) {
+			// right beside the head: swim into it (the pathfinder can't plan a half-block bob into a pocket)
+			bot.nav().stop();
+			bot.controls().lookAt(Vec3.atCenterOf(pocket));
+			bot.controls().forward();
+			bot.controls().jump();
+			return true;
+		}
+		if (pocket != null && activeTicks <= POCKET_TICKS) {
 			bot.nav().setGoal(new Goal.Near(pocket.below(), 0));
 			if (bot.nav().tick() != Navigator.Status.FAILED) {
 				bot.controls().jump();
 				return true;
 			}
-			pocket = null;
-			bot.nav().stop();
+			activeTicks = POCKET_TICKS + 1; // unreachable: dig up from here
 		}
+		bot.nav().stop();
 		BlockPos above = head.above();
 		BlockState s = level.getBlockState(above);
-		if (BlockUtil.isBreakable(level, above, s)) bot.controls().mine(above); // ice or a ceiling: break through
+		if (BlockUtil.isBreakable(level, above, s)) {
+			// stay on the floor while digging (mining afloat is five times slower again), come up once it's open
+			bot.controls().mine(above);
+			return true;
+		}
 		bot.controls().jump();
 		return true;
 	}

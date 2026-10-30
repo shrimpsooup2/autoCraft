@@ -19,22 +19,28 @@ import com.autocraft.behavior.GotoBehavior;
 import com.autocraft.behavior.LavaReflex;
 import com.autocraft.behavior.MakeBehavior;
 import com.autocraft.behavior.MendingBehavior;
+import com.autocraft.behavior.PickupBehavior;
 import com.autocraft.behavior.PortalBehavior;
 import com.autocraft.behavior.RecoverBehavior;
+import com.autocraft.behavior.RespawnBedBehavior;
 import com.autocraft.behavior.StorageBehavior;
 import com.autocraft.build.BuildOrder;
 import com.autocraft.build.BuildPlan;
 import com.autocraft.control.Controls;
+import com.autocraft.control.InvUtil;
 import com.autocraft.craft.RecipeBook;
 import com.autocraft.craft.Stations;
+import com.autocraft.goal.Destination;
+import com.autocraft.goal.Ending;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
 import com.autocraft.goal.Requirement.Dim;
+import com.autocraft.loot.LootSites;
 import com.autocraft.procedure.Procedures;
 import com.autocraft.tasks.TaskTree;
 import com.autocraft.team.Team;
 import com.autocraft.team.TeamRole;
-import com.autocraft.path.Goal;
+import com.autocraft.path.DigTime;
 import com.autocraft.path.Navigator;
 import com.autocraft.travel.BoatTravel;
 import com.autocraft.travel.ElytraTravel;
@@ -51,10 +57,16 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.tags.ItemTags;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.Mirror;
 import org.jspecify.annotations.Nullable;
 
@@ -65,8 +77,12 @@ import org.jspecify.annotations.Nullable;
 public final class Bot {
 	/** Planners that can ask the collector for prerequisite materials, highest priority first. */
 	public enum NeedOwner {
-		/** Tools, weapons, armor, nether kit. */
+		/** Tools, weapons, armor, nether kit: quick to make, and nothing goes well without them (a pickaxe above all). */
 		GEAR,
+		/** Food to take along: no animals live in the Nether. */
+		FOOD,
+		/** A bed to put down near dangerous work far from the spawn point (setting "respawn beds"). */
+		BED,
 		/** Materials for the structure being built. */
 		BUILD,
 		/** Raw materials for crafted/smelted job items. */
@@ -102,9 +118,25 @@ public final class Bot {
 	private Map<Item, Integer> teamNeeds = Map.of();
 	/** Mobs the collector is hunting right now (combat fights these instead of avoiding them). */
 	private Set<EntityType<?>> huntTargets = Set.of();
+	/** Mobs combat ran from as too strong even for full health (by id), and the tick it last did (see {@link #dreaded}). */
+	private final Map<Integer, Long> dreaded = new HashMap<>();
 	/** Where to go back for our dropped items after a death; null when not recovering. */
 	private @Nullable Recovery recovery;
+	/**
+	 * Ticks the recovery spot's chunk has been loaded: the items there despawn after five minutes of that. Counted
+	 * every tick, whatever behavior runs — counted by the recovery behavior itself, combat and eating took most ticks
+	 * of a death spiral and each new death restarted it, so the bot was still walking back at 3 hp to items gone for
+	 * ten minutes.
+	 */
+	private int recoveryAge;
 	private boolean respawnRequested;
+	/** What was carried, as of a moment ago, is worth going back for after a death (see onDeath). */
+	private boolean carryingValuables;
+	private int airScares;
+	/** Deaths to mobs (a damage source with an attacker) this session: armor becomes a must, a piece per death. */
+	private int mobDeaths;
+	/** Deaths since the current job or build began (a respawn bed is worth it once it has died out here). */
+	private int jobDeaths;
 
 	/** Death spot to return to. */
 	public record Recovery(BlockPos pos, Dim dim) {}
@@ -114,22 +146,51 @@ public final class Bot {
 
 	private @Nullable FetchOrder fetchOrder;
 	private @Nullable Dim procedureDimension;
+	/** The guarded structure a running procedure works in (a trial chamber's vaults): the gear planner kits up for it. */
+	private LootSites.@Nullable Site guardedWork;
 
 	/** Progress is saved this often while running (and whenever work starts or stops). */
 	private static final int SAVE_EVERY = 20 * 5;
+	/** How often the inventory is checked for things worth recovering after a death. */
+	private static final int VALUABLES_EVERY = 10;
+	/** How long work keeps clear of a mob combat ran from as unbeatable ({@link #dreaded}). */
+	private static final long DREAD_TICKS = 20 * 60 * 10;
 	/** Open-water swimming this long (an ocean, not a river: ~100 blocks sprint-swum) asks for a boat. */
 	private static final int SWIM_TICKS_FOR_BOAT = 20 * 20;
 	private static final int BOAT_WANT_TICKS = 20 * 120;
+	/** A trip pickaxe not made in this long is given up on: the trip goes on without it. */
+	private static final int TRIP_PICKAXE_GIVE_UP = 20 * 60;
+	/** After giving up on one, no trip pickaxe for this long. */
+	private static final int TRIP_PICKAXE_QUIET = 20 * 300;
+	/** A trip pickaxe must save this much digging beyond what making it takes. */
+	private static final int TRIP_PICKAXE_MARGIN = 20 * 10;
+	/**
+	 * Behaviors that walk somewhere on the bot's own errand (back to its items, a go-to task, a fetch, the trip to the
+	 * base a task ends at), where gear plans tools for the work, not for digging the way there.
+	 */
+	private static final Set<String> TRIP_BEHAVIORS = Set.of("recover", "goto", "fetch", "finish");
 	/** Stop reasons for finished work (the task tree moves on after these). */
 	public static final String JOB_COMPLETE = "job complete";
 	public static final String BUILD_COMPLETE = "build complete";
 	public static final String FETCH_COMPLETE = "fetch complete";
+	public static final String ARRIVED = "arrived";
+	/** A task-tree group whose subtasks are done, ending at a base: the trip there was its own last step. */
+	public static final String GROUP_COMPLETE = "group complete";
+	private static final Set<String> COMPLETE = Set.of(JOB_COMPLETE, BUILD_COMPLETE, FETCH_COMPLETE, ARRIVED, GROUP_COMPLETE);
 
 	private String lastStop = "";
 
 	private @Nullable Job job;
 	private @Nullable BuildOrder build;
-	private @Nullable Goal gotoGoal;
+	/** A go-to task's destination; null when the work isn't one. */
+	private @Nullable Destination destination;
+	/** The base the current task ends at, and what it does there; null = it ends where it is. */
+	private @Nullable Ending ending;
+	/**
+	 * Set once the task's own goal is met (one of the {@link #COMPLETE} reasons): the end-of-job flow — stations picked
+	 * up, the trip to the ending base, the deposit — runs, then the bot stops with this reason. Null before that.
+	 */
+	private @Nullable String finishing;
 	private boolean running;
 	private boolean paused;
 	private String activeBehavior = "idle";
@@ -143,6 +204,12 @@ public final class Bot {
 	private long ticks;
 	private int swimTicks;
 	private long boatWantedUntil = -1;
+	/** A pickaxe to make before the trip goes on ({@link #considerTripPickaxe}), or null. */
+	private @Nullable Item tripPickaxe;
+	private long tripPickaxeSince;
+	private long tripPickaxeQuietUntil;
+	/** The planned path last weighed for a trip pickaxe: each path once. */
+	private @Nullable DigTime tripWeighed;
 	private long flightRetryAt;
 
 	private Bot(Minecraft mc) {
@@ -159,19 +226,21 @@ public final class Bot {
 				new EatReflex(),
 				new EffectReflex(),
 				new CombatBehavior(),
+				new PickupBehavior(),
 				new RecoverBehavior(),
 				new MendingBehavior(),
-				new GotoBehavior(),
 				new FetchBehavior(),
 				new FinishBehavior(),
 				new GearBehavior(),
 				new FoodBehavior(),
+				new RespawnBedBehavior(),
 				new StorageBehavior(),
 				new BuildBehavior(),
 				new FarmBehavior(),
 				new MakeBehavior(),
 				new PortalBehavior(),
-				new CollectBehavior());
+				new CollectBehavior(),
+				new GotoBehavior());
 	}
 
 	public static Bot get() {
@@ -195,8 +264,11 @@ public final class Bot {
 		if (playerAlert()) return;
 		scanner.tick();
 		ticks++;
+		if (recovery != null && recovery.dim() == dimension() && mc.level.hasChunkAt(recovery.pos())) recoveryAge++;
 		if (ticks % SAVE_EVERY == 0) TaskSave.save(this, true);
+		if (ticks % VALUABLES_EVERY == 0) carryingValuables = carriesValuables(mc.player);
 		noteSwimming();
+		considerTripPickaxe(); // before the behaviors: activeBehavior is still last tick's
 		activeBehavior = "idle";
 		for (Behavior b : behaviors) {
 			// mid-flight only the lava/fall reflexes may interrupt; everything else waits for landing
@@ -232,6 +304,84 @@ public final class Bot {
 	/** A boat would help right now and none is carried. */
 	public boolean boatWanted() {
 		return ticks < boatWantedUntil && mc.player != null && !BoatTravel.hasBoat(mc.player);
+	}
+
+	/**
+	 * On a trip that digs, is a pickaxe made from what's carried worth the digging time it saves? The trip behaviors
+	 * (back to the items after a death, goto, fetch) run before gear, so gear never had a say there: walking back to
+	 * its things after a death, the bot dug through stone by hand. Each planned path is weighed once.
+	 */
+	private void considerTripPickaxe() {
+		LocalPlayer p = mc.player;
+		if (tripPickaxe != null) {
+			if (carriesPickaxeAsGood(p, tripPickaxe)) dropTripPickaxe(null);
+			else if (ticks - tripPickaxeSince > TRIP_PICKAXE_GIVE_UP) dropTripPickaxe("it took too long");
+			return;
+		}
+		if (!TRIP_BEHAVIORS.contains(activeBehavior) || ticks < tripPickaxeQuietUntil) return;
+		DigTime dig = nav.digTime();
+		if (dig == null || dig == tripWeighed) return;
+		tripWeighed = dig;
+		Item pick = makeablePickaxe(p);
+		if (pick == null) return;
+		int saved = dig.savedBy(pick), make = pickaxeMakeTicks(p);
+		Chat.LOG.debug("trip pickaxe: {} saves {} ticks of digging (path share {}), making it ~{}", pick, saved, dig.share(), make);
+		if (saved <= make + TRIP_PICKAXE_MARGIN) return;
+		tripPickaxe = pick;
+		tripPickaxeSince = ticks;
+		Chat.info("Making a " + pick.getDefaultInstance().getHoverName().getString().toLowerCase() + " first: it saves about "
+				+ saved / 20 + "s of digging on the way.");
+	}
+
+	/** The pickaxe gear makes before the trip goes on (the trip behaviors wait for it), or null. */
+	public @Nullable Item tripPickaxe() {
+		return tripPickaxe;
+	}
+
+	/**
+	 * A trip found no way on with what's carried — by hand, stone costs so much that a plan through it never comes up
+	 * within the search — and giving up costs the whole trip: a pickaxe made from what's carried may open the way.
+	 * True when one is being made now (the trip behaviors wait, then plan again).
+	 */
+	public boolean pickaxeForStuckTrip() {
+		if (tripPickaxe != null || ticks < tripPickaxeQuietUntil) return false;
+		Item pick = makeablePickaxe(mc.player);
+		if (pick == null) return false;
+		tripPickaxe = pick;
+		tripPickaxeSince = ticks;
+		Chat.info("No way through with what's carried; making a " + pick.getDefaultInstance().getHoverName().getString().toLowerCase()
+				+ " to dig one.");
+		return true;
+	}
+
+	/** Stop waiting for the trip pickaxe: made ({@code why} null), or given up on for a while. */
+	public void dropTripPickaxe(@Nullable String why) {
+		if (tripPickaxe == null) return;
+		if (why != null) {
+			Chat.info("Going on without the " + tripPickaxe.getDefaultInstance().getHoverName().getString().toLowerCase() + " (" + why + ").");
+			tripPickaxeQuietUntil = ticks + TRIP_PICKAXE_QUIET;
+		}
+		tripPickaxe = null;
+	}
+
+	/** Stone if three stone-type blocks and the wood are carried, else wood if the wood is; null if neither beats what's carried. */
+	private static @Nullable Item makeablePickaxe(LocalPlayer p) {
+		int planks = InvUtil.count(p, s -> s.is(ItemTags.PLANKS)) + 4 * InvUtil.count(p, s -> s.is(ItemTags.LOGS));
+		int forStation = (InvUtil.count(p, s -> s.is(Items.STICK)) >= 2 ? 0 : 2) + (InvUtil.count(p, s -> s.is(Items.CRAFTING_TABLE)) > 0 ? 0 : 4);
+		Item pick = InvUtil.count(p, s -> s.is(ItemTags.STONE_TOOL_MATERIALS)) >= 3 && planks >= forStation ? Items.STONE_PICKAXE
+				: planks >= forStation + 3 ? Items.WOODEN_PICKAXE : null;
+		return pick == null || carriesPickaxeAsGood(p, pick) ? null : pick;
+	}
+
+	/** A carried pickaxe (not about to break) mines stone at least as fast as {@code pick}. */
+	private static boolean carriesPickaxeAsGood(LocalPlayer p, Item pick) {
+		float speed = pick.getDefaultInstance().getDestroySpeed(Blocks.STONE.defaultBlockState());
+		return InvUtil.find(p, s -> s.is(ItemTags.PICKAXES) && !InvUtil.nearlyBroken(s) && s.getDestroySpeed(Blocks.STONE.defaultBlockState()) >= speed) >= 0;
+	}
+
+	/** Rough ticks to make a pickaxe from carried materials: crafting, setting a table down and picking it up again. */
+	private static int pickaxeMakeTicks(LocalPlayer p) {
+		return InvUtil.count(p, s -> s.is(Items.CRAFTING_TABLE)) > 0 ? 160 : 200;
 	}
 
 	/** {@code r} is a prerequisite need (gear, build, make, travel), not a job requirement. */
@@ -280,6 +430,8 @@ public final class Bot {
 		BlockPos pos = p.blockPosition();
 		Dim dim = dimension();
 		String cause = p.getLastDamageSource() == null ? "unknown" : p.getLastDamageSource().getMsgId();
+		if (p.getLastDamageSource() != null && p.getLastDamageSource().getEntity() != null) mobDeaths++;
+		jobDeaths++;
 		DeathLog.add(pos, dim, cause);
 		Chat.warn("Died at " + pos.toShortString() + " in the " + dim.name().toLowerCase() + " (" + cause + ").");
 		if (!Settings.get().recoverAfterDeath || mc.level.getLevelData().isHardcore()) {
@@ -287,22 +439,82 @@ public final class Bot {
 			return;
 		}
 		boolean burnt = p.isInLava() || cause.equals("lava") || cause.equals("onFire") || cause.equals("inFire");
+		// cobblestone and a stone pickaxe aren't worth a walk back into what just killed us (or a Nether trip). By the
+		// time we notice the death the server has often emptied the inventory already (a diamond pickaxe and the
+		// netherite ingot were written off as "nothing worth going back for"): what was carried a moment ago counts
+		boolean worth = carryingValuables || carriesValuables(p);
+		carryingValuables = false;
 		resetBehaviors();
 		controls.releaseAll();
 		needs.clear();
-		recovery = burnt ? null : new Recovery(pos, dim);
-		Chat.info(burnt ? "The items burnt; respawning and carrying on with the job." : "Respawning; going back for the items, then carrying on.");
+		// a pending trip back (the netherite lying where we died before) outlives a death that left nothing worth one
+		if (!burnt && worth) setRecovery(new Recovery(pos, dim), 0);
+		Chat.info(burnt ? "The items burnt; respawning and carrying on" + (recovery != null ? " (the earlier items are still waiting)." : " with the job.")
+				: !worth ? "Nothing worth going back for here; respawning and carrying on" + (recovery != null ? " (going back for the earlier items)." : " with the job.")
+				: "Respawning; going back for the items, then carrying on.");
 		p.respawn();
 		mc.gui.setScreen(null);
 		respawnRequested = true;
 	}
+
+	/**
+	 * Lost on death, worth going back for: a valuable ({@link #worthRecovering}), or iron worth a long mine — at least
+	 * {@link #IRON_WORTH_A_TRIP} ingots in armor, tools, buckets and iron carried. Full iron armor with an iron sword
+	 * and pickaxe was written off at a trial chamber, and the bot spent the next hour remaking it from wood and stone.
+	 */
+	private boolean carriesValuables(LocalPlayer p) {
+		int iron = 0;
+		for (int i = 0; i < p.getInventory().getContainerSize(); i++) {
+			ItemStack s = p.getInventory().getItem(i);
+			if (worthRecovering(s)) return true;
+			iron += ironIn(s);
+		}
+		return iron >= IRON_WORTH_A_TRIP;
+	}
+
+	/** Lost on death, this alone is worth going back for: job loot, diamonds and up, enchanted gear, rare finds. */
+	private boolean worthRecovering(ItemStack s) {
+		if (s.isEmpty()) return false;
+		if (isJobTarget(s) || s.isEnchanted() || s.is(ItemTags.SHULKER_BOXES)) return true;
+		String path = BuiltInRegistries.ITEM.getKey(s.getItem()).getPath();
+		return path.startsWith("diamond") || path.startsWith("netherite") || path.contains("smithing_template") || s.is(Items.ANCIENT_DEBRIS)
+				|| s.is(Items.EMERALD) || s.is(Items.ELYTRA) || s.is(Items.TOTEM_OF_UNDYING) || s.is(Items.ENCHANTED_GOLDEN_APPLE);
+	}
+
+	/** Iron ingots that went into this stack (armor, tools, buckets) or that it is (ingots, raw iron, their blocks). */
+	private static int ironIn(ItemStack s) {
+		if (s.isEmpty()) return 0;
+		Item item = s.getItem();
+		if (item == Items.IRON_INGOT || item == Items.RAW_IRON) return s.getCount();
+		if (item == Items.IRON_BLOCK || item == Items.RAW_IRON_BLOCK) return 9 * s.getCount();
+		return IRON_COST.getOrDefault(item, 0) * s.getCount();
+	}
+
+	private static final Map<Item, Integer> IRON_COST = Map.ofEntries(Map.entry(Items.IRON_HELMET, 5), Map.entry(Items.IRON_CHESTPLATE, 8),
+			Map.entry(Items.IRON_LEGGINGS, 7), Map.entry(Items.IRON_BOOTS, 4), Map.entry(Items.IRON_SWORD, 2), Map.entry(Items.IRON_PICKAXE, 3),
+			Map.entry(Items.IRON_AXE, 3), Map.entry(Items.IRON_SHOVEL, 1), Map.entry(Items.IRON_HOE, 2), Map.entry(Items.BUCKET, 3),
+			Map.entry(Items.WATER_BUCKET, 3), Map.entry(Items.LAVA_BUCKET, 3), Map.entry(Items.POWDER_SNOW_BUCKET, 3), Map.entry(Items.SHEARS, 2),
+			Map.entry(Items.SHIELD, 1));
+	/** Iron (in ingots) a death has to leave behind before it's worth the walk back. */
+	private static final int IRON_WORTH_A_TRIP = 8;
 
 	public @Nullable Recovery recovery() {
 		return recovery;
 	}
 
 	public void setRecovery(@Nullable Recovery r) {
+		setRecovery(r, 0);
+	}
+
+	/** A death spot whose items have already been loaded for {@code age} ticks (restored from a save). */
+	public void setRecovery(@Nullable Recovery r, int age) {
 		recovery = r;
+		recoveryAge = age;
+	}
+
+	/** See {@link #recoveryAge}. */
+	public int recoveryAge() {
+		return recoveryAge;
 	}
 
 	private void tickFlight() {
@@ -335,22 +547,27 @@ public final class Bot {
 
 	public void start(Job newJob) {
 		Job mine = Team.shareJob(newJob); // with teammates, they take an even share
-		begin(mine, null);
+		begin(mine);
 		List<Item> products = mine.requirements().stream().map(Requirement::product).filter(Objects::nonNull).toList();
 		if (!products.isEmpty()) jobMaterials.addAll(RecipeBook.get().ingredientTree(products, 3));
 		Chat.info("Job started: " + mine.requirements());
 		TaskSave.save(this, true);
 	}
 
-	/** Utility mode: only walk to {@code goal}; reflexes and combat still run. */
-	public void startGoto(Goal goal) {
-		begin(null, goal);
-		Chat.info("Going to " + goal);
+	/**
+	 * A go-to task: walk (through a portal when it's in the other dimension) to {@code to}, looking for it first when
+	 * it's a structure. Runs like a job — gear, food, storage and recovery keep going — and ends like one.
+	 */
+	public void startGoto(Destination to) {
+		begin(null);
+		destination = to;
+		Chat.info("Going to " + to.describe() + ".");
+		TaskSave.save(this, true);
 	}
 
 	/** Utility mode: get items from a base's chests (through a portal if the base is in the other dimension). */
 	public void startFetch(FetchOrder order) {
-		begin(null, null);
+		begin(null);
 		fetchOrder = order;
 		Chat.info("Getting " + order.amount() + " " + order.item().getDefaultInstance().getHoverName().getString() + " from the base at "
 				+ order.base().toShortString() + ".");
@@ -370,7 +587,7 @@ public final class Bot {
 			startTeamBuild(order, share.role(), share.depot());
 			return;
 		}
-		if (!running || job == null) begin(null, null);
+		if (!running || job == null) begin(null);
 		build = order;
 		Chat.info("Building " + order.schematic().name() + " at " + order.origin().toShortString()
 				+ (order.rotation().ordinal() == 0 ? "" : " rotated " + order.rotation().ordinal() * 90 + "°")
@@ -380,7 +597,7 @@ public final class Bot {
 
 	/** One part of a shared build (placer, digger or gatherer); {@code depot} is where materials are exchanged. */
 	public void startTeamBuild(BuildOrder order, TeamRole role, BlockPos depot) {
-		if (!running || job == null) begin(null, null);
+		if (!running || job == null) begin(null);
 		build = order;
 		teamRole = role;
 		this.depot = depot;
@@ -404,9 +621,11 @@ public final class Bot {
 		teamNeeds = Map.of();
 	}
 
-	private void begin(@Nullable Job newJob, @Nullable Goal newGoto) {
+	private void begin(@Nullable Job newJob) {
 		job = newJob;
-		gotoGoal = newGoto;
+		destination = null;
+		ending = null;
+		finishing = null;
 		clearBuild();
 		jobMaterials.clear();
 		needs.clear();
@@ -414,6 +633,7 @@ public final class Bot {
 		Procedures.reset();
 		resetBehaviors();
 		recovery = null;
+		jobDeaths = 0;
 		fetchOrder = null;
 		running = true;
 		paused = false;
@@ -421,12 +641,19 @@ public final class Bot {
 	}
 
 	public void stop(String reason) {
-		if (!running) return;
+		if (!running) {
+			// stopped in the few seconds before the saved task came back: it stays stopped — the stop was dropped
+			// and the task resumed five seconds later anyway
+			if (TaskSave.cancelRestore()) Chat.info("Stopped: the saved task won't resume.");
+			return;
+		}
 		lastStop = reason;
 		if (teamRole != TeamRole.SOLO || job != null) Team.stopAll();
 		running = false;
 		paused = false;
-		gotoGoal = null;
+		destination = null;
+		ending = null;
+		finishing = null;
 		clearBuild();
 		jobMaterials.clear();
 		needs.clear();
@@ -437,10 +664,10 @@ public final class Bot {
 		threatNet.save();
 		TaskSave.save(this, false);
 		Chat.info("Stopped: " + reason);
-		if (reason.equals(JOB_COMPLETE) || reason.equals(BUILD_COMPLETE) || reason.equals(FETCH_COMPLETE)) TaskTree.completed();
+		if (COMPLETE.contains(reason)) TaskTree.completed();
 	}
 
-	/** Why the bot last stopped ({@link #JOB_COMPLETE}, {@link #BUILD_COMPLETE}, or something else). */
+	/** Why the bot last stopped ({@link #JOB_COMPLETE}, {@link #ARRIVED}, ... or something else). */
 	public String lastStop() {
 		return lastStop;
 	}
@@ -458,7 +685,9 @@ public final class Bot {
 		paused = false;
 		job = null;
 		clearBuild();
-		gotoGoal = null;
+		destination = null;
+		ending = null;
+		finishing = null;
 		needs.clear();
 		resetBehaviors();
 		scanner.clear();
@@ -469,10 +698,13 @@ public final class Bot {
 
 	private void resetBehaviors() {
 		nav.stop();
+		tripPickaxe = null;
+		tripWeighed = null;
 		flight = null;
 		huntTargets = Set.of();
 		setQuiet(false);
 		procedureDimension = null;
+		guardedWork = null;
 		for (Behavior b : behaviors) b.reset();
 	}
 
@@ -560,11 +792,24 @@ public final class Bot {
 
 	/**
 	 * Like {@link #nextDimension()} but ignoring gear needs: what the gear planner prepares for (asking where its
-	 * own materials are would make it chase its tail).
+	 * own materials are would make it chase its tail). With nothing to gather, where the task itself is headed.
 	 */
 	public @Nullable Dim workDimension() {
 		if (procedureDimension != null) return procedureDimension; // a fortress or bastion chest: kit up for the Nether
-		return dimensionOf(needHereFirst(NeedOwner.GEAR, NeedOwner.TRAVEL));
+		Dim work = dimensionOf(needHereFirst(NeedOwner.GEAR, NeedOwner.TRAVEL));
+		return work != null ? work : tripDimension();
+	}
+
+	/**
+	 * Where the task itself is headed: once its goal is met, the dimension of the base it ends at; before that, a
+	 * go-to task's destination. Null when it isn't headed anywhere (the portal behavior then follows the gathering).
+	 */
+	public @Nullable Dim tripDimension() {
+		if (finishing != null) {
+			Bases.Base b = endBase();
+			return b == null ? null : b.dim();
+		}
+		return destination == null ? null : destination.dim();
 	}
 
 	private @Nullable Dim dimensionOf(@Nullable Requirement need) {
@@ -600,11 +845,60 @@ public final class Bot {
 	public boolean isPaused() { return paused; }
 	public @Nullable Job job() { return job; }
 	public @Nullable BuildOrder buildOrder() { return build; }
-	public @Nullable Goal gotoGoal() { return gotoGoal; }
+	public @Nullable Destination destination() { return destination; }
+	public @Nullable Ending ending() { return ending; }
 
-	/** There is a job or a build to keep supplies (gear, food, storage) up for. */
+	/** Finish the current task at a base (null: where it ends); set right after starting it, kept for resuming. */
+	public void setEnding(@Nullable Ending e) {
+		ending = e;
+		if (e != null) Chat.info("Then: " + e.describe() + ".");
+		if (running) TaskSave.save(this, true);
+	}
+
+	/** The ending's base, or null (no ending, or no base by that name any more). */
+	public Bases.@Nullable Base endBase() {
+		return ending == null ? null : Bases.named(ending.base());
+	}
+
+	/**
+	 * The task's own goal is met ({@code reason}: {@link #JOB_COMPLETE}, {@link #BUILD_COMPLETE}, {@link #FETCH_COMPLETE},
+	 * {@link #ARRIVED}, {@link #GROUP_COMPLETE}): the end-of-job flow ({@link com.autocraft.behavior.FinishBehavior})
+	 * takes over and stops the bot with this reason. Not running (a group's trip to its base, a resumed trip), it
+	 * starts with just that flow.
+	 */
+	public void goalMet(String reason) {
+		if (!running) begin(null);
+		finishing = reason;
+		nav.stop();
+		TaskSave.save(this, true);
+	}
+
+	/** The reason the task will stop with once the end-of-job flow is through; null while its goal isn't met. */
+	public @Nullable String finishing() { return finishing; }
+
+	/** There is work to keep supplies (gear, food, storage) up for: a job, a build, a go-to task, or a task's trip to its base. */
 	public boolean hasWork() {
-		return job != null || build != null;
+		return job != null || build != null || destination != null || finishing != null;
+	}
+
+	/** The drowning reflex took over (once per spell of running out of air). */
+	public void noteAirScare() {
+		airScares++;
+	}
+
+	/** How often the bot has run out of air so far (see {@link #noteAirScare}). */
+	public int airScares() {
+		return airScares;
+	}
+
+	/** Deaths to mobs this session (see {@link #mobDeaths}). */
+	public int mobDeaths() {
+		return mobDeaths;
+	}
+
+	/** Deaths since the current work began (see {@link #jobDeaths}). */
+	public int jobDeaths() {
+		return jobDeaths;
 	}
 
 	/** Counts toward the current job or goes into it (never junk, never used as scaffolding while alternatives exist). */
@@ -621,6 +915,11 @@ public final class Bot {
 	public void setBuildMaterials(Set<Item> items) {
 		buildMaterials.clear();
 		buildMaterials.addAll(items);
+	}
+
+	/** The current build still needs this. */
+	public boolean isBuildMaterial(ItemStack s) {
+		return buildMaterials.contains(s.getItem());
 	}
 
 	public Dim dimension() { return Dim.of(mc.level); }
@@ -672,6 +971,29 @@ public final class Bot {
 	public Set<EntityType<?>> huntTargets() { return huntTargets; }
 	public void setHuntTargets(Set<EntityType<?>> mobs) { huntTargets = mobs; }
 
+	/** Combat ran from this one as too strong even at full health: work keeps clear of it for a while. */
+	public void dread(Mob m) { dreaded.put(m.getId(), ticks); }
+
+	/**
+	 * A mob combat ran from as unbeatable is within {@code radius} of {@code pos}, alive, and was run from in the last
+	 * {@link #DREAD_TICKS}. A piglin brute guarding a bastion chest won every fight it was given; once it went back to
+	 * its post the job walked straight back to that chest — six trips in ten minutes until the brute caught the bot.
+	 */
+	public boolean dreaded(BlockPos pos, double radius) {
+		ClientLevel level = mc.level;
+		if (level == null || dreaded.isEmpty()) return false;
+		dreaded.entrySet().removeIf(e -> {
+			Entity m = level.getEntity(e.getKey());
+			return ticks - e.getValue() > DREAD_TICKS || m == null || !m.isAlive();
+		});
+		double r2 = radius * radius;
+		for (int id : dreaded.keySet()) {
+			Entity m = level.getEntity(id);
+			if (m != null && m.distanceToSqr(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5) <= r2) return true;
+		}
+		return false;
+	}
+
 	/** Ancient city mode: sneak everywhere, no sprinting, no mining or placing (except wool), never step on sculk. */
 	public void setQuiet(boolean value) {
 		controls.setQuiet(value);
@@ -683,6 +1005,10 @@ public final class Bot {
 	/** The dimension a running procedure needs to be in (a fortress chest in the Nether); null = here. */
 	public @Nullable Dim procedureDimension() { return procedureDimension; }
 	public void setProcedureDimension(@Nullable Dim dim) { procedureDimension = dim; }
+
+	/** The guarded structure the running procedure works in, or null ({@link #guardedWork}). */
+	public LootSites.@Nullable Site guardedWork() { return guardedWork; }
+	public void setGuardedWork(LootSites.@Nullable Site site) { guardedWork = site; }
 
 	public String activeBehavior() { return activeBehavior; }
 	public String status() { return status; }

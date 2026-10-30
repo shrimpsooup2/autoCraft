@@ -3,9 +3,13 @@ package com.autocraft.procedure;
 import com.autocraft.Bot;
 import com.autocraft.control.InvUtil;
 import com.autocraft.control.Placement;
+import com.autocraft.path.Goal;
+import com.autocraft.path.Navigator;
 import com.autocraft.world.BlockUtil;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Predicate;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
@@ -22,6 +26,10 @@ import net.minecraft.world.item.alchemy.Potions;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -83,6 +91,11 @@ final class BlockWorkProcedure implements Procedure {
 	}
 
 	@Override
+	public Item consumed(Item item) {
+		return works.get(item).input;
+	}
+
+	@Override
 	public Task start(Item item, int total) {
 		return new Run(item, total, works.get(item));
 	}
@@ -104,8 +117,13 @@ final class BlockWorkProcedure implements Procedure {
 		private @Nullable BlockPos placed;
 		private @Nullable BlockPos water;
 		private boolean pouredWater;
+		/** Walking to stand beside one water source this long: another one is tried. */
+		private static final int APPROACH_TICKS = 20 * 60;
 		private int wait;
 		private int fails;
+		/** Water sources that couldn't be got at (behind rock, unreachable): another one is used. */
+		private final Set<BlockPos> unusable = new HashSet<>();
+		private int approachTicks;
 
 		Run(Item item, int total, Work work) {
 			this.item = item;
@@ -154,26 +172,38 @@ final class BlockWorkProcedure implements Procedure {
 
 		private Status fillBottle(Bot bot, LocalPlayer p) {
 			if (water == null || !BlockUtil.isWater(bot.level().getBlockState(water))) {
-				water = Actions.nearestBlock(bot, s -> BlockUtil.isWater(s) && s.getFluidState().isSource(), 3);
+				water = bot.scanner().findBlocks(s -> BlockUtil.isWater(s) && s.getFluidState().isSource(), 3, 16).stream()
+						.filter(b -> !unusable.contains(b)).min(java.util.Comparator.comparingDouble(b -> b.distSqr(Navigator.feet(p)))).orElse(null);
 				if (water == null) return Status.FAILED;
 			}
 			bot.setStatus("filling a bottle with water");
-			switch (Actions.reach(bot, water)) {
-				case WORKING -> {
-					return Status.RUNNING;
-				}
-				case FAILED -> {
+			if (!seesWater(bot, p)) {
+				// stand right beside it: "in reach" through rock (a pocket behind the shaft it dug) the bottle never filled,
+				// and the bot stood there for a quarter of an hour
+				bot.nav().setGoal(new Goal.Adjacent(water));
+				if (bot.nav().tick() == Navigator.Status.FAILED || ++approachTicks > APPROACH_TICKS) {
+					bot.nav().stop();
+					unusable.add(water);
 					water = null;
+					approachTicks = 0;
 					fails++;
-					return Status.RUNNING;
 				}
-				case DONE -> {
-				}
+				return Status.RUNNING;
 			}
-			bot.controls().lookAt(net.minecraft.world.phys.Vec3.atCenterOf(water));
+			bot.nav().stop();
+			approachTicks = 0;
+			bot.controls().lookAt(Vec3.atCenterOf(water));
 			if (InvUtil.select(p, s -> s.is(Items.GLASS_BOTTLE))) bot.controls().useItem(net.minecraft.world.InteractionHand.MAIN_HAND);
 			wait = 6;
 			return Status.RUNNING;
+		}
+
+		/** In reach, and the eye's ray to it meets that water itself — not rock in between. */
+		private boolean seesWater(Bot bot, LocalPlayer p) {
+			if (!p.isWithinBlockInteractionRange(water, -0.5)) return false;
+			BlockHitResult hit = bot.level().clip(new ClipContext(p.getEyePosition(), Vec3.atCenterOf(water), ClipContext.Block.COLLIDER,
+					ClipContext.Fluid.SOURCE_ONLY, p));
+			return hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(water);
 		}
 
 		/** Concrete: put powder right next to a water source; it hardens on the spot; mine it. */

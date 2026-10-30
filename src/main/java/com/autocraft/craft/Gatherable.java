@@ -5,6 +5,7 @@ import com.autocraft.goal.Requirement.Dim;
 import com.autocraft.goal.Resources;
 import com.autocraft.hunt.MobHints;
 import com.autocraft.loot.LootBook;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -43,7 +44,7 @@ public final class Gatherable {
 			Blocks.LARGE_FERN, Blocks.DEAD_BUSH, Blocks.SEAGRASS, Blocks.COBWEB, Blocks.GILDED_BLACKSTONE, Blocks.SCULK_SENSOR,
 			Blocks.REINFORCED_DEEPSLATE, Blocks.FARMLAND, Blocks.DIRT_PATH, Blocks.INFESTED_STONE, Blocks.INFESTED_DEEPSLATE,
 			Blocks.STRUCTURE_VOID, Blocks.PETRIFIED_OAK_SLAB, Blocks.SUSPICIOUS_SAND, Blocks.SUSPICIOUS_GRAVEL, Blocks.FROGSPAWN,
-			Blocks.END_STONE, Blocks.CHORUS_PLANT, Blocks.CHORUS_FLOWER, Blocks.DRAGON_EGG);
+			Blocks.END_STONE, Blocks.CHORUS_PLANT, Blocks.CHORUS_FLOWER, Blocks.DRAGON_EGG, Blocks.POWDER_SNOW);
 	/** Gather a little extra of cheap staples so one trip covers several recipes. */
 	private static final Map<Item, Integer> MIN_BATCH = Map.of(
 			Items.COBBLESTONE, 16, Items.RAW_IRON, 5, Items.RAW_GOLD, 5, Items.RAW_COPPER, 5, Items.COAL, 4, Items.SAND, 8);
@@ -52,6 +53,12 @@ public final class Gatherable {
 	private static final Set<Block> PLAYER_MADE = Set.of(Blocks.BOOKSHELF, Blocks.CRAFTER, Blocks.TNT, Blocks.CAKE, Blocks.HAY_BLOCK,
 			Blocks.TARGET, Blocks.REDSTONE_LAMP, Blocks.SEA_LANTERN, Blocks.JACK_O_LANTERN, Blocks.CARVED_PUMPKIN, Blocks.INFESTED_STONE,
 			Blocks.INFESTED_DEEPSLATE, Blocks.SPAWNER, Blocks.TRIAL_SPAWNER, Blocks.TRIPWIRE, Blocks.REDSTONE_WIRE);
+	/**
+	 * Blocks that drop themselves but never generate in the world: they only ever come as loot — heavy cores out of
+	 * ominous vaults, sniffer eggs out of suspicious sand. Taken for world blocks, the mace job explored for a heavy
+	 * core to mine instead of taking on an ominous trial.
+	 */
+	private static final Set<Block> LOOT_ONLY = Set.of(Blocks.HEAVY_CORE, Blocks.SNIFFER_EGG);
 	/** Rough relative effort, used by the planner to compare gathering with crafting/smelting. */
 	static final double NAMED_COST = 8;
 	static final double GENERIC_COST = 20;
@@ -59,6 +66,8 @@ public final class Gatherable {
 	static final double HUNT_COST = 30;
 	/** Blocks that are seldom near: their loot is worth hunting for instead when a mob drops it too. */
 	private static final Set<Block> RARE = Set.of(Blocks.COBWEB);
+	/** Found only in biomes none of which is around: a trip to find one comes first (rough). */
+	static final double FAR_BIOME_FACTOR = 4;
 
 	private Gatherable() {}
 
@@ -90,12 +99,21 @@ public final class Gatherable {
 
 	/** A block found in the world that drops itself when mined (tripwire is string, but string comes from spiders). */
 	public static boolean isNatural(Block block, Item item) {
-		if (NOT_SELF_DROPPING.contains(block) || PLAYER_MADE.contains(block) || block instanceof AbstractSkullBlock
+		if (NOT_SELF_DROPPING.contains(block) || structureOnly(block) || block instanceof AbstractSkullBlock
 				|| block.defaultBlockState().is(BlockTags.LEAVES)) {
 			return false;
 		}
 		if (BuiltInRegistries.BLOCK.getKey(block).getPath().contains("_ore")) return false; // ores drop raw items: named resources
 		return !RecipeBook.get().isMade(item);
+	}
+
+	/** Only ever built by players, found in structures or given as loot: not worth searching the world for. */
+	private static boolean structureOnly(Block b) {
+		if (PLAYER_MADE.contains(b) || LOOT_ONLY.contains(b)) return true;
+		// copper's weathered stages occur in the world only in trial chambers: made in the copper garden instead (it
+		// tunnelled twenty minutes for exposed copper, never once near a chamber)
+		String path = BuiltInRegistries.BLOCK.getKey(b).getPath();
+		return path.startsWith("exposed_") || path.startsWith("weathered_") || path.startsWith("oxidized_");
 	}
 
 	/**
@@ -162,7 +180,7 @@ public final class Gatherable {
 	/** Blocks that occur in the world: not furniture/containers, placed string/redstone, potted plants, or someone's crops. */
 	private static boolean isWorldBlock(Block b) {
 		return !(b instanceof BaseEntityBlock) && !(b instanceof CropBlock) && !(b instanceof StemBlock) && !(b instanceof FlowerPotBlock)
-				&& !PLAYER_MADE.contains(b);
+				&& !structureOnly(b);
 	}
 
 	/**
@@ -188,6 +206,11 @@ public final class Gatherable {
 	}
 
 	public static double cost(Requirement r, Dim here) {
+		return cost(r, here, null);
+	}
+
+	/** @param biomesAround biomes in the loaded area, or null when unknown (no biome judgment then) */
+	public static double cost(Requirement r, Dim here, @Nullable Set<ResourceKey<Biome>> biomesAround) {
 		double base = Resources.isNamed(r.name()) || r.name().equals("stem") ? NAMED_COST : GENERIC_COST;
 		Item item = BuiltInRegistries.ITEM.getOptional(Identifier.withDefaultNamespace(r.name())).orElse(null);
 		if (item != null && r.isHunted()) {
@@ -201,6 +224,9 @@ public final class Gatherable {
 			base /= Math.max(0.05, Math.min(1, chance));
 			if (r.sources().stream().allMatch(RARE::contains)) base *= 3;
 		}
+		// found only in biomes none of which is around: gathering it starts with a trip to find one — mud lives in
+		// mangrove swamps, and without one around a water bottle on dirt is the quicker way (it went exploring)
+		if (biomesAround != null && !r.biomes().isEmpty() && Collections.disjoint(r.biomes(), biomesAround)) base *= FAR_BIOME_FACTOR;
 		return r.dimension() == here ? base : base + OTHER_DIMENSION_PENALTY;
 	}
 

@@ -1,6 +1,7 @@
 package com.autocraft.loot;
 
 import com.autocraft.goal.Requirement.Dim;
+import java.util.List;
 import java.util.Set;
 import java.util.function.Predicate;
 import net.minecraft.core.Holder;
@@ -99,12 +100,47 @@ public final class LootSites {
 			Set.of(MapDecorationTypes.OCEAN_RUIN_WARM));
 	private static final Site TRAIL_RUINS = site("trail ruins", Dim.OVERWORLD, null, Set.of(Biomes.TAIGA, Biomes.SNOWY_TAIGA, Biomes.OLD_GROWTH_BIRCH_FOREST,
 			Biomes.OLD_GROWTH_PINE_TAIGA, Biomes.OLD_GROWTH_SPRUCE_TAIGA, Biomes.JUNGLE), s -> s.is(Blocks.SUSPICIOUS_GRAVEL), Holds.SUSPICIOUS_BLOCKS, 8, 260);
+	/** Structures whose guards (spawners, illagers, the warden, piglins) make dying there likely. */
+	private static final Set<Site> GUARDED = Set.of(DUNGEON, STRONGHOLD, ANCIENT_CITY, TRIAL_CHAMBER, OUTPOST, MANSION, FORTRESS, BASTION);
 
 	private LootSites() {}
 
 	private static Site site(String name, Dim dim, @Nullable Integer y, Set<ResourceKey<Biome>> biomes, Predicate<BlockState> tell, Holds holds,
 			int containers, double effort) {
 		return new Site(name, dim, y, biomes, tell, Set.of(), holds, containers, effort, false, Set.of());
+	}
+
+	/**
+	 * The structures a go-to task can head for: every site above but the buried treasure (nothing shows where it is
+	 * without a map) and the pyramid's suspicious sand (the desert pyramid itself is in the list).
+	 */
+	public static List<Site> structures() {
+		return List.of(VILLAGE, DESERT_PYRAMID, JUNGLE_TEMPLE, OUTPOST, MANSION, CAMP, SHIPWRECK, RUINED_PORTAL, DESERT_WELL, TRAIL_RUINS, COLD_RUINS,
+				WARM_RUINS, DUNGEON, MINESHAFT, STRONGHOLD, TRIAL_CHAMBER, ANCIENT_CITY, FORTRESS, BASTION);
+	}
+
+	/**
+	 * The structure called {@code name} ({@code village}, {@code nether_fortress}): the exact name, else the only one
+	 * whose name contains it ({@code fortress}, {@code pyramid}); null when none or several do.
+	 */
+	public static @Nullable Site structure(String name) {
+		String n = name.trim().toLowerCase().replace('_', ' ');
+		List<Site> all = structures();
+		for (Site s : all) {
+			if (s.name().equals(n)) return s;
+		}
+		List<Site> partial = all.stream().filter(s -> s.name().contains(n)).toList();
+		return partial.size() == 1 ? partial.getFirst() : null;
+	}
+
+	/** Guarded by mobs: dying there is likely (see {@link #GUARDED}). */
+	public static boolean guarded(Site site) {
+		return GUARDED.contains(site);
+	}
+
+	/** Trial chambers, for the vault procedure (its loot is a procedure of its own, not a chest table). */
+	public static Site trialChamber() {
+		return TRIAL_CHAMBER;
 	}
 
 	/** The site for a loot table ({@code ancient_city}, {@code village/village_armorer}, {@code archaeology/desert_well}...), or null. */

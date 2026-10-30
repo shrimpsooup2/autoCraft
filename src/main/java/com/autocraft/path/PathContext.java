@@ -15,6 +15,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
+import net.minecraft.world.level.levelgen.Heightmap;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -29,6 +30,12 @@ final class PathContext {
 	private static final double BREAK_OVERHEAD = 3;
 	private static final double FALLING_BLOCK_PENALTY = 15;
 	private static final double WATER_FLOOD_PENALTY = 25;
+	/** Opening water into a tunnel underground floods it with nowhere to come up for air. */
+	private static final double FLOOD_UNDERGROUND_PENALTY = 200;
+	/** How far up a swimmer looks for air before calling it a ceiling. */
+	private static final int CEILING_SCAN = 6;
+	/** Sneaking pace over magma, against walking. */
+	private static final double MAGMA_MULTIPLIER = 4;
 
 	final ClientLevel level;
 	final LocalPlayer player;
@@ -87,10 +94,13 @@ final class PathContext {
 		return s.is(Blocks.SCULK_SENSOR) || s.is(Blocks.CALIBRATED_SCULK_SENSOR) || s.is(Blocks.SCULK_SHRIEKER);
 	}
 
-	/** A player can stand on top of block (x,y,z). */
+	/**
+	 * A player can stand on top of block (x,y,z). Magma counts here (and only here): the bot crosses it sneaking, at a
+	 * price ({@link #floorMultiplier}); a portal ringed by magma was a cage it couldn't plan its way out of.
+	 */
 	boolean standOn(int x, int y, int z) {
 		BlockState s = state(x, y, z);
-		return s != null && !(quiet && isLoudFloor(s)) && BlockUtil.canStandOn(level, mpos.set(x, y, z), s);
+		return s != null && !(quiet && isLoudFloor(s)) && (s.is(Blocks.MAGMA_BLOCK) || BlockUtil.canStandOn(level, mpos.set(x, y, z), s));
 	}
 
 	boolean water(int x, int y, int z) {
@@ -101,6 +111,16 @@ final class PathContext {
 	boolean lava(int x, int y, int z) {
 		BlockState s = state(x, y, z);
 		return s != null && BlockUtil.isLava(s);
+	}
+
+	/** Water at (x,y,z) with no air straight above it within reach: a swimmer here can't come up for breath. */
+	boolean underCeiling(int x, int y, int z) {
+		for (int dy = 1; dy <= CEILING_SCAN; dy++) {
+			BlockState s = state(x, y + dy, z);
+			if (s == null || !s.isAir() && !BlockUtil.isWater(s)) return true;
+			if (s.isAir()) return false;
+		}
+		return true;
 	}
 
 	/** Can hold a placed block (air, plants, water) — never lava. */
@@ -129,18 +149,22 @@ final class PathContext {
 		}
 		double cost = ticks + BREAK_OVERHEAD;
 		if (BlockUtil.hasFallingBlockAbove(level, mpos)) cost += FALLING_BLOCK_PENALTY;
-		if (BlockUtil.touchesWater(level, mpos)) cost += WATER_FLOOD_PENALTY;
+		if (BlockUtil.touchesWater(level, mpos)) {
+			boolean underground = level.getHeight(Heightmap.Types.WORLD_SURFACE, x, z) > y + 3;
+			cost += underground ? FLOOD_UNDERGROUND_PENALTY : WATER_FLOOD_PENALTY;
+		}
 		return cost;
 	}
 
 	/**
 	 * Walking-cost multiplier for the floor under feet (x,y,z): soul sand, honey, etc. are slow; leaves are avoided
-	 * (tree canopies lead nowhere and end in long falls).
+	 * (tree canopies lead nowhere and end in long falls); magma is crossed sneaking (no burns), a third of the pace.
 	 */
 	double floorMultiplier(int x, int y, int z) {
 		BlockState floor = state(x, y - 1, z);
 		if (floor == null) return 1;
 		if (floor.is(BlockTags.LEAVES)) return 3;
+		if (floor.is(Blocks.MAGMA_BLOCK)) return MAGMA_MULTIPLIER;
 		float factor = floor.getBlock().getSpeedFactor();
 		return factor >= 1 ? 1 : 1 / Math.max(factor, 0.2);
 	}

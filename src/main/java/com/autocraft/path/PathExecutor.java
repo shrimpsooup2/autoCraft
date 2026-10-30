@@ -11,6 +11,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Walks a planned path one tick at a time: for each step, mine its blocks, place its block, then move.
@@ -44,6 +45,7 @@ final class PathExecutor {
 	private int swimStartTicks;
 	/** This stretch of water is too shallow to swim in (until we're out of it). */
 	private boolean tooShallow;
+	private @Nullable BlockPos failedFrom, failedTo;
 
 	PathExecutor(List<Step> steps, BlockPos start, Predicate<ItemStack> scaffold) {
 		this.steps = steps;
@@ -67,15 +69,15 @@ final class PathExecutor {
 
 		Step step = steps.get(index);
 		BlockPos from = index == 0 ? start : steps.get(index - 1).dest();
-		if (deviated(feet, from, step, p)) return Result.REPLAN;
-		if (dangerAhead(level, step)) return Result.REPLAN;
+		if (deviated(feet, from, step, p)) return replan("deviated at " + feet.toShortString(), step, false);
+		if (dangerAhead(level, step)) return replan("danger ahead", step, true);
 
 		// 1. clear the way
 		for (BlockPos b : step.breaks()) {
 			BlockState s = level.getBlockState(b);
 			if (BlockUtil.isPassable(level, b, s)) continue;
-			if (!BlockUtil.isBreakable(level, b, s) || !p.isWithinBlockInteractionRange(b, 0.0)) return Result.REPLAN;
-			if (++mineTicks > MINE_TICKS) return Result.REPLAN;
+			if (!BlockUtil.isBreakable(level, b, s) || !p.isWithinBlockInteractionRange(b, 0.0)) return replan("can't break " + b.toShortString(), step, true);
+			if (++mineTicks > MINE_TICKS) return replan("mining too long", step, true);
 			controls.mine(b);
 			return Result.RUNNING;
 		}
@@ -83,14 +85,36 @@ final class PathExecutor {
 		// 2. place a block (bridge floor or pillar)
 		BlockPos place = step.place();
 		if (place != null && level.getBlockState(place).canBeReplaced()) {
-			if (InvUtil.count(p, scaffold) == 0) return Result.REPLAN;
-			return step.type() == Step.Type.PILLAR ? pillar(p, controls, place, from) : bridge(p, controls, place);
+			if (InvUtil.count(p, scaffold) == 0) return replan("no blocks", step, false);
+			return step.type() == Step.Type.PILLAR ? pillar(p, controls, place, from, step) : bridge(p, controls, place, step);
 		}
 
 		// 3. move
-		if (++moveTicks > STUCK_TICKS) return Result.REPLAN;
+		if (++moveTicks > STUCK_TICKS) return replan("stuck moving at " + p.position(), step, true);
 		move(level, p, controls, step, feet);
 		return Result.RUNNING;
+	}
+
+	/**
+	 * Give up on the plan (the navigator plans again), saying why in the debug log. {@code blame}: the move itself
+	 * didn't work here (not a knock off the path or an empty hand) — the next plan must not try it again.
+	 */
+	private Result replan(String why, Step step, boolean blame) {
+		com.autocraft.Chat.LOG.debug("replan at step {}/{} {}: {}", index, steps.size(), step, why);
+		if (blame) {
+			failedFrom = index == 0 ? start : steps.get(index - 1).dest();
+			failedTo = step.dest();
+		}
+		return Result.REPLAN;
+	}
+
+	/** The move that just failed (see {@link #replan}), or null. */
+	@Nullable BlockPos failedFrom() {
+		return failedFrom;
+	}
+
+	@Nullable BlockPos failedTo() {
+		return failedTo;
 	}
 
 	/** Skip forward past every step whose destination the player already stands on. */
@@ -135,13 +159,21 @@ final class PathExecutor {
 		return Math.max(Math.abs(a.getX() - b.getX()), Math.abs(a.getZ() - b.getZ()));
 	}
 
-	/** Lava flowed into the planned body space since planning. */
+	/**
+	 * Lava flowed into the planned body space since planning. A dangerous block the step itself breaks doesn't count:
+	 * the plan puts out a fire (or cuts a cobweb) on the way — vetoing that step before its breaks kept the bot
+	 * planning the same fire-blocked step out of a nether portal until it gave up its lost netherite.
+	 */
 	private boolean dangerAhead(ClientLevel level, Step step) {
 		BlockPos d = step.dest();
-		return BlockUtil.isDangerous(level.getBlockState(d)) || BlockUtil.isDangerous(level.getBlockState(d.above()));
+		return dangerous(level, d, step) || dangerous(level, d.above(), step);
 	}
 
-	private Result pillar(LocalPlayer p, Controls controls, BlockPos place, BlockPos from) {
+	private static boolean dangerous(ClientLevel level, BlockPos pos, Step step) {
+		return BlockUtil.isDangerous(level.getBlockState(pos)) && !step.breaks().contains(pos);
+	}
+
+	private Result pillar(LocalPlayer p, Controls controls, BlockPos place, BlockPos from, Step step) {
 		controls.face(p.getYRot(), 90.0F);
 		if (horizontalDist(p, from) > 0.25 && p.onGround()) {
 			controls.faceHorizontally(Vec3.atBottomCenterOf(from));
@@ -153,13 +185,14 @@ final class PathExecutor {
 		if (p.getY() >= place.getY() + 1.02) {
 			controls.place(place, scaffold);
 		}
-		if (++moveTicks > STUCK_TICKS) return Result.REPLAN;
+		if (++moveTicks > STUCK_TICKS) return replan("pillar stuck at y=" + p.getY(), step, true);
 		return Result.RUNNING;
 	}
 
-	private Result bridge(LocalPlayer p, Controls controls, BlockPos place) {
+	private Result bridge(LocalPlayer p, Controls controls, BlockPos place, Step step) {
 		controls.sneak(); // never slide off the edge while placing
-		if (!controls.place(place, scaffold)) return Result.REPLAN;
+		// not blamed: a face that opens on click makes the first try only start sneaking (see Controls.place)
+		if (!controls.place(place, scaffold)) return replan("can't place " + place.toShortString(), step, false);
 		return Result.RUNNING;
 	}
 
@@ -190,7 +223,10 @@ final class PathExecutor {
 			}
 			case DESCEND, FALL, DIG_DOWN -> {
 				controls.faceHorizontally(target);
-				if (dist > 0.3) controls.forward();
+				// on the ground the whole body must be over the drop (half its 0.6 width from the edge): 0.3 off the
+				// column's middle it still rested on the next block — a fall into the column it stood in stalled
+				// "stuck moving" three times over, and the trip gave up
+				if (dist > (p.onGround() ? 0.15 : 0.3)) controls.forward();
 			}
 			case SWIM_VERTICAL -> {
 				controls.faceHorizontally(target);

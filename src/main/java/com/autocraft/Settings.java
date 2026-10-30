@@ -28,6 +28,13 @@ public final class Settings {
 	public boolean materialsAtBase = false;
 	/** Pick the job/build back up after a relog or crash. */
 	public boolean resumeAfterRelog = true;
+	/**
+	 * Working far from the spawn point where dying looks likely (see {@code RespawnBedBehavior}): put a bed down near
+	 * the work and set the spawn point with it, so a death means a short walk back to the dropped items.
+	 */
+	public boolean respawnBeds = false;
+	/** "Far" for respawn beds: the spawn point is more than this many blocks away (horizontally), or in another dimension. */
+	public int respawnBedDistance = 256;
 
 	public static Settings get() {
 		if (instance == null) instance = load();

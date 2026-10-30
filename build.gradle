@@ -6,6 +6,26 @@ base {
 	archivesName = 'autocraft'
 }
 
+loom {
+	runs {
+		// dev only: ./gradlew runHarness opens run/saves/test with DevHarness on (commands from run/harness-in.txt)
+		harness {
+			inherit client
+			configName = "Harness"
+			vmArg "-Dautocraft.harness=true"
+			programArgs "--quickPlaySingleplayer", "test", "--username", "DevBot"
+		}
+		// a second one alongside (own game folder run2/, world "edge", smaller heap), for testing two jobs at once
+		harness2 {
+			inherit client
+			configName = "Harness 2"
+			runDir "run2"
+			vmArgs "-Dautocraft.harness=true", "-Xmx3G"
+			programArgs "--quickPlaySingleplayer", "edge", "--username", "DevBot"
+		}
+	}
+}
+
 dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	implementation "net.fabricmc:fabric-loader:${project.loader_version}"

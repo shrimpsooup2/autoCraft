@@ -4,12 +4,16 @@ import com.autocraft.Bases;
 import com.autocraft.Bot;
 import com.autocraft.build.Placement;
 import com.autocraft.control.InvUtil;
+import com.autocraft.goal.Ending;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
+import com.autocraft.goal.Requirement.Dim;
 import com.autocraft.goal.Resources;
+import com.autocraft.loot.LootSites;
 import com.autocraft.schematic.SchematicLibrary;
 import com.autocraft.tasks.TaskNode;
 import com.autocraft.tasks.TaskTree;
+import com.mojang.blaze3d.platform.InputConstants;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -17,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.Consumer;
+import java.util.function.IntConsumer;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
@@ -120,14 +125,29 @@ final class TaskTreePanel {
 	void init() {
 		if (selected != null && TaskTree.siblings(selected) == null) selected = null; // deleted or another world
 		if (selected == null) mode = Mode.ADD;
-		int third = (colW - 8) / 3;
-		button("+ Group", "A big task made of subtasks (added under the selected task)", treeX(), third, () -> addEdited(new TaskNode("New task", TaskNode.Kind.GROUP)));
-		button("+ Build", "Build a schematic (a spot is found when it runs, or use From placement)", treeX() + 4 + third, third, () -> {
+		String[] labels = {"+ Group", "+ Build", "+ Go to", "Clear done"};
+		int[] w = widths(labels, colW);
+		int bx = treeX();
+		button(labels[0], "A big task made of subtasks (added under the selected task)", bx, w[0], () -> addEdited(new TaskNode("New task", TaskNode.Kind.GROUP)));
+		bx += w[0] + 4;
+		button(labels[1], "Build a schematic (a spot is found when it runs, or use From placement)", bx, w[1], () -> {
 			TaskNode n = new TaskNode("Build starter_base", TaskNode.Kind.BUILD);
 			n.schematic = "starter_base";
 			addEdited(n);
 		});
-		button("Clear done", "Remove finished tasks", treeX() + 8 + 2 * third, third, () -> {
+		bx += w[1] + 4;
+		button(labels[2], "Go somewhere: coordinates, a base, or the nearest structure of a kind (found or searched for when it runs)", bx, w[2], () -> {
+			TaskNode n = new TaskNode("", TaskNode.Kind.GOTO);
+			LocalPlayer p = Minecraft.getInstance().player;
+			if (p != null) {
+				n.x = p.getBlockX();
+				n.z = p.getBlockZ();
+			}
+			n.title = n.gotoTitle();
+			addEdited(n);
+		});
+		bx += w[2] + 4;
+		button(labels[3], "Remove finished tasks", bx, w[3], () -> {
 			TaskTree.clearDone();
 			if (selected != null && TaskTree.siblings(selected) == null) selected = null;
 			rebuild.run();
@@ -167,6 +187,18 @@ final class TaskTreePanel {
 
 	private void button(String label, String tip, int x, int w, Runnable action) {
 		add.accept(Button.builder(Component.literal(label), b -> action.run()).tooltip(Tooltip.create(Component.literal(tip))).bounds(x, bottomY + 2, w, 18).build());
+	}
+
+	/** Button widths filling {@code total} (4 px gaps), each in proportion to its label. */
+	private int[] widths(String[] labels, int total) {
+		int[] w = new int[labels.length];
+		int room = total - 4 * (labels.length - 1), sum = 0, used = 0;
+		for (String l : labels) sum += font.width(l) + 8;
+		for (int i = 0; i < labels.length; i++) {
+			w[i] = i == labels.length - 1 ? room - used : (font.width(labels[i]) + 8) * room / sum;
+			used += w[i];
+		}
+		return w;
 	}
 
 	/** Add a group/build under the selection and open it for editing (it needs a title or a schematic). */
@@ -332,6 +364,8 @@ final class TaskTreePanel {
 				rebuild.run();
 			}).tooltip(Tooltip.create(Component.literal("Use the schematic being placed in the world, at its position and rotation")))
 					.bounds(rightX + colW - 86, y, 86, 16).build());
+		} else if (n.kind == TaskNode.Kind.GOTO) {
+			gotoRow(n, title, y);
 		}
 		EditBox context = box(rightX, top + 40, colW, 256, n.context, "Context / notes for this task");
 		context.setResponder(s -> {
@@ -361,8 +395,8 @@ final class TaskTreePanel {
 			if (TaskTree.siblings(n) == null) selected = null; // the running task can't be deleted
 			rebuild.run();
 		}).bounds(rightX + 3 * (quarter + 4), by, quarter, 18).build());
+		int half = colW / 2 - 2;
 		if (n.kind == TaskNode.Kind.COLLECT || n.kind == TaskNode.Kind.FETCH) {
-			int half = colW / 2 - 2;
 			add.accept(Button.builder(Component.literal(n.kind == TaskNode.Kind.FETCH ? "Source: from base" : "Source: gather"), b -> {
 				n.kind = n.kind == TaskNode.Kind.FETCH ? TaskNode.Kind.COLLECT : TaskNode.Kind.FETCH;
 				TaskTree.save();
@@ -377,6 +411,133 @@ final class TaskTreePanel {
 				});
 			}
 		}
+		if (n.kind == TaskNode.Kind.GOTO && n.target == TaskNode.Target.COORDS) {
+			add.accept(Button.builder(Component.literal(n.dimension == null ? "In: current dim" : "In: " + n.dimension.name().toLowerCase()), b -> {
+				retitle(n, title, () -> n.dimension = n.dimension == null ? Dim.OVERWORLD : n.dimension == Dim.OVERWORLD ? Dim.NETHER : null);
+				rebuild.run();
+			}).tooltip(Tooltip.create(Component.literal("The coordinates' dimension: the one the bot is in when the task runs, or the Overworld or the"
+					+ " Nether (it travels through a portal; click to switch)"))).bounds(rightX, by + 22, half, 18).build());
+			add.accept(Button.builder(Component.literal("Use my position"), b -> {
+				LocalPlayer p = Minecraft.getInstance().player;
+				if (p == null) return;
+				retitle(n, title, () -> {
+					n.x = p.getBlockX();
+					n.y = p.getBlockY();
+					n.z = p.getBlockZ();
+					n.dimension = Dim.of(p.level());
+				});
+				rebuild.run();
+			}).tooltip(Tooltip.create(Component.literal("Where you stand now (clear Y to let it stop at any height on that column)")))
+					.bounds(rightX + half + 4, by + 22, half, 18).build());
+		}
+		endingRow(n, by + 44, half);
+	}
+
+	/** Go-to target: its kind (click to switch), then coordinates, a base or a structure kind. */
+	private void gotoRow(TaskNode n, EditBox title, int y) {
+		String kind = switch (n.target) {
+			case COORDS -> "Coords";
+			case BASE -> "Base";
+			case STRUCTURE -> "Structure";
+		};
+		add.accept(Button.builder(Component.literal(kind), b -> {
+			retitle(n, title, () -> n.target = TaskNode.Target.values()[(n.target.ordinal() + 1) % TaskNode.Target.values().length]);
+			rebuild.run();
+		}).tooltip(Tooltip.create(Component.literal("What to go to: coordinates, a base, or the nearest structure of a kind (click to switch)")))
+				.bounds(rightX, y, 60, 16).build());
+		int x = rightX + 64;
+		int w = colW - 64;
+		switch (n.target) {
+			case COORDS -> {
+				int bw = (w - 8) / 3;
+				coordBox(x, y, bw, Integer.toString(n.x), "X", v -> retitle(n, title, () -> n.x = v));
+				EditBox yBox = box(x + bw + 4, y, bw, 6, n.y == null ? "" : Integer.toString(n.y), "Y (any)");
+				yBox.setTooltip(Tooltip.create(Component.literal("Empty: any height on that column the bot can stand at")));
+				yBox.setResponder(s -> {
+					if (s.isBlank()) retitle(n, title, () -> n.y = null);
+					else parse(s, v -> retitle(n, title, () -> n.y = v));
+				});
+				coordBox(x + 2 * (bw + 4), y, w - 2 * (bw + 4), Integer.toString(n.z), "Z", v -> retitle(n, title, () -> n.z = v));
+			}
+			case BASE -> {
+				List<String> names = Bases.all().stream().map(Bases.Base::name).toList();
+				Button base = Button.builder(Component.literal(names.isEmpty() ? "No bases yet" : n.base.isBlank() ? "Pick a base" : n.base), b -> {
+					retitle(n, title, () -> n.base = cycle(names, n.base));
+					rebuild.run();
+				}).tooltip(Tooltip.create(Component.literal(names.isEmpty() ? "Add one on the Bot tab or with !ac base <name>"
+						: "The base to go to (click: next, shift-click: previous)"))).bounds(x, y, w, 16).build();
+				base.active = !names.isEmpty();
+				add.accept(base);
+			}
+			case STRUCTURE -> {
+				List<String> names = LootSites.structures().stream().map(LootSites.Site::name).toList();
+				add.accept(Button.builder(Component.literal(n.structure), b -> {
+					retitle(n, title, () -> n.structure = cycle(names, n.structure));
+					rebuild.run();
+				}).tooltip(Tooltip.create(Component.literal("The nearest one in sight is gone to; none in sight, the bot explores for one like it"
+						+ " does for structure loot (click: next kind, shift-click: previous)"))).bounds(x, y, w, 16).build());
+			}
+		}
+	}
+
+	private void coordBox(int x, int y, int w, String value, String hint, IntConsumer set) {
+		box(x, y, w, 9, value, hint).setResponder(s -> parse(s, set));
+	}
+
+	/** A typed number, ignored while it isn't one yet (half-typed, a lone minus). */
+	private static void parse(String s, IntConsumer set) {
+		try {
+			set.accept(Integer.parseInt(s.trim()));
+		} catch (NumberFormatException e) {
+			// keep the last valid value while typing
+		}
+	}
+
+	/** Change a go-to target; a title still the default follows it. */
+	private static void retitle(TaskNode n, EditBox title, Runnable change) {
+		boolean auto = n.title.equals(n.gotoTitle()) || n.title.isBlank();
+		change.run();
+		if (auto) title.setValue(n.gotoTitle()); // its responder stores the title
+		TaskTree.save();
+	}
+
+	/** The value after {@code current} in {@code options} (shift: before), wrapping; the first when it isn't one of them. */
+	private static String cycle(List<String> options, String current) {
+		int i = -1;
+		for (int k = 0; k < options.size(); k++) {
+			if (options.get(k).equalsIgnoreCase(current)) i = k;
+		}
+		if (i < 0) return options.getFirst();
+		return options.get(Math.floorMod(i + (Minecraft.getInstance().hasShiftDown() ? -1 : 1), options.size()));
+	}
+
+	/** Where the task ends (where it is, or a base) and what it does at that base. */
+	private void endingRow(TaskNode n, int y, int half) {
+		List<String> choices = new ArrayList<>();
+		choices.add("");
+		Bases.all().forEach(b -> choices.add(b.name()));
+		Button end = Button.builder(Component.literal(n.endBase.isBlank() ? "Ends: where it is" : "Ends at: " + n.endBase), b -> {
+			n.endBase = cycle(choices, n.endBase);
+			TaskTree.save();
+			rebuild.run();
+		}).tooltip(Tooltip.create(Component.literal(choices.size() == 1 ? "No bases yet: add one on the Bot tab (or !ac base <name>) to end tasks there"
+				: "Where the task ends once done: where it is, or at a base it goes to afterwards — through a portal when it's in the"
+						+ " other dimension (click: next, shift-click: previous)"))).bounds(rightX, y, half, 18).build();
+		end.active = choices.size() > 1 || !n.endBase.isBlank();
+		add.accept(end);
+		Button deposit = Button.builder(Component.literal(switch (n.deposit) {
+			case NONE -> "Just go there";
+			case EMPTIEST -> "Store: emptiest";
+			case SIMILAR -> "Store: similar";
+		}), b -> {
+			n.deposit = Ending.Deposit.values()[(n.deposit.ordinal() + 1) % Ending.Deposit.values().length];
+			TaskTree.save();
+			rebuild.run();
+		}).tooltip(Tooltip.create(Component.literal("At the base: just go there; or store what it carries (not its gear, food or supplies) in the"
+				+ " emptiest chest; or each stack in a chest already holding it, else one holding something similar (wood, stone, ores,"
+				+ " crops, mob drops...), else the emptiest (click to switch)"))).bounds(rightX + half + 4, y, half, 18).build();
+		deposit.active = !n.endBase.isBlank();
+		add.accept(deposit);
 	}
 
 	private EditBox box(int x, int y, int w, int maxLength, String value, String hint) {
@@ -389,7 +550,7 @@ final class TaskTreePanel {
 	}
 
 	private void extractDetails(GuiGraphicsExtractor g, TaskNode n) {
-		int y = n.kind == TaskNode.Kind.STEP ? contentY + 24 : contentY + 124;
+		int y = n.kind == TaskNode.Kind.STEP ? contentY + 24 : contentY + 146;
 		if (n.kind == TaskNode.Kind.STEP) {
 			g.text(font, font.plainSubstrByWidth(n.title, colW), rightX, y, Widgets.WHITE);
 			y += LINE + 2;
@@ -408,6 +569,7 @@ final class TaskTreePanel {
 		y += LINE;
 		int[] pr = progress(n);
 		if (pr != null) Widgets.progressRow(g, font, rightX, y, colW, null, progressLabel(n), pr[0], pr[1], false);
+		else if (n == TaskTree.running() && Bot.get().isRunning()) g.text(font, font.plainSubstrByWidth("Now: " + Bot.get().status(), colW), rightX, y, Widgets.GRAY);
 	}
 
 	// ---- tree -----------------------------------------------------------------------------------
@@ -613,9 +775,9 @@ final class TaskTreePanel {
 		return out;
 	}
 
-	/** What the task does, in words. */
+	/** What the task does, in words, and where it ends. */
 	private static String describe(TaskNode n) {
-		return switch (n.kind) {
+		String what = switch (n.kind) {
 			case GROUP -> n.children.isEmpty() ? "Group: add subtasks under it" : "Group of " + n.children.size() + " subtask" + (n.children.size() == 1 ? "" : "s");
 			case COLLECT -> {
 				Requirement r = requirement(n.item);
@@ -627,19 +789,35 @@ final class TaskTreePanel {
 			case FETCH -> "Take " + n.amount + " × " + itemName(n) + " from " + (n.base.isBlank() ? "the nearest base that has it" : "base \"" + n.base + "\"");
 			case BUILD -> "Build " + n.schematic + (n.origin == null ? " (spot found when it runs)"
 					: " at " + n.origin[0] + " " + n.origin[1] + " " + n.origin[2] + (n.rotation == 0 ? "" : ", rotated " + n.rotation * 90 + "°"));
+			case GOTO -> switch (n.target) {
+				case COORDS -> n.gotoTitle() + (n.y == null ? ", any height" : "") + (n.dimension == null ? " (this dimension)" : "");
+				case BASE -> n.gotoTitle();
+				case STRUCTURE -> "Go to the nearest " + n.structure + " (searched for if none is in sight)";
+			};
 		};
+		Ending end = n.ending();
+		return end == null ? what : what + ", then to " + end.describe();
 	}
 
 	/** Why the task can't run as written, or null. */
 	private static @Nullable String problem(TaskNode n) {
 		return switch (n.kind) {
-			case COLLECT -> requirement(n.item) == null ? "Unknown item: \"" + n.item + "\"" : null;
+			case COLLECT -> requirement(n.item) == null ? "Unknown item: \"" + n.item + "\"" : endProblem(n);
 			case FETCH -> TaskTree.item(n.item) == null ? "Unknown item: \"" + n.item + "\""
 					: !n.base.isBlank() && Bases.named(n.base) == null ? "No base named \"" + n.base + "\" (bases: " + Bases.all().stream().map(Bases.Base::name).toList() + ")"
-					: null;
-			case BUILD -> SchematicLibrary.get(n.schematic) == null ? "No schematic named \"" + n.schematic + "\"" : null;
-			case GROUP, STEP -> null;
+					: endProblem(n);
+			case BUILD -> SchematicLibrary.get(n.schematic) == null ? "No schematic named \"" + n.schematic + "\"" : endProblem(n);
+			case GOTO -> n.target == TaskNode.Target.BASE && Bases.named(n.base) == null ? "No base named \"" + n.base + "\""
+					: n.target == TaskNode.Target.STRUCTURE && LootSites.structure(n.structure) == null ? "No structure called \"" + n.structure + "\""
+					: endProblem(n);
+			case GROUP -> endProblem(n);
+			case STEP -> null;
 		};
+	}
+
+	/** The base it ends at is gone, or null. */
+	private static @Nullable String endProblem(TaskNode n) {
+		return !n.endBase.isBlank() && Bases.named(n.endBase) == null ? "No base named \"" + n.endBase + "\" to end at" : null;
 	}
 
 	private static String itemName(TaskNode n) {
@@ -651,6 +829,7 @@ final class TaskTreePanel {
 		return switch (n.kind) {
 			case GROUP -> Items.WRITABLE_BOOK;
 			case BUILD -> Items.BRICKS;
+			case GOTO -> Items.COMPASS;
 			case COLLECT, FETCH, STEP -> {
 				Requirement r = requirement(n.item);
 				Item item = TaskTree.item(n.item);
@@ -671,6 +850,7 @@ final class TaskTreePanel {
 			case GROUP -> n.children.isEmpty() ? null : new int[] {(int) n.children.stream().filter(c -> c.state == TaskNode.State.DONE).count(), n.children.size()};
 			case BUILD -> n.state == TaskNode.State.DONE ? new int[] {1, 1}
 					: n.state == TaskNode.State.ACTIVE && bot.buildTotal() > 0 ? new int[] {bot.buildPlaced(), bot.buildTotal()} : null;
+			case GOTO -> n.state == TaskNode.State.DONE ? new int[] {1, 1} : null;
 			case COLLECT, FETCH, STEP -> {
 				if (n.state == TaskNode.State.DONE) yield new int[] {n.amount, n.amount};
 				Requirement r = requirement(n.item);
@@ -688,6 +868,7 @@ final class TaskTreePanel {
 		return switch (n.kind) {
 			case GROUP -> "subtasks done";
 			case BUILD -> "blocks placed";
+			case GOTO -> "arrived";
 			case COLLECT, FETCH -> n.state == TaskNode.State.ACTIVE ? "collected" : "carried now";
 			case STEP -> "carried now";
 		};
@@ -702,7 +883,9 @@ final class TaskTreePanel {
 	boolean click(double mx, double my, int button) {
 		ItemCatalog.Entry e = resultAt(mx, my);
 		if (e != null) {
-			addItem(e.key(), button == 1 ? e.icon().getDefaultMaxStackSize() : amountValue());
+			// right-click: a stack. Buttons are SDL's now (left 1, right 3): read as 1 = right, a plain left-click added
+			// a whole stack instead of the amount typed
+			addItem(e.key(), button == InputConstants.MOUSE_BUTTON_RIGHT ? e.icon().getDefaultMaxStackSize() : amountValue());
 			return true;
 		}
 		int x = treeX();

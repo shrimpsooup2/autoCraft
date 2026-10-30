@@ -19,6 +19,11 @@ public final class Melee {
 
 	/** Swing at {@code target} if it's in reach and visible. False when it isn't (the caller closes in). */
 	public static boolean strike(Bot bot, LivingEntity target) {
+		return strike(bot, target, true);
+	}
+
+	/** As {@link #strike(Bot, LivingEntity)}; no jump crits with {@code mayJump} false (on a 1x1 pillar a jump can drift off it). */
+	public static boolean strike(Bot bot, LivingEntity target, boolean mayJump) {
 		LocalPlayer p = bot.player();
 		if (!p.isWithinEntityInteractionRange(target, 0) || !p.hasLineOfSight(target)) return false;
 		Controls c = bot.controls();
@@ -27,7 +32,7 @@ public final class Melee {
 		c.lookAt(target.getBoundingBox().getCenter());
 		p.setSprinting(false); // sprint hits are knockback, not crits
 		if (p.getAttackStrengthScale(0.5F) < 0.95F) return true; // wait for a full-strength swing
-		boolean crit = canCrit(p) && !(target instanceof Creeper);
+		boolean crit = mayJump && canCrit(p) && !(target instanceof Creeper);
 		if (crit && p.onGround()) {
 			c.jump(); // hit on the way down
 			return true;

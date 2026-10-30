@@ -33,7 +33,7 @@ import net.minecraft.world.item.Items;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Every vanilla crafting (shaped / shapeless) and furnace recipe, read from the game jar's own data files
+ * Every vanilla crafting (shaped / shapeless), furnace, stonecutter and smithing-upgrade recipe, read from the game jar's own data files
  * ({@code data/minecraft/recipe/*.json}) the first time it's needed. The client doesn't receive recipes from
  * the server any more, so this is how the bot knows that a piston is planks + cobblestone + iron + redstone.
  * Tag ingredients ({@code #minecraft:planks}) resolve against the server-synced tags when first used.
@@ -107,11 +107,15 @@ public final class RecipeBook {
 	/** A stonecutter recipe: one {@code input} item becomes {@code count} of {@code output}. */
 	public record Cut(Item output, int count, Ingredient input) {}
 
+	/** A smithing table upgrade: {@code template} + {@code base} + {@code addition} become {@code output}, all three used up. */
+	public record Smithing(Item output, Ingredient template, Ingredient base, Ingredient addition) {}
+
 	private static @Nullable RecipeBook instance;
 
 	private final Map<Item, List<Recipe>> crafting = new HashMap<>();
 	private final Map<Item, List<Recipe>> smelting = new HashMap<>();
 	private final Map<Item, List<Cut>> cutting = new HashMap<>();
+	private final Map<Item, List<Smithing>> smithing = new HashMap<>();
 
 	public static RecipeBook get() {
 		if (instance == null) instance = load();
@@ -130,12 +134,16 @@ public final class RecipeBook {
 		return cutting.getOrDefault(output, List.of());
 	}
 
+	public List<Smithing> smithing(Item output) {
+		return smithing.getOrDefault(output, List.of());
+	}
+
 	/**
-	 * Some crafting or smelting recipe makes this item (so it isn't a "natural" block to go mining for). Stonecutting
-	 * doesn't count: 26.x cuts stone into cobblestone, which is still mined.
+	 * Some crafting, smelting or smithing recipe makes this item (so it isn't a "natural" block to go mining for).
+	 * Stonecutting doesn't count: 26.x cuts stone into cobblestone, which is still mined.
 	 */
 	public boolean isMade(Item item) {
-		return crafting.containsKey(item) || smelting.containsKey(item);
+		return crafting.containsKey(item) || smelting.containsKey(item) || smithing.containsKey(item);
 	}
 
 	/**
@@ -153,6 +161,11 @@ public final class RecipeBook {
 				}
 				for (Recipe r : smelting(item)) addOptions(r.smeltInput(), out, next);
 				for (Cut c : cutting(item)) addOptions(c.input(), out, next);
+				for (Smithing s : smithing(item)) {
+					addOptions(s.template(), out, next);
+					addOptions(s.base(), out, next);
+					addOptions(s.addition(), out, next);
+				}
 			}
 			frontier = next;
 		}
@@ -213,13 +226,22 @@ public final class RecipeBook {
 			case "minecraft:crafting_shapeless" -> {
 				JsonArray ings = json.getAsJsonArray("ingredients");
 				Map<Character, Ingredient> key = new LinkedHashMap<>();
+				// repeated ingredients share one key (4 scrap + 4 gold: two ingredients of 4, not eight of 1 — counted
+				// apart, one carried scrap met all four and the planner gathered a single ancient debris)
+				Map<String, Character> chars = new HashMap<>();
 				int width = ings.size() <= 4 ? 2 : 3;
 				List<String> pattern = new ArrayList<>();
 				StringBuilder row = new StringBuilder();
-				char c = 'a';
+				char next = 'a';
 				for (JsonElement ing : ings) {
-					key.put(c, ingredient(ing));
-					row.append(c++);
+					Ingredient parsed = ingredient(ing);
+					Character c = chars.get(parsed.toString());
+					if (c == null) {
+						c = next++;
+						chars.put(parsed.toString(), c);
+						key.put(c, parsed);
+					}
+					row.append(c);
 					if (row.length() == width) {
 						pattern.add(row.toString());
 						row.setLength(0);
@@ -236,8 +258,12 @@ public final class RecipeBook {
 				Ingredient input = ingredient(json.get("ingredient"));
 				return result(json, (out, count) -> cutting.computeIfAbsent(out, k -> new ArrayList<>()).add(new Cut(out, count, input)));
 			}
+			case "minecraft:smithing_transform" -> {
+				Ingredient template = ingredient(json.get("template")), base = ingredient(json.get("base")), addition = ingredient(json.get("addition"));
+				return result(json, (out, count) -> smithing.computeIfAbsent(out, k -> new ArrayList<>()).add(new Smithing(out, template, base, addition)));
+			}
 			default -> {
-				return false; // smithing, special and transmute recipes need other stations or rules
+				return false; // trims, special and transmute recipes need other rules
 			}
 		}
 	}

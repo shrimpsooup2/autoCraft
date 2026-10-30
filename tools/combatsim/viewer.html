@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>autoCraft combat sim — replays</title>
+<style>
+  body { margin: 0; background: #14161a; color: #d8dce3; font: 13px/1.4 system-ui, sans-serif; }
+  header { padding: 10px 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; border-bottom: 1px solid #2a2e36; }
+  header h1 { font-size: 15px; margin: 0 12px 0 0; font-weight: 600; }
+  button { background: #262a32; color: #d8dce3; border: 1px solid #3a3f4a; border-radius: 4px; padding: 4px 10px; cursor: pointer; font: inherit; }
+  button.on { background: #3d5a8a; border-color: #5b7fbf; }
+  #grid { display: flex; flex-wrap: wrap; gap: 12px; padding: 12px; }
+  .card { background: #1b1e24; border: 1px solid #2a2e36; border-radius: 6px; padding: 8px; width: 360px; }
+  .card h2 { font-size: 13px; margin: 0 0 4px; font-weight: 600; }
+  .card .val, .card .res { font-size: 11px; color: #9aa3b2; min-height: 15px; }
+  .card .res.won { color: #7fd17f; } .card .res.died { color: #ff7b7b; } .card .res.timeout { color: #e0c070; }
+  canvas { display: block; background: #20242b; border-radius: 4px; margin: 4px 0; }
+  #legend { color: #9aa3b2; font-size: 11px; padding: 0 14px 12px; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin: 0 3px 0 10px; vertical-align: -1px; }
+  #empty { padding: 30px; color: #9aa3b2; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Combat sim replays</h1>
+  <span id="fights"></span>
+  <span style="margin-left:12px">speed</span>
+  <span id="speeds"></span>
+  <button id="play">pause</button>
+  <button id="restart">restart</button>
+  <span id="clock" style="margin-left:10px;color:#9aa3b2"></span>
+  <span id="updated" style="margin-left:auto;color:#6c7483"></span>
+</header>
+<div id="legend">
+  <span class="dot" style="background:#5aa0ff"></span>bot (line: facing, arc: shield, ring: swing)
+  <span class="dot" style="background:#4caf50"></span>zombie
+  <span class="dot" style="background:#e8e8e8"></span>skeleton
+  <span class="dot" style="background:#9bff8a"></span>creeper (flashes when lit)
+  <span class="dot" style="background:#7b4fa0"></span>spider
+  <span class="dot" style="background:#c47a5a"></span>hoglin
+  <span class="dot" style="background:#e6b450"></span>piglin
+  <span class="dot" style="background:#b8862e"></span>crossbow piglin
+  <span class="dot" style="background:#ff9f43"></span>arrow
+</div>
+<div id="grid"><div id="empty">No replays yet. Training writes them to <code>out/viz/replays.js</code> every few generations
+(or run <code>combatsim.py viz</code>). This page reloads them by itself.</div></div>
+<script>
+// tools/combatsim/out/viz/replays.js sets window.REPLAYS; reloaded every 20 s to pick up new generations
+const SCALE = 12, PAD = 6;
+const COLORS = {1: "#4caf50", 2: "#e8e8e8", 3: "#9bff8a", 4: "#7b4fa0", 5: "#c47a5a", 6: "#e6b450", 7: "#b8862e"};
+const RADIUS = {1: 0.38, 2: 0.38, 3: 0.38, 4: 0.75, 5: 0.7, 6: 0.38, 7: 0.38};
+const MAX_HP = {1: 20, 2: 20, 3: 20, 4: 16, 5: 40, 6: 16, 7: 16};
+const ARCHERS = new Set([2, 7]);
+let fight = 0, speed = 1, playing = true, frame = 0, lastStamp = null, data = null, cards = [];
+
+function load() {
+  const s = document.createElement("script");
+  s.src = "out/viz/replays.js?t=" + Date.now();
+  s.onload = () => { s.remove(); if (window.REPLAYS && (!data || REPLAYS.updated !== data.updated)) { data = REPLAYS; build(); } };
+  s.onerror = () => s.remove();
+  document.head.appendChild(s);
+}
+
+function build() {
+  document.getElementById("updated").textContent = "updated " + data.updated;
+  const fb = document.getElementById("fights");
+  fb.innerHTML = "";
+  data.fights.forEach((name, i) => {
+    const b = document.createElement("button");
+    b.textContent = name;
+    b.className = i === fight ? "on" : "";
+    b.onclick = () => { fight = i; frame = 0; build(); };
+    fb.appendChild(b);
+  });
+  const grid = document.getElementById("grid");
+  grid.innerHTML = "";
+  cards = data.runs.map(run => {
+    const card = document.createElement("div");
+    card.className = "card";
+    const v = run.val;
+    const valText = v ? `test fights: won ${(v.won * 100).toFixed(0)}% · died ${(v.died * 100).toFixed(1)}% · −${v.dmg} HP` : "";
+    card.innerHTML = `<h2>${run.label}</h2><div class="val">${valText}</div>`;
+    const c = document.createElement("canvas");
+    const size = data.arena * 2 * SCALE + PAD * 2;
+    c.width = c.height = size;
+    card.appendChild(c);
+    const res = document.createElement("div");
+    res.className = "res";
+    card.appendChild(res);
+    grid.appendChild(card);
+    return {run, ctx: c.getContext("2d"), res, size};
+  });
+}
+
+function toPx(x, size) { return PAD + (x + data.arena) * SCALE; }
+
+function draw() {
+  if (!data) return;
+  let longest = 0;
+  for (const card of cards) {
+    const f = card.run.fights[fight];
+    longest = Math.max(longest, f.frames.length);
+    const i = Math.min(Math.floor(frame), f.frames.length - 1);
+    const fr = f.frames[i];
+    const ctx = card.ctx, size = card.size;
+    ctx.clearRect(0, 0, size, size);
+    // arena and grid
+    ctx.strokeStyle = "#2c313a";
+    ctx.lineWidth = 1;
+    for (let g = -data.arena; g <= data.arena; g += 4) {
+      ctx.beginPath(); ctx.moveTo(toPx(g), toPx(-data.arena)); ctx.lineTo(toPx(g), toPx(data.arena)); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(toPx(-data.arena), toPx(g)); ctx.lineTo(toPx(data.arena), toPx(g)); ctx.stroke();
+    }
+    ctx.strokeStyle = "#4a505c";
+    ctx.strokeRect(toPx(-data.arena), toPx(-data.arena), data.arena * 2 * SCALE, data.arena * 2 * SCALE);
+    const [px, pz, py, yaw, hp, flags, mobs, arrows] = fr;
+    // arrows
+    ctx.strokeStyle = "#ff9f43"; ctx.lineWidth = 2;
+    for (const [ax, az] of arrows) { ctx.beginPath(); ctx.arc(toPx(ax), toPx(az), 2, 0, Math.PI * 2); ctx.stroke(); }
+    // mobs
+    for (const [type, mx, mz, mhp, timer, hurt] of mobs) {
+      const r = RADIUS[type] * SCALE;
+      let col = COLORS[type] || "#aaa";
+      if (type === 3 && timer > 0 && Math.floor(frame / 2) % 2 === 0) col = "#ffffff";
+      ctx.fillStyle = hurt ? "#ff5a5a" : col;
+      ctx.beginPath(); ctx.arc(toPx(mx), toPx(mz), r, 0, Math.PI * 2); ctx.fill();
+      if (ARCHERS.has(type) && timer > 0) { ctx.strokeStyle = "#ff9f43"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(toPx(mx), toPx(mz), r + 3, 0, Math.PI * 2); ctx.stroke(); }
+      const maxHp = MAX_HP[type] || 20;
+      ctx.fillStyle = "#3a1e1e"; ctx.fillRect(toPx(mx) - 8, toPx(mz) - r - 6, 16, 3);
+      ctx.fillStyle = "#e05050"; ctx.fillRect(toPx(mx) - 8, toPx(mz) - r - 6, 16 * Math.max(0, mhp) / maxHp, 3);
+    }
+    // bot
+    const bx = toPx(px), bz = toPx(pz), br = 0.42 * SCALE * (1 + py * 0.25);
+    ctx.fillStyle = "#5aa0ff";
+    ctx.beginPath(); ctx.arc(bx, bz, br, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#cfe3ff"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(bx, bz); ctx.lineTo(bx + Math.cos(yaw) * 14, bz + Math.sin(yaw) * 14); ctx.stroke();
+    if (flags & 2) { // shield: bright once it blocks (5 ticks raised)
+      ctx.strokeStyle = (flags & 1) ? "#ffd84a" : "#7a6a2a"; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(bx, bz, br + 4, yaw - Math.PI / 2, yaw + Math.PI / 2); ctx.stroke();
+    }
+    if (flags & 4) { ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(bx, bz, br + 7, 0, Math.PI * 2); ctx.stroke(); }
+    ctx.fillStyle = "#1e3a1e"; ctx.fillRect(bx - 10, bz + br + 4, 20, 3);
+    ctx.fillStyle = "#6ad06a"; ctx.fillRect(bx - 10, bz + br + 4, 20 * Math.max(0, hp) / 20, 3);
+    // outcome once this fight's recording has ended
+    const ended = i >= f.frames.length - 1;
+    const t = (i * data.every / 20).toFixed(1);
+    if (ended) {
+      card.res.className = "res " + (f.won ? "won" : f.died ? "died" : "timeout");
+      card.res.textContent = (f.won ? "won" : f.died ? "died" : "ran out of time") + ` in ${f.secs}s · −${f.dmg} HP`;
+    } else {
+      card.res.className = "res";
+      card.res.textContent = `${t}s · health ${hp.toFixed(1)}`;
+    }
+  }
+  document.getElementById("clock").textContent = (Math.floor(frame) * data.every / 20).toFixed(1) + " s";
+  if (frame >= longest + 20) frame = 0; // a short pause on the final frames, then replay
+}
+
+function tick(stamp) {
+  if (lastStamp !== null && playing && data) frame += (stamp - lastStamp) / 1000 * 20 / data.every * speed;
+  lastStamp = stamp;
+  draw();
+  requestAnimationFrame(tick);
+}
+
+const sp = document.getElementById("speeds");
+[0.5, 1, 2, 4, 8].forEach(v => {
+  const b = document.createElement("button");
+  b.textContent = v + "×";
+  b.className = v === speed ? "on" : "";
+  b.onclick = () => { speed = v; [...sp.children].forEach(c => c.className = c === b ? "on" : ""); };
+  sp.appendChild(b);
+});
+document.getElementById("play").onclick = e => { playing = !playing; e.target.textContent = playing ? "pause" : "play"; };
+document.getElementById("restart").onclick = () => { frame = 0; };
+load();
+setInterval(load, 20000);
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

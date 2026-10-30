@@ -13,9 +13,12 @@ import com.autocraft.build.MaterialSettings;
 import com.autocraft.build.SiteFinder;
 import com.autocraft.craft.Planner;
 import com.autocraft.craft.Stations;
+import com.autocraft.goal.Destination;
+import com.autocraft.goal.Ending;
 import com.autocraft.goal.Job;
 import com.autocraft.goal.Requirement;
 import com.autocraft.goal.Resources;
+import com.autocraft.loot.LootSites;
 import com.autocraft.schematic.Schematic;
 import com.autocraft.schematic.SchematicLibrary;
 import com.autocraft.world.ChestMemory;
@@ -32,6 +35,8 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -162,7 +167,7 @@ public final class TaskTree {
 				save();
 				yield !parts.isEmpty();
 			}
-			case GROUP, FETCH, STEP -> false;
+			case GROUP, FETCH, GOTO, STEP -> false;
 		};
 	}
 
@@ -282,6 +287,78 @@ public final class TaskTree {
 		save();
 	}
 
+	/**
+	 * {@code !ac collect} and {@code !ac goto}: the items (or the go-to) become tasks — one task, or several under a
+	 * group (collected one after another) — and run from the tree, so the panel shows them with their plans like any
+	 * other task; {@code ending} goes on that task (or the group). An unfinished collect task for the same item and
+	 * amount at the top is reused instead of adding a copy. Whatever the bot was doing stops first.
+	 */
+	public static void runCommand(Bot bot, List<TaskNode> items, @Nullable Ending ending) {
+		stop();
+		if (bot.isRunning()) bot.stop("new job");
+		TaskNode task;
+		if (items.size() == 1) {
+			TaskNode only = items.getFirst();
+			task = roots().stream().filter(n -> sameCollect(n, only.item, only.amount) && n.state != TaskNode.State.DONE).findFirst().orElse(null);
+			if (task == null) add(null, task = only);
+		} else {
+			task = new TaskNode(String.join(", ", items.stream().map(n -> n.title).toList()), TaskNode.Kind.GROUP);
+			task.children.addAll(items);
+			add(null, task);
+		}
+		task.setEnding(ending);
+		save();
+		start(task);
+	}
+
+	/**
+	 * The job saved for this world was resumed after joining: show it as the tree's running task — the unfinished
+	 * collect task for the same item and amount, else a new one at the top — so its plan follows along and it's
+	 * marked done when it completes. A run still going in this world (a relog) carries on by itself; jobs of
+	 * several items (a teammate's share) stay off the tree.
+	 */
+	public static void adopt(Job job, @Nullable Ending ending) {
+		if (job.requirements().size() != 1) return;
+		Requirement r = job.requirements().getFirst();
+		adopt(n -> sameCollect(n, r.name(), r.amount()), () -> TaskNode.collect(r.name(), r.amount()), ending);
+	}
+
+	/** As {@link #adopt(Job, Ending)}, for a resumed go-to task. */
+	public static void adopt(Destination d, @Nullable Ending ending) {
+		adopt(n -> n.matches(d), () -> TaskNode.goTo(d), ending);
+	}
+
+	private static void adopt(Predicate<TaskNode> same, Supplier<TaskNode> make, @Nullable Ending ending) {
+		if (active()) return;
+		TaskNode node = unfinished(roots(), same);
+		if (node == null) {
+			roots().add(node = make.get());
+			node.setEnding(ending);
+		}
+		if (running != null) running.state = TaskNode.State.PENDING; // a run left behind in another world
+		node.state = TaskNode.State.ACTIVE;
+		running = node;
+		scope = node;
+		active = true;
+		runWorld = WorldKey.current();
+		planAge = 0;
+		if (node.kind == TaskNode.Kind.COLLECT && (node.children.isEmpty() || node.hasPlan())) plan(node);
+		save();
+	}
+
+	private static @Nullable TaskNode unfinished(List<TaskNode> nodes, Predicate<TaskNode> same) {
+		for (TaskNode n : nodes) {
+			if (n.state != TaskNode.State.DONE && same.test(n)) return n;
+			TaskNode inner = unfinished(n.children, same);
+			if (inner != null) return inner;
+		}
+		return null;
+	}
+
+	private static boolean sameCollect(TaskNode n, String item, int amount) {
+		return n.kind == TaskNode.Kind.COLLECT && n.amount == amount && (n.item.equals(item) || n.item.equals("minecraft:" + item));
+	}
+
 	/** Every client tick: notice the current task stopping and start the next. */
 	public static void tick(Minecraft mc) {
 		if (!active || mc.player == null || mc.level == null) return;
@@ -321,14 +398,21 @@ public final class TaskTree {
 			return;
 		}
 		if (next.kind == TaskNode.Kind.GROUP) { // its subtasks are done
-			next.state = TaskNode.State.DONE;
-			save();
-			return;
-		}
-		if (!begin(bot, next)) {
-			active = false;
-			save();
-			return;
+			Ending end = next.ending();
+			if (end == null) {
+				next.state = TaskNode.State.DONE;
+				save();
+				return;
+			}
+			bot.goalMet(Bot.GROUP_COMPLETE); // all that's left of it is the trip to its base
+			bot.setEnding(end);
+		} else {
+			if (!begin(bot, next)) {
+				active = false;
+				save();
+				return;
+			}
+			if (next.ending() != null) bot.setEnding(next.ending());
 		}
 		next.state = TaskNode.State.ACTIVE;
 		running = next;
@@ -340,7 +424,7 @@ public final class TaskTree {
 		if (n.kind == TaskNode.Kind.COLLECT) {
 			Requirement r = Resources.forJob(n.item, n.amount);
 			if (r == null) {
-				Chat.warn("Task tree: don't know how to get \"" + n.item + "\"; fix the task and press Run.");
+				Chat.warn("Task tree: " + Resources.cantGet(n.item) + "; fix the task and press Run.");
 				return false;
 			}
 			if (n.children.isEmpty()) plan(n); // the tree shows how the bot goes about it while it runs
@@ -361,6 +445,12 @@ public final class TaskTree {
 			bot.startFetch(new Bot.FetchOrder(base.pos(), base.dim(), item, n.amount));
 			return true;
 		}
+		if (n.kind == TaskNode.Kind.GOTO) {
+			Destination d = destination(bot, n);
+			if (d == null) return false;
+			bot.startGoto(d);
+			return true;
+		}
 		Schematic s = SchematicLibrary.get(n.schematic);
 		if (s == null) {
 			Chat.warn("Task tree: no schematic \"" + n.schematic + "\".");
@@ -374,6 +464,23 @@ public final class TaskTree {
 		bot.startBuild(new BuildOrder(s, origin, Rotation.values()[n.rotation], Mirror.values()[n.mirror],
 				MaterialAdvisor.resolve(MaterialSettings.defaults(), s), BuildOrder.Purpose.USER));
 		return true;
+	}
+
+	/** Where a go-to task heads, its base or structure looked up now (null, with a warning, when there's no such thing). */
+	private static @Nullable Destination destination(Bot bot, TaskNode n) {
+		return switch (n.target) {
+			case COORDS -> Destination.coords(n.x, n.y, n.z, n.dimension != null ? n.dimension : bot.dimension());
+			case BASE -> {
+				Bases.Base b = Bases.named(n.base);
+				if (b == null) Chat.warn("Task tree: no base named \"" + n.base + "\" (!ac bases).");
+				yield b == null ? null : Destination.base(b.name(), b.pos(), b.dim());
+			}
+			case STRUCTURE -> {
+				LootSites.Site site = LootSites.structure(n.structure);
+				if (site == null) Chat.warn("Task tree: no structure called \"" + n.structure + "\".");
+				yield site == null ? null : Destination.structure(site.name(), site.dim());
+			}
+		};
 	}
 
 	/** The nearest base whose chests are known to hold {@code item} (this dimension first), else the nearest base. */
@@ -438,6 +545,10 @@ public final class TaskTree {
 			if (n.item == null) n.item = "";
 			if (n.schematic == null) n.schematic = "";
 			if (n.context == null) n.context = "";
+			if (n.structure == null) n.structure = "village";
+			if (n.endBase == null) n.endBase = "";
+			if (n.deposit == null) n.deposit = Ending.Deposit.NONE;
+			if (n.target == null) n.target = TaskNode.Target.COORDS;
 			resetActive(n.children);
 		}
 	}

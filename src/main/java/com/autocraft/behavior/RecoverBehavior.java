@@ -4,27 +4,34 @@ import com.autocraft.Bot;
 import com.autocraft.Chat;
 import com.autocraft.path.Goal;
 import com.autocraft.path.Navigator;
-import java.util.Comparator;
-import java.util.List;
 import net.minecraft.core.BlockPos;
-import net.minecraft.world.entity.item.ItemEntity;
 
 /**
- * After a death (with "recover after death" on): go back to where we died and pick up what's lying there, then
- * let the job carry on. Another dimension is reached by the portal behavior; items wait in unloaded chunks, and
- * get five minutes once loaded again.
+ * After a death (with "recover after death" on): go back to where we died, where {@link PickupBehavior} (which
+ * runs first) picks up what's lying around; once it has nothing left to do there, the job carries on. Another
+ * dimension is reached by the portal behavior; items wait in unloaded chunks, and get five minutes once loaded again.
  */
 public final class RecoverBehavior implements Behavior {
-	private static final double PICKUP_RADIUS = 10;
 	private static final int ARRIVE_DISTANCE = 3;
-	/** Nothing left to pick up for this long after arriving: done. */
-	private static final int IDLE_TICKS = 20 * 5;
+	/** Arrived and nothing left worth picking up for this long: done. */
+	private static final int IDLE_TICKS = 20 * 3;
+	/** Items despawn five minutes after their chunk loads: that long once the death spot is loaded, at most. */
 	private static final int TIMEOUT = 20 * 60 * 5;
+	/** The whole trip, however far (a long walk, or digging by hand without a pickaxe): give up after this. */
+	private static final int TRIP_LIMIT = 20 * 60 * 20;
+	/** Farther than this (a respawn far from the death spot) can't be walked before the timeout: don't set out. */
+	private static final double MAX_TRIP = 1000;
+	/** Searches that may come up empty (a world still loading after a portal) before the items are given up. */
+	private static final int MAX_NAV_FAILURES = 4;
+	private static final int RETRY_TICKS = 40;
+	/** Below this health the trip waits (see tick). */
+	private static final float HEAL_TO = 14;
 
 	private int ticks;
 	private int idle;
 	private boolean arrived;
-	private int picked;
+	private int navFailures;
+	private int retryAt;
 
 	@Override
 	public String name() {
@@ -36,16 +43,32 @@ public final class RecoverBehavior implements Behavior {
 		ticks = 0;
 		idle = 0;
 		arrived = false;
-		picked = 0;
+		navFailures = 0;
+		retryAt = 0;
 	}
 
 	@Override
 	public boolean tick(Bot bot) {
 		Bot.Recovery r = bot.recovery();
 		if (r == null || r.dim() != bot.dimension()) return false;
-		if (++ticks > TIMEOUT) return finish(bot, "gave up going back for the items");
+		// the five minutes the items have count from when their chunk is loaded (Bot#recoveryAge) — the clock used to
+		// start with the trip, and a 460-block trip back to lost netherite ran out of time halfway there
+		if (bot.recoveryAge() > TIMEOUT) return finish(bot, "gave up going back for the items");
+		// hurt: heal first. What killed us is likely still there (a trial chamber's skeletons and breezes), and at 3 hp
+		// with nothing to eat — no health coming back — it walked back into them, dying again and again. Items wait
+		// while their chunk is unloaded; the food behavior (after this one) gets what heals
+		if (!arrived && bot.player().getHealth() < HEAL_TO) return false;
+		if (++ticks > TRIP_LIMIT) return finish(bot, "gave up going back for the items");
+		if (bot.tripPickaxe() != null) return false; // gear makes a pickaxe first (Bot.considerTripPickaxe); the clock runs on
 		BlockPos feet = Navigator.feet(bot.player());
+		if (ticks == 1 && feet.distSqr(r.pos()) > MAX_TRIP * MAX_TRIP) {
+			return bot.startFlight(r.pos()) || finish(bot, "where we died is too far away");
+		}
 		if (!arrived) {
+			if (ticks < retryAt) {
+				bot.setStatus("going back for our items at " + r.pos().toShortString() + " (waiting for the area to load)");
+				return true;
+			}
 			if (feet.distSqr(r.pos()) <= ARRIVE_DISTANCE * ARRIVE_DISTANCE) {
 				arrived = true;
 				bot.nav().stop();
@@ -55,23 +78,19 @@ public final class RecoverBehavior implements Behavior {
 			if (bot.startFlight(r.pos())) return true;
 			bot.nav().setGoal(new Goal.Near(r.pos(), ARRIVE_DISTANCE - 1));
 			if (bot.nav().tick() == Navigator.Status.FAILED) {
+				// right after a portal the world around is still loading and a search can come up "unreachable" (the
+				// items were given up the moment the bot arrived): try again a few times first
 				bot.nav().stop();
-				return finish(bot, "can't get back to where we died");
+				if (bot.pickaxeForStuckTrip()) return true; // planned again once it's made
+				if (++navFailures >= MAX_NAV_FAILURES) return finish(bot, "can't get back to where we died");
+				retryAt = ticks + RETRY_TICKS;
 			}
 			return true;
 		}
-		List<ItemEntity> items = bot.scanner().items(PICKUP_RADIUS, s -> true);
-		ItemEntity nearest = items.stream().filter(e -> e.blockPosition().distSqr(r.pos()) <= PICKUP_RADIUS * PICKUP_RADIUS)
-				.min(Comparator.comparingDouble(e -> e.distanceToSqr(bot.player()))).orElse(null);
-		if (nearest == null) {
-			if (++idle > IDLE_TICKS) return finish(bot, picked > 0 ? "picked our things back up" : "nothing left where we died");
-			bot.nav().stop();
-			return true;
-		}
-		idle = 0;
-		bot.setStatus("picking our items back up");
-		bot.nav().setGoal(new Goal.Near(nearest.blockPosition(), 0));
-		if (bot.nav().tick() == Navigator.Status.ARRIVED) picked++;
+		// the pickup behavior runs before this one: getting here means nothing worth carrying is lying around any more
+		bot.nav().stop();
+		bot.setStatus("looking for our items");
+		if (++idle > IDLE_TICKS) return finish(bot, "picked up what was left");
 		return true;
 	}
 

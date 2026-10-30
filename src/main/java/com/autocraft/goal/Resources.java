@@ -120,14 +120,25 @@ public final class Resources {
 	 */
 	public static @Nullable Requirement forJob(String name, int amount) {
 		Requirement mined = get(name, amount);
-		if (mined != null) return mined;
 		Item item = item(name);
+		// mined, unless a procedure makes it too: then the planner weighs the two (mud is mined in mangrove swamps, made
+		// from dirt and a water bottle anywhere — mined only, the bot went exploring for a swamp)
+		if (mined != null && (item == null || Procedures.forItem(item) == null)) return mined;
 		if (item == null) return null;
 		if (!RecipeBook.get().isMade(item) && Procedures.forItem(item) == null
 				&& Gatherable.requirementFor(item, amount, Dim.OVERWORLD, false) == null) {
 			return null;
 		}
 		return Requirement.crafted(BuiltInRegistries.ITEM.getKey(item).getPath(), item, amount);
+	}
+
+	/** Why {@link #forJob} has nothing for {@code name}, for the message. */
+	public static String cantGet(String name) {
+		Item item = item(name);
+		if (item != null && com.autocraft.loot.LootBook.get().silkTouchOnly(item)) {
+			return name + " only drops to a Silk Touch tool, and the bot doesn't enchant";
+		}
+		return "can't mine or craft '" + name + "' (try !ac resources)";
 	}
 
 	/** Requirement for mining {@code amount} of {@code name}, or null if no block in the world drops it. */

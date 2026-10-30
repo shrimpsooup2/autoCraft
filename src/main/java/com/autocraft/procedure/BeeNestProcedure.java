@@ -37,6 +37,11 @@ final class BeeNestProcedure implements Procedure {
 	}
 
 	@Override
+	public Item consumed(Item item) {
+		return item == Items.HONEY_BOTTLE ? Items.GLASS_BOTTLE : null;
+	}
+
+	@Override
 	public Task start(Item item, int total) {
 		return new Run(item, total);
 	}
@@ -68,7 +73,7 @@ final class BeeNestProcedure implements Procedure {
 			if (item == Items.HONEYCOMB && Actions.pickUp(bot, s -> s.is(Items.HONEYCOMB), 8)) return Status.RUNNING;
 			if (nest == null || !full(bot.level().getBlockState(nest))) nest = Actions.nearestBlock(bot, BeeNestProcedure::full, SCAN_CHUNKS);
 			if (nest == null) {
-				if (explorer.legs() >= MAX_LEGS) return Status.FAILED;
+				if (explorer.exhausted(MAX_LEGS)) return Status.FAILED;
 				explorer.tick(bot, "a bee nest full of honey");
 				return Status.RUNNING;
 			}
